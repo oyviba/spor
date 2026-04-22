@@ -206,15 +206,15 @@ pub fn commit(message: &str) -> Result<(), String> {
     run_ok(&["commit", "-m", message]).map(|_| ())
 }
 
-pub fn push() -> Result<String, String> {
-    match run_ok(&["push"]) {
-        Err(e) if e.contains("no upstream branch") || e.contains("has no upstream") => {
-            let branch = run_ok(&["rev-parse", "--abbrev-ref", "HEAD"])?;
-            let branch = branch.trim();
-            run_ok(&["push", "--set-upstream", "origin", branch])
-        }
-        other => other,
+pub fn push_args() -> Result<Vec<String>, String> {
+    let has_upstream = run(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if has_upstream {
+        return Ok(vec!["push".into()]);
     }
+    let branch = run_ok(&["rev-parse", "--abbrev-ref", "HEAD"])?;
+    Ok(vec!["push".into(), "--set-upstream".into(), "origin".into(), branch.trim().to_string()])
 }
 
 pub fn pull() -> Result<String, String> {

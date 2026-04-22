@@ -310,8 +310,8 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
                 app.tracking.behind = 0;
                 return;
             }
-            match git::push() {
-                Ok(_) => {
+            match git::push_args().and_then(|args| run_suspended("git", &args)) {
+                Ok(()) => {
                     app.message = "pushed".into();
                     app.refresh();
                 }
@@ -679,6 +679,13 @@ fn run_suspended(program: &str, args: &[String]) -> Result<(), String> {
         .args(args)
         .status()
         .map_err(|e| format!("failed to spawn {program}: {e}"))?;
+
+    if !status.success() {
+        // Let the user read git's error output before the TUI takes over again.
+        eprintln!("\ngit exited with {status} — press Enter to return");
+        let mut buf = String::new();
+        let _ = std::io::stdin().read_line(&mut buf);
+    }
 
     // Restore the TUI no matter what the child did.
     enable_raw_mode().map_err(|e| e.to_string())?;
