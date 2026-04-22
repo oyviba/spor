@@ -1,0 +1,17 @@
+[package]
+name = "spor"
+version = "0.1.0"
+edition = "2021"
+description = "A minimal git TUI with a GitKraken-inspired timeline"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/oyvindandreassen/spor"
+keywords = ["git", "tui", "terminal", "timeline"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+crossterm = "0.27"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
