@@ -134,12 +134,13 @@ pub fn draw_graph_row(
         let col = (l * 2) as u16;
         move_to(y, col)?;
 
-        let family = if l == row.lane {
+        let family: &str = if l == row.lane {
             &row.branch_family
         } else {
-            // Guess family from lanes_before/after: we don't track per-lane family here
-            // in the row, so fall back to a neutral hashed color.
-            "_"
+            row.lane_families
+                .get(l)
+                .and_then(|f| f.as_deref())
+                .unwrap_or("_")
         };
         let name_hint = row
             .commit
@@ -147,21 +148,30 @@ pub fn draw_graph_row(
             .first()
             .cloned()
             .unwrap_or_else(|| row.commit.hash.clone());
-        fg(color_for(family, &name_hint))?;
 
         let glyph = if l == row.lane {
-            if row.commit.parents.len() > 1 {
-                "●" // merge node
+            if row.commit.head_ref.is_some() {
+                // HEAD commit — gold ring node
+                fg((255, 210, 60))?;
+                "◉"
+            } else if row.commit.parents.len() > 1 {
+                // Merge commit — diamond
+                fg(color_for(family, &name_hint))?;
+                "◆"
             } else {
+                fg(color_for(family, &name_hint))?;
                 "●"
             }
         } else if row.lanes_before.get(l).and_then(|x| x.as_ref()).is_some()
             && row.lanes_after.get(l).and_then(|x| x.as_ref()).is_some()
         {
+            fg(color_for(family, &name_hint))?;
             "│"
         } else if row.lanes_before.get(l).and_then(|x| x.as_ref()).is_some() {
+            fg(color_for(family, &name_hint))?;
             "╵"
         } else if row.lanes_after.get(l).and_then(|x| x.as_ref()).is_some() {
+            fg(color_for(family, &name_hint))?;
             "╷"
         } else {
             " "
@@ -184,6 +194,10 @@ pub fn draw_graph_row(
         if r.starts_with("tag:") {
             fg((220, 180, 60))?;
             write!(out, "[{}] ", &r[4..])?;
+        } else if row.commit.head_ref.as_deref() == Some(r.as_str()) {
+            // Currently checked-out branch — bright gold + arrow marker
+            fg((255, 210, 60))?;
+            write!(out, "(▶{r}) ")?;
         } else {
             let fam = r.split('/').next().unwrap_or("_");
             fg(color_for(fam, r))?;
