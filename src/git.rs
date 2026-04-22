@@ -207,7 +207,14 @@ pub fn commit(message: &str) -> Result<(), String> {
 }
 
 pub fn push() -> Result<String, String> {
-    run_ok(&["push"])
+    match run_ok(&["push"]) {
+        Err(e) if e.contains("no upstream branch") || e.contains("has no upstream") => {
+            let branch = run_ok(&["rev-parse", "--abbrev-ref", "HEAD"])?;
+            let branch = branch.trim();
+            run_ok(&["push", "--set-upstream", "origin", branch])
+        }
+        other => other,
+    }
 }
 
 pub fn pull() -> Result<String, String> {
