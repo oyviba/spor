@@ -291,9 +291,10 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
             return;
         }
         (KeyCode::Char('P'), _) => {
-            match git::pull() {
-                Ok(out) => {
-                    app.message = format!("pulled: {}", out.lines().next().unwrap_or("ok"));
+            let args: Vec<String> = ["pull", "--ff-only"].iter().map(|s| s.to_string()).collect();
+            match run_suspended("git", &args) {
+                Ok(()) => {
+                    app.message = "pulled".into();
                     app.refresh();
                 }
                 Err(e) => app.message = format!("pull failed: {}", e.lines().next().unwrap_or(&e)),
