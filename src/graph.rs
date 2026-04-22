@@ -4,10 +4,11 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Clone)]
 pub struct GraphRow {
     pub commit: Commit,
-    pub lane: usize,            // which column this commit sits in
+    pub lane: usize,                       // which column this commit sits in
     pub lanes_before: Vec<Option<String>>, // active lane contents before this commit
     pub lanes_after: Vec<Option<String>>,  // active lane contents after this commit
-    pub branch_family: String,  // prefix like "feat" or "bug" for coloring
+    pub branch_family: String,             // prefix like "feat" or "bug" for coloring
+    pub lane_families: Vec<Option<String>>, // family per lane (for coloring │ connectors)
 }
 
 /// Assign each commit to a lane. Lane 0 is reserved for the main branch's
@@ -133,12 +134,17 @@ pub fn assign_lanes(commits: &[Commit], main_chain: &HashSet<String>) -> Vec<Gra
 
         let lanes_after = lanes.clone();
 
+        let num_lanes = lanes_after.len().max(lane + 1);
+        let lane_families_snap: Vec<Option<String>> =
+            (0..num_lanes).map(|i| lane_family.get(&i).cloned()).collect();
+
         rows.push(GraphRow {
             commit: commit.clone(),
             lane,
             lanes_before,
             lanes_after,
             branch_family,
+            lane_families: lane_families_snap,
         });
     }
 

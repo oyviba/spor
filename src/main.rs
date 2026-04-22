@@ -107,6 +107,13 @@ impl App {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // When invoked as SSH_ASKPASS/GIT_ASKPASS helper, collect passphrase and exit.
+    if std::env::var("SPOR_ASKPASS").is_ok() {
+        let prompt = std::env::args().nth(1).unwrap_or_default();
+        run_askpass(&prompt);
+        return Ok(());
+    }
+
     let mut app = App::new()?;
     app.update_diff();
 
@@ -291,9 +298,10 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
             return;
         }
         (KeyCode::Char('P'), _) => {
-            match git::pull() {
-                Ok(out) => {
-                    app.message = format!("pulled: {}", out.lines().next().unwrap_or("ok"));
+            let args: Vec<String> = ["pull", "--ff-only"].iter().map(|s| s.to_string()).collect();
+            match run_suspended("git", &args) {
+                Ok(()) => {
+                    app.message = "pulled".into();
                     app.refresh();
                 }
                 Err(e) => app.message = format!("pull failed: {}", e.lines().next().unwrap_or(&e)),
@@ -309,8 +317,8 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
                 app.tracking.behind = 0;
                 return;
             }
-            match git::push() {
-                Ok(_) => {
+            match git::push_args().and_then(|args| run_suspended("git", &args)) {
+                Ok(()) => {
                     app.message = "pushed".into();
                     app.refresh();
                 }
@@ -673,11 +681,24 @@ fn run_suspended(program: &str, args: &[String]) -> Result<(), String> {
     io::stdout().execute(LeaveAlternateScreen).ok();
     disable_raw_mode().ok();
 
-    // Run the command attached to the real stdin/stdout/stderr.
+    // Use this binary as the SSH/Git askpass helper so credential prompts stay
+    // in the terminal rather than popping up an OS dialog or failing silently.
+    let exe = std::env::current_exe().unwrap_or_default();
     let status = Command::new(program)
         .args(args)
+        .env("SSH_ASKPASS", &exe)
+        .env("SSH_ASKPASS_REQUIRE", "force")
+        .env("GIT_ASKPASS", &exe)
+        .env("SPOR_ASKPASS", "1")
         .status()
         .map_err(|e| format!("failed to spawn {program}: {e}"))?;
+
+    if !status.success() {
+        // Let the user read git's error output before the TUI takes over again.
+        eprintln!("\ngit exited with {status} — press Enter to return");
+        let mut buf = String::new();
+        let _ = std::io::stdin().read_line(&mut buf);
+    }
 
     // Restore the TUI no matter what the child did.
     enable_raw_mode().map_err(|e| e.to_string())?;
@@ -688,4 +709,30 @@ fn run_suspended(program: &str, args: &[String]) -> Result<(), String> {
         return Err(format!("{program} exited with {status}"));
     }
     Ok(())
+}
+
+fn run_askpass(prompt: &str) {
+    use crossterm::event::{read, Event, KeyCode, KeyEvent};
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
+    eprint!("{prompt}");
+    let _ = io::stderr().flush();
+
+    enable_raw_mode().unwrap_or(());
+    let mut buf = String::new();
+    loop {
+        match read() {
+            Ok(Event::Key(KeyEvent { code, .. })) => match code {
+                KeyCode::Enter => break,
+                KeyCode::Char(c) => buf.push(c),
+                KeyCode::Backspace => { buf.pop(); }
+                KeyCode::Esc => { buf.clear(); break; }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    disable_raw_mode().unwrap_or(());
+    eprintln!();
+    println!("{buf}");
 }

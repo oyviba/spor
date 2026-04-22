@@ -5,7 +5,8 @@ pub struct Commit {
     pub hash: String,
     pub short: String,
     pub parents: Vec<String>,
-    pub refs: Vec<String>,     // branch names / tags pointing here
+    pub refs: Vec<String>,        // branch names / tags pointing here
+    pub head_ref: Option<String>, // which branch HEAD is on, if any
     pub subject: String,
     pub author: String,
     pub timestamp: i64,
@@ -75,13 +76,14 @@ pub fn log_all(limit: usize) -> Result<Vec<Commit>, String> {
         } else {
             fields[2].split_whitespace().map(|s| s.to_string()).collect()
         };
-        let refs = parse_refs(fields[3]);
+        let (refs, head_ref) = parse_refs(fields[3]);
         let timestamp = fields[6].trim().parse().unwrap_or(0);
         commits.push(Commit {
             hash: fields[0].to_string(),
             short: fields[1].to_string(),
             parents,
             refs,
+            head_ref,
             subject: fields[4].to_string(),
             author: fields[5].to_string(),
             timestamp,
@@ -91,13 +93,16 @@ pub fn log_all(limit: usize) -> Result<Vec<Commit>, String> {
 }
 
 /// `%D` gives decorations like: "HEAD -> main, origin/main, tag: v1.0"
-/// We just want the branch names (strip HEAD->, origin/, tag: prefixes).
-fn parse_refs(s: &str) -> Vec<String> {
-    s.split(',')
+/// Returns (refs, head_ref) where head_ref is the branch HEAD points to.
+fn parse_refs(s: &str) -> (Vec<String>, Option<String>) {
+    let mut head_ref: Option<String> = None;
+    let refs = s
+        .split(',')
         .map(|r| r.trim())
         .filter(|r| !r.is_empty())
         .map(|r| {
             if let Some(rest) = r.strip_prefix("HEAD -> ") {
+                head_ref = Some(rest.to_string());
                 rest.to_string()
             } else if let Some(rest) = r.strip_prefix("tag: ") {
                 format!("tag:{rest}")
@@ -105,7 +110,8 @@ fn parse_refs(s: &str) -> Vec<String> {
                 r.to_string()
             }
         })
-        .collect()
+        .collect();
+    (refs, head_ref)
 }
 
 pub fn status() -> Result<Vec<StatusEntry>, String> {
@@ -206,8 +212,15 @@ pub fn commit(message: &str) -> Result<(), String> {
     run_ok(&["commit", "-m", message]).map(|_| ())
 }
 
-pub fn push() -> Result<String, String> {
-    run_ok(&["push"])
+pub fn push_args() -> Result<Vec<String>, String> {
+    let has_upstream = run(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if has_upstream {
+        return Ok(vec!["push".into()]);
+    }
+    let branch = run_ok(&["rev-parse", "--abbrev-ref", "HEAD"])?;
+    Ok(vec!["push".into(), "--set-upstream".into(), "origin".into(), branch.trim().to_string()])
 }
 
 pub fn pull() -> Result<String, String> {
