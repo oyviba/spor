@@ -107,6 +107,13 @@ impl App {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // When invoked as SSH_ASKPASS/GIT_ASKPASS helper, collect passphrase and exit.
+    if std::env::var("SPOR_ASKPASS").is_ok() {
+        let prompt = std::env::args().nth(1).unwrap_or_default();
+        run_askpass(&prompt);
+        return Ok(());
+    }
+
     let mut app = App::new()?;
     app.update_diff();
 
@@ -674,9 +681,15 @@ fn run_suspended(program: &str, args: &[String]) -> Result<(), String> {
     io::stdout().execute(LeaveAlternateScreen).ok();
     disable_raw_mode().ok();
 
-    // Run the command attached to the real stdin/stdout/stderr.
+    // Use this binary as the SSH/Git askpass helper so credential prompts stay
+    // in the terminal rather than popping up an OS dialog or failing silently.
+    let exe = std::env::current_exe().unwrap_or_default();
     let status = Command::new(program)
         .args(args)
+        .env("SSH_ASKPASS", &exe)
+        .env("SSH_ASKPASS_REQUIRE", "force")
+        .env("GIT_ASKPASS", &exe)
+        .env("SPOR_ASKPASS", "1")
         .status()
         .map_err(|e| format!("failed to spawn {program}: {e}"))?;
 
@@ -696,4 +709,30 @@ fn run_suspended(program: &str, args: &[String]) -> Result<(), String> {
         return Err(format!("{program} exited with {status}"));
     }
     Ok(())
+}
+
+fn run_askpass(prompt: &str) {
+    use crossterm::event::{read, Event, KeyCode, KeyEvent};
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
+    eprint!("{prompt}");
+    let _ = io::stderr().flush();
+
+    enable_raw_mode().unwrap_or(());
+    let mut buf = String::new();
+    loop {
+        match read() {
+            Ok(Event::Key(KeyEvent { code, .. })) => match code {
+                KeyCode::Enter => break,
+                KeyCode::Char(c) => buf.push(c),
+                KeyCode::Backspace => { buf.pop(); }
+                KeyCode::Esc => { buf.clear(); break; }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    disable_raw_mode().unwrap_or(());
+    eprintln!();
+    println!("{buf}");
 }
