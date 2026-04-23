@@ -510,6 +510,101 @@ pub fn draw_branch_picker(
     Ok(())
 }
 
+/// Password/credential modal used while a background git job is waiting on
+/// `GIT_ASKPASS` / `SSH_ASKPASS`. `input_len` is the number of characters the
+/// user has typed — the actual characters are never passed in so we can't
+/// accidentally paint them to the screen.
+pub fn draw_askpass(layout: &Layout, prompt: &str, input_len: usize) -> io::Result<()> {
+    let mut out = io::stdout();
+
+    // Size: narrow-ish, a few lines tall, centered.
+    let w = layout.width.min(64).max(layout.width.min(48));
+    let h: u16 = 7;
+    if layout.width < 20 || layout.height < h + 2 {
+        return Ok(());
+    }
+    let x = (layout.width.saturating_sub(w)) / 2;
+    let y = (layout.height.saturating_sub(h)) / 2;
+    let inner = (w - 2) as usize;
+
+    // Top border with title.
+    let title = " Credentials ";
+    let title_len = title.chars().count();
+    let dash_count = inner.saturating_sub(title_len);
+    let left_dash = dash_count / 2;
+    let right_dash = dash_count - left_dash;
+    move_to(y, x)?;
+    bg((25, 25, 35))?;
+    fg((180, 200, 255))?;
+    write!(out, "┌{}", "─".repeat(left_dash))?;
+    bold()?;
+    write!(out, "{title}")?;
+    reset()?;
+    bg((25, 25, 35))?;
+    fg((180, 200, 255))?;
+    write!(out, "{}┐", "─".repeat(right_dash))?;
+
+    // Prompt text (trim trailing ":" / whitespace for display).
+    let clean_prompt = prompt.trim().trim_end_matches(':').trim().to_string();
+    let shown_prompt = truncate(&clean_prompt, inner.saturating_sub(2));
+    move_to(y + 1, x)?;
+    bg((25, 25, 35))?;
+    fg((180, 200, 255))?;
+    write!(out, "│ ")?;
+    fg((220, 220, 220))?;
+    write!(out, "{}", pad_right(&shown_prompt, inner.saturating_sub(2)))?;
+    fg((180, 200, 255))?;
+    write!(out, " │")?;
+
+    // Blank line.
+    move_to(y + 2, x)?;
+    bg((25, 25, 35))?;
+    fg((180, 200, 255))?;
+    write!(out, "│{}│", " ".repeat(inner))?;
+
+    // Input row — masked with '•', plus a trailing underscore cursor.
+    move_to(y + 3, x)?;
+    bg((25, 25, 35))?;
+    fg((180, 200, 255))?;
+    write!(out, "│ ")?;
+    fg((120, 200, 120))?;
+    write!(out, "> ")?;
+    fg((230, 230, 230))?;
+    let field_space = inner.saturating_sub(4);
+    // Clip the dot count so it never overflows the field.
+    let dots = "•".repeat(input_len.min(field_space.saturating_sub(1)));
+    let display = format!("{dots}_");
+    write!(out, "{}", pad_right(&display, field_space))?;
+    fg((180, 200, 255))?;
+    write!(out, " │")?;
+
+    // Blank line.
+    move_to(y + 4, x)?;
+    bg((25, 25, 35))?;
+    fg((180, 200, 255))?;
+    write!(out, "│{}│", " ".repeat(inner))?;
+
+    // Hint row.
+    move_to(y + 5, x)?;
+    bg((25, 25, 35))?;
+    fg((180, 200, 255))?;
+    write!(out, "│ ")?;
+    fg((160, 160, 170))?;
+    let hint = "⏎ submit   esc cancel";
+    let hint = truncate(hint, inner.saturating_sub(2));
+    write!(out, "{}", pad_right(&hint, inner.saturating_sub(2)))?;
+    fg((180, 200, 255))?;
+    write!(out, " │")?;
+
+    // Bottom border.
+    move_to(y + 6, x)?;
+    bg((25, 25, 35))?;
+    fg((180, 200, 255))?;
+    write!(out, "└{}┘", "─".repeat(inner))?;
+    reset()?;
+    Ok(())
+}
+
 /// Help overlay — keep this in sync with the actual key handlers.
 /// Sections appear with bold headers; keys are right-padded to a column
 /// so the descriptions line up.

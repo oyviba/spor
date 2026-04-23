@@ -1,6 +1,7 @@
 mod color;
 mod git;
 mod graph;
+mod job;
 mod remote;
 mod ui;
 
@@ -11,10 +12,12 @@ use crossterm::{
 };
 use std::collections::HashSet;
 use std::io::{self, Write};
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use git::{Branch, FileStatus, StatusEntry, TrackingInfo};
 use graph::GraphRow;
+use job::{JobEvent, JobHandle};
 use ui::{Focus, Layout};
 
 /// Modal states that intercept key handling.
@@ -25,6 +28,7 @@ enum Mode {
     BranchPicker { query: String, sel: usize },
     ConfirmStashAndSwitch { target: String },
     ConfirmDiscardUnstaged { path: String, status: FileStatus },
+    Askpass { prompt: String, input: String },
     Help,
 }
 
@@ -42,6 +46,10 @@ struct App {
     message: String,
     quit: bool,
     mode: Mode,
+    job: Option<JobHandle>,
+    /// When a job asks for a credential, we stash the reply sender here so
+    /// the askpass modal's Enter/Esc handler can hand the answer back.
+    pending_ask_reply: Option<Sender<String>>,
 }
 
 impl App {
@@ -65,6 +73,8 @@ impl App {
             message: String::from("ready"),
             quit: false,
             mode: Mode::Normal,
+            job: None,
+            pending_ask_reply: None,
         })
     }
 
@@ -137,6 +147,8 @@ fn run(app: &mut App) -> Result<(), String> {
         let (w, h) = terminal::size().map_err(|e| e.to_string())?;
         let layout = Layout::new(w, h);
 
+        drain_job_events(app);
+
         render(app, &layout).map_err(|e| e.to_string())?;
         io::stdout().flush().ok();
 
@@ -144,7 +156,11 @@ fn run(app: &mut App) -> Result<(), String> {
             return Ok(());
         }
 
-        if event::poll(Duration::from_millis(500)).map_err(|e| e.to_string())? {
+        // Poll more often while a background git job is running so we pick up
+        // askpass requests and completion promptly.
+        let poll_ms = if app.job.is_some() { 80 } else { 500 };
+
+        if event::poll(Duration::from_millis(poll_ms)).map_err(|e| e.to_string())? {
             match event::read().map_err(|e| e.to_string())? {
                 Event::Key(key) => handle_key(app, key, &layout),
                 Event::Resize(_, _) => {
@@ -155,6 +171,46 @@ fn run(app: &mut App) -> Result<(), String> {
                 }
                 _ => {}
             }
+        }
+    }
+}
+
+/// Drain whatever the active background git job has produced. Promotes
+/// askpass requests into the `Mode::Askpass` modal and finalizes the job
+/// on `Done`.
+fn drain_job_events(app: &mut App) {
+    let Some(job) = app.job.as_ref() else { return };
+    loop {
+        match job.events.try_recv() {
+            Ok(JobEvent::Askpass { prompt, reply }) => {
+                app.pending_ask_reply = Some(reply);
+                app.mode = Mode::Askpass {
+                    prompt,
+                    input: String::new(),
+                };
+            }
+            Ok(JobEvent::Done(result)) => {
+                let label = job.label.clone();
+                app.job = None;
+                // If the modal was still open (shouldn't normally happen, but
+                // cancel paths can race), close it.
+                if matches!(app.mode, Mode::Askpass { .. }) {
+                    app.mode = Mode::Normal;
+                }
+                app.pending_ask_reply = None;
+                match result {
+                    Ok(_) => {
+                        app.message = format!("{label} done");
+                        app.refresh();
+                    }
+                    Err(e) => {
+                        app.message =
+                            format!("{label} failed: {}", e.lines().next().unwrap_or(&e));
+                    }
+                }
+                break;
+            }
+            Err(_) => break,
         }
     }
 }
@@ -230,13 +286,32 @@ fn render(app: &mut App, layout: &Layout) -> io::Result<()> {
             let prompt = format!("{action} '{path}'? this cannot be undone");
             ui::draw_statusbar(layout, &app.tracking, &prompt, "[y/⏎] yes, discard  [n/esc] no, keep")?;
         }
+        Mode::Askpass { .. } => {
+            // The modal itself shows the prompt; status bar stays minimal.
+            ui::draw_statusbar(
+                layout,
+                &app.tracking,
+                "credentials requested",
+                "[enter] submit  [esc] cancel",
+            )?;
+        }
         Mode::Help | Mode::BranchPicker { .. } | Mode::Normal => {
-            // Slim hint — full reference lives in the help overlay (`?`).
-            let hint = match app.focus {
-                Focus::Graph => "[?] help  [j/k] move  [enter] checkout  [tab] files  [q]uit",
-                Focus::Status => "[?] help  [j/k] move  [space] stage  [c]ommit  [tab] graph  [q]uit",
-            };
-            ui::draw_statusbar(layout, &app.tracking, &app.message, hint)?;
+            if let Some(job) = &app.job {
+                let running = format!("running: git {}…", job.label);
+                ui::draw_statusbar(
+                    layout,
+                    &app.tracking,
+                    &running,
+                    "[esc] cancel",
+                )?;
+            } else {
+                // Slim hint — full reference lives in the help overlay (`?`).
+                let hint = match app.focus {
+                    Focus::Graph => "[?] help  [j/k] move  [enter] checkout  [tab] files  [q]uit",
+                    Focus::Status => "[?] help  [j/k] move  [space] stage  [c]ommit  [tab] graph  [q]uit",
+                };
+                ui::draw_statusbar(layout, &app.tracking, &app.message, hint)?;
+            }
         }
     }
 
@@ -244,6 +319,9 @@ fn render(app: &mut App, layout: &Layout) -> io::Result<()> {
     if let Mode::BranchPicker { query, sel } = &app.mode {
         let matches = filtered_branches(&app.branches, query);
         ui::draw_branch_picker(layout, query, &matches, *sel)?;
+    }
+    if let Mode::Askpass { prompt, input } = &app.mode {
+        ui::draw_askpass(layout, prompt, input.chars().count())?;
     }
     if matches!(app.mode, Mode::Help) {
         ui::draw_help(layout)?;
@@ -268,8 +346,18 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
         Mode::BranchPicker { .. } => return handle_picker_key(app, key),
         Mode::ConfirmStashAndSwitch { .. } => return handle_stash_confirm_key(app, key),
         Mode::ConfirmDiscardUnstaged { .. } => return handle_discard_confirm_key(app, key),
+        Mode::Askpass { .. } => return handle_askpass_key(app, key),
         Mode::Help => return handle_help_key(app, key),
         Mode::Normal => {}
+    }
+
+    // If a background job is running, intercept Esc as "cancel" but leave
+    // other keys (navigation, `?`, Ctrl-C quit) alone so the UI stays usable.
+    if app.job.is_some() {
+        if let KeyCode::Esc = key.code {
+            cancel_job(app);
+            return;
+        }
     }
 
     // Global keys
@@ -309,17 +397,19 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
             return;
         }
         (KeyCode::Char('P'), _) => {
-            let args: Vec<String> = ["pull", "--ff-only"].iter().map(|s| s.to_string()).collect();
-            match run_suspended("git", &args) {
-                Ok(()) => {
-                    app.message = "pulled".into();
-                    app.refresh();
-                }
-                Err(e) => app.message = format!("pull failed: {}", e.lines().next().unwrap_or(&e)),
+            if app.job.is_some() {
+                app.message = "a job is already running".into();
+                return;
             }
+            let args = vec!["pull".into(), "--ff-only".into()];
+            start_job(app, "pull", args);
             return;
         }
         (KeyCode::Char('p'), _) => {
+            if app.job.is_some() {
+                app.message = "a job is already running".into();
+                return;
+            }
             if app.tracking.behind > 0 {
                 app.message = format!(
                     "behind by {} — pull first ([P]), or press [p] again to force-push intent",
@@ -328,12 +418,11 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
                 app.tracking.behind = 0;
                 return;
             }
-            match git::push_args().and_then(|args| run_suspended("git", &args)) {
-                Ok(()) => {
-                    app.message = "pushed".into();
-                    app.refresh();
+            match git::push_args() {
+                Ok(args) => start_job(app, "push", args),
+                Err(e) => {
+                    app.message = format!("push failed: {}", e.lines().next().unwrap_or(&e))
                 }
-                Err(e) => app.message = format!("push failed: {}", e.lines().next().unwrap_or(&e)),
             }
             return;
         }
@@ -582,6 +671,63 @@ fn handle_discard_confirm_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+fn handle_askpass_key(app: &mut App, key: KeyEvent) {
+    let Mode::Askpass { input, .. } = &mut app.mode else { return };
+    match key.code {
+        KeyCode::Enter => {
+            let pw = std::mem::take(input);
+            app.mode = Mode::Normal;
+            if let Some(tx) = app.pending_ask_reply.take() {
+                let _ = tx.send(pw);
+            }
+        }
+        KeyCode::Esc => {
+            app.mode = Mode::Normal;
+            // Drop the reply sender without sending. The handler side sees
+            // that as an empty reply. Then kill the child so it doesn't just
+            // reprompt.
+            app.pending_ask_reply = None;
+            cancel_job(app);
+        }
+        KeyCode::Backspace => {
+            input.pop();
+        }
+        KeyCode::Char(c) => {
+            // Ignore Ctrl-<char> combos so Ctrl-C etc. don't end up in the
+            // password buffer. (Ctrl-C quitting the whole app while a git
+            // push is pending credentials would be surprising — skip that too.)
+            if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                input.push(c);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn start_job(app: &mut App, label: &str, args: Vec<String>) {
+    match job::start(label.to_string(), args) {
+        Ok(handle) => {
+            app.job = Some(handle);
+            app.message = format!("{label}…");
+        }
+        Err(e) => {
+            app.message = format!("{label} failed to start: {e}");
+        }
+    }
+}
+
+fn cancel_job(app: &mut App) {
+    if let Some(job) = app.job.take() {
+        let label = job.label.clone();
+        job.cancel();
+        // Dropping here cleans up the socket + tmp dir. Any pending askpass
+        // reply sender is already dropped.
+        drop(job);
+        app.message = format!("{label} cancelled");
+    }
+    app.pending_ask_reply = None;
+}
+
 fn handle_stash_confirm_key(app: &mut App, key: KeyEvent) {
     let Mode::ConfirmStashAndSwitch { target } = &app.mode else { return };
     let target = target.clone();
@@ -773,6 +919,30 @@ fn run_suspended(program: &str, args: &[String]) -> Result<(), String> {
 }
 
 fn run_askpass(prompt: &str) {
+    // Preferred path: the main spor process is listening on a Unix socket.
+    // Forward the prompt there and let the TUI collect the password in a
+    // modal — no terminal takeover.
+    if let Ok(sock) = std::env::var("SPOR_ASKPASS_SOCK") {
+        if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&sock) {
+            use std::io::{BufRead, BufReader};
+            let _ = writeln!(stream, "{prompt}");
+            let _ = stream.flush();
+            if let Ok(read_side) = stream.try_clone() {
+                let mut reader = BufReader::new(read_side);
+                let mut reply = String::new();
+                let _ = reader.read_line(&mut reply);
+                let reply = reply.trim_end_matches(['\n', '\r']);
+                println!("{reply}");
+                return;
+            }
+        }
+        // Socket was set but we couldn't reach the TUI — fall through to the
+        // terminal fallback rather than failing silently.
+    }
+
+    // Fallback: no spor TUI around. Prompt on the real terminal like git
+    // itself would. This path still gets hit if someone runs the binary
+    // directly as a GIT_ASKPASS helper.
     use crossterm::event::{read, Event, KeyCode, KeyEvent};
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
