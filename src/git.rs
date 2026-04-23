@@ -208,6 +208,17 @@ pub fn unstage(path: &str) -> Result<(), String> {
     run_ok(&["restore", "--staged", "--", path]).map(|_| ())
 }
 
+/// Throw away unstaged changes to a tracked file — reverts modifications,
+/// brings back deletions. Does not touch the index.
+pub fn discard_worktree(path: &str) -> Result<(), String> {
+    run_ok(&["restore", "--", path]).map(|_| ())
+}
+
+/// Delete an untracked file from the working tree.
+pub fn remove_untracked(path: &str) -> Result<(), String> {
+    run_ok(&["clean", "-f", "--", path]).map(|_| ())
+}
+
 pub fn commit(message: &str) -> Result<(), String> {
     run_ok(&["commit", "-m", message]).map(|_| ())
 }

@@ -545,6 +545,8 @@ const HELP_SECTIONS: &[HelpSection] = &[
         title: "Working tree (file pane)",
         entries: &[
             HelpEntry { keys: "Space",        desc: "stage / unstage" },
+            HelpEntry { keys: "Backspace",    desc: "discard unstaged changes (confirm)" },
+            HelpEntry { keys: "Shift-Bksp",   desc: "discard without confirm" },
             HelpEntry { keys: "c",            desc: "commit" },
         ],
     },
