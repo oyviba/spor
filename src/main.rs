@@ -227,8 +227,8 @@ fn render(app: &mut App, layout: &Layout) -> io::Result<()> {
                 FileStatus::Deleted => "restore deleted",
                 _ => "discard changes to",
             };
-            let prompt = format!("{action} '{path}'? (irreversible)");
-            ui::draw_statusbar(layout, &app.tracking, &prompt, "[d] discard  [c] cancel")?;
+            let prompt = format!("{action} '{path}'? this cannot be undone");
+            ui::draw_statusbar(layout, &app.tracking, &prompt, "[y/⏎] yes, discard  [n/esc] no, keep")?;
         }
         Mode::Help | Mode::BranchPicker { .. } | Mode::Normal => {
             // Slim hint — full reference lives in the help overlay (`?`).
@@ -570,13 +570,13 @@ fn handle_discard_confirm_key(app: &mut App, key: KeyEvent) {
         _ => return,
     };
     match key.code {
-        KeyCode::Char('d') => {
+        KeyCode::Char('y') | KeyCode::Enter => {
             app.mode = Mode::Normal;
             discard_entry(app, &entry);
         }
-        KeyCode::Char('c') | KeyCode::Esc => {
+        KeyCode::Char('n') | KeyCode::Esc => {
             app.mode = Mode::Normal;
-            app.message = "cancelled".into();
+            app.message = "kept changes".into();
         }
         _ => {}
     }
