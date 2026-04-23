@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use std::time::Duration;
 
-use git::{Branch, StatusEntry, TrackingInfo};
+use git::{Branch, FileStatus, StatusEntry, TrackingInfo};
 use graph::GraphRow;
 use ui::{Focus, Layout};
 
@@ -24,6 +24,7 @@ enum Mode {
     NewBranch { name: String, target_sha: String },
     BranchPicker { query: String, sel: usize },
     ConfirmStashAndSwitch { target: String },
+    ConfirmDiscardUnstaged { path: String, status: FileStatus },
     Help,
 }
 
@@ -220,6 +221,15 @@ fn render(app: &mut App, layout: &Layout) -> io::Result<()> {
             let prompt = format!("uncommitted changes conflict with switch to '{target}'");
             ui::draw_statusbar(layout, &app.tracking, &prompt, "[s] stash & switch  [c] cancel")?;
         }
+        Mode::ConfirmDiscardUnstaged { path, status } => {
+            let action = match status {
+                FileStatus::Untracked => "delete untracked file",
+                FileStatus::Deleted => "restore deleted",
+                _ => "discard changes to",
+            };
+            let prompt = format!("{action} '{path}'? (irreversible)");
+            ui::draw_statusbar(layout, &app.tracking, &prompt, "[d] discard  [c] cancel")?;
+        }
         Mode::Help | Mode::BranchPicker { .. } | Mode::Normal => {
             // Slim hint — full reference lives in the help overlay (`?`).
             let hint = match app.focus {
@@ -257,6 +267,7 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
         Mode::NewBranch { .. } => return handle_new_branch_key(app, key),
         Mode::BranchPicker { .. } => return handle_picker_key(app, key),
         Mode::ConfirmStashAndSwitch { .. } => return handle_stash_confirm_key(app, key),
+        Mode::ConfirmDiscardUnstaged { .. } => return handle_discard_confirm_key(app, key),
         Mode::Help => return handle_help_key(app, key),
         Mode::Normal => {}
     }
@@ -388,7 +399,7 @@ fn handle_status_key(app: &mut App, key: KeyEvent, _layout: &Layout) {
         }
         KeyCode::Char(' ') => {
             if let Some(entry) = app.status.get(app.status_sel).cloned() {
-                let result = if matches!(entry.status, git::FileStatus::Staged) {
+                let result = if matches!(entry.status, FileStatus::Staged) {
                     git::unstage(&entry.path)
                 } else {
                     git::stage(&entry.path)
@@ -402,10 +413,39 @@ fn handle_status_key(app: &mut App, key: KeyEvent, _layout: &Layout) {
                 }
             }
         }
+        KeyCode::Backspace => {
+            let Some(entry) = app.status.get(app.status_sel).cloned() else { return };
+            if matches!(entry.status, FileStatus::Staged) {
+                app.message = "file is staged — [space] to unstage first".into();
+                return;
+            }
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                discard_entry(app, &entry);
+            } else {
+                app.mode = Mode::ConfirmDiscardUnstaged {
+                    path: entry.path,
+                    status: entry.status,
+                };
+            }
+        }
         KeyCode::Char('c') => {
             app.mode = Mode::CommitMessage(String::new());
         }
         _ => {}
+    }
+}
+
+fn discard_entry(app: &mut App, entry: &StatusEntry) {
+    let result = match entry.status {
+        FileStatus::Untracked => git::remove_untracked(&entry.path),
+        _ => git::discard_worktree(&entry.path),
+    };
+    match result {
+        Ok(_) => {
+            app.message = format!("discarded {}", entry.path);
+            app.refresh();
+        }
+        Err(e) => app.message = format!("discard failed: {}", e.lines().next().unwrap_or(&e)),
     }
 }
 
@@ -519,6 +559,27 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
         return;
     }
     app.mode = Mode::Normal;
+}
+
+fn handle_discard_confirm_key(app: &mut App, key: KeyEvent) {
+    let entry = match &app.mode {
+        Mode::ConfirmDiscardUnstaged { path, status } => StatusEntry {
+            path: path.clone(),
+            status: status.clone(),
+        },
+        _ => return,
+    };
+    match key.code {
+        KeyCode::Char('d') => {
+            app.mode = Mode::Normal;
+            discard_entry(app, &entry);
+        }
+        KeyCode::Char('c') | KeyCode::Esc => {
+            app.mode = Mode::Normal;
+            app.message = "cancelled".into();
+        }
+        _ => {}
+    }
 }
 
 fn handle_stash_confirm_key(app: &mut App, key: KeyEvent) {
