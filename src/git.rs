@@ -14,16 +14,27 @@ pub struct Commit {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FileStatus {
-    Staged,
-    Modified,
+    Staged,        // staged add / modify / rename / copy
+    StagedDeleted, // deletion recorded in the index
+    Modified,      // unstaged modification
+    Deleted,       // deleted in the working tree, not staged
     Untracked,
-    Deleted,
+}
+
+impl FileStatus {
+    /// Does this entry live in the index (vs the working tree)?
+    pub fn is_staged(&self) -> bool {
+        matches!(self, FileStatus::Staged | FileStatus::StagedDeleted)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct StatusEntry {
     pub status: FileStatus,
     pub path: String,
+    /// For staged renames/copies: the path the file came from. Unstaging a
+    /// rename has to touch both paths, so we keep it around.
+    pub orig_path: Option<String>,
 }
 
 /// Where the current branch sits relative to its upstream.
@@ -31,10 +42,10 @@ pub struct StatusEntry {
 /// no upstream configured, or brand-new unborn branch.
 #[derive(Debug, Clone, Default)]
 pub struct TrackingInfo {
-    pub branch: Option<String>,    // current branch name, or None if detached
-    pub upstream: Option<String>,  // e.g. "origin/main"
-    pub ahead: usize,              // commits we have that upstream doesn't
-    pub behind: usize,             // commits upstream has that we don't
+    pub branch: Option<String>,   // current branch name, or None if detached
+    pub upstream: Option<String>, // e.g. "origin/main"
+    pub ahead: usize,             // commits we have that upstream doesn't
+    pub behind: usize,            // commits upstream has that we don't
     pub detached: bool,
 }
 
@@ -74,7 +85,10 @@ pub fn log_all(limit: usize) -> Result<Vec<Commit>, String> {
         let parents = if fields[2].is_empty() {
             Vec::new()
         } else {
-            fields[2].split_whitespace().map(|s| s.to_string()).collect()
+            fields[2]
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect()
         };
         let (refs, head_ref) = parse_refs(fields[3]);
         let timestamp = fields[6].trim().parse().unwrap_or(0);
@@ -114,35 +128,54 @@ fn parse_refs(s: &str) -> (Vec<String>, Option<String>) {
     (refs, head_ref)
 }
 
+/// Working tree status. `-z` gives NUL-separated records with no quoting, so
+/// paths with spaces, quotes, or non-ASCII survive, and rename origins arrive
+/// as a separate field instead of a literal `old -> new` string.
 pub fn status() -> Result<Vec<StatusEntry>, String> {
-    let out = run_ok(&["status", "--porcelain=v1", "-uall"])?;
+    let out = run_ok(&["status", "--porcelain=v1", "-z", "-uall"])?;
+    Ok(parse_status(&out))
+}
+
+fn parse_status(out: &str) -> Vec<StatusEntry> {
     let mut entries = Vec::new();
-    for line in out.lines() {
-        if line.len() < 3 {
+    let mut fields = out.split('\0');
+
+    while let Some(record) = fields.next() {
+        if record.len() < 3 {
             continue;
         }
-        let x = line.as_bytes()[0] as char;
-        let y = line.as_bytes()[1] as char;
-        let path = &line[3..];
+        let x = record.as_bytes()[0] as char;
+        let y = record.as_bytes()[1] as char;
+        let path = &record[3..];
+
+        // Renames/copies are followed by an extra NUL-separated field: the
+        // path the file came from. Consume it even if we don't use it.
+        let orig_path = if x == 'R' || x == 'C' {
+            fields.next().map(|s| s.to_string())
+        } else {
+            None
+        };
 
         // Untracked
         if x == '?' && y == '?' {
             entries.push(StatusEntry {
                 status: FileStatus::Untracked,
                 path: path.to_string(),
+                orig_path: None,
             });
             continue;
         }
         // Staged (index column)
         if x != ' ' && x != '?' {
             let st = if x == 'D' {
-                FileStatus::Deleted
+                FileStatus::StagedDeleted
             } else {
                 FileStatus::Staged
             };
             entries.push(StatusEntry {
                 status: st,
                 path: path.to_string(),
+                orig_path: orig_path.clone(),
             });
         }
         // Working tree (worktree column)
@@ -155,10 +188,11 @@ pub fn status() -> Result<Vec<StatusEntry>, String> {
             entries.push(StatusEntry {
                 status: st,
                 path: path.to_string(),
+                orig_path: None,
             });
         }
     }
-    Ok(entries)
+    entries
 }
 
 /// Parse the branch headers from `git status --porcelain=v2 --branch`.
@@ -169,6 +203,10 @@ pub fn status() -> Result<Vec<StatusEntry>, String> {
 ///   # branch.ab +<ahead> -<behind>  (absent if no upstream)
 pub fn tracking() -> Result<TrackingInfo, String> {
     let out = run_ok(&["status", "--porcelain=v2", "--branch"])?;
+    Ok(parse_tracking(&out))
+}
+
+fn parse_tracking(out: &str) -> TrackingInfo {
     let mut info = TrackingInfo::default();
 
     for line in out.lines() {
@@ -197,15 +235,21 @@ pub fn tracking() -> Result<TrackingInfo, String> {
         }
     }
 
-    Ok(info)
+    info
 }
 
 pub fn stage(path: &str) -> Result<(), String> {
     run_ok(&["add", "--", path]).map(|_| ())
 }
 
-pub fn unstage(path: &str) -> Result<(), String> {
-    run_ok(&["restore", "--staged", "--", path]).map(|_| ())
+/// Unstage an entry. A staged rename is two index operations (delete at the
+/// old path, add at the new), so undoing it has to restore both paths.
+pub fn unstage(entry: &StatusEntry) -> Result<(), String> {
+    let mut args = vec!["restore", "--staged", "--", entry.path.as_str()];
+    if let Some(orig) = &entry.orig_path {
+        args.push(orig.as_str());
+    }
+    run_ok(&args).map(|_| ())
 }
 
 /// Throw away unstaged changes to a tracked file — reverts modifications,
@@ -231,11 +275,12 @@ pub fn push_args() -> Result<Vec<String>, String> {
         return Ok(vec!["push".into()]);
     }
     let branch = run_ok(&["rev-parse", "--abbrev-ref", "HEAD"])?;
-    Ok(vec!["push".into(), "--set-upstream".into(), "origin".into(), branch.trim().to_string()])
-}
-
-pub fn pull() -> Result<String, String> {
-    run_ok(&["pull", "--ff-only"])
+    Ok(vec![
+        "push".into(),
+        "--set-upstream".into(),
+        "origin".into(),
+        branch.trim().to_string(),
+    ])
 }
 
 pub fn diff_file(path: &str, staged: bool) -> Result<String, String> {
@@ -274,7 +319,7 @@ pub fn main_chain() -> Result<Vec<String>, String> {
 
 #[derive(Debug, Clone)]
 pub struct Branch {
-    pub name: String,        // display name, e.g. "main" or "origin/feat/x"
+    pub name: String, // display name, e.g. "main" or "origin/feat/x"
     pub is_current: bool,
     pub is_remote: bool,
 }
@@ -316,25 +361,25 @@ pub fn list_branches() -> Result<Vec<Branch>, String> {
     Ok(branches)
 }
 
+/// Names of configured remotes, e.g. ["origin", "upstream"].
+pub fn remotes() -> Vec<String> {
+    run_ok(&["remote"])
+        .map(|out| out.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 /// Attempt `git switch`. For a remote-tracking ref like `origin/feat/x`, git
 /// will auto-create a local tracking branch `feat/x` if no local exists.
 pub fn checkout_branch(name: &str) -> Result<(), String> {
     // Strip the remote prefix if we're checking out a remote-tracking ref.
     // `git switch origin/feat/x` is an error; `git switch feat/x` is what we want,
     // and git will set up tracking automatically.
-    let target = if let Some((remote, rest)) = name.split_once('/') {
-        // Heuristic: if the first segment matches a known remote, strip it.
-        let remotes = run_ok(&["remote"]).unwrap_or_default();
-        if remotes.lines().any(|r| r == remote) {
-            rest.to_string()
-        } else {
-            name.to_string()
-        }
-    } else {
-        name.to_string()
+    let target = match name.split_once('/') {
+        Some((remote, rest)) if remotes().iter().any(|r| r == remote) => rest,
+        _ => name,
     };
 
-    run_ok(&["switch", &target]).map(|_| ())
+    run_ok(&["switch", target]).map(|_| ())
 }
 
 pub fn create_branch_at(name: &str, sha: &str) -> Result<(), String> {
@@ -361,4 +406,86 @@ pub fn default_base_branch() -> Option<String> {
         }
     }
     main_branch()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_status_untracked_and_modified() {
+        let entries = parse_status("?? new.txt\0 M lib.rs\0");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].status, FileStatus::Untracked);
+        assert_eq!(entries[0].path, "new.txt");
+        assert_eq!(entries[1].status, FileStatus::Modified);
+        assert_eq!(entries[1].path, "lib.rs");
+    }
+
+    #[test]
+    fn parse_status_staged_and_modified_same_file() {
+        // "MM" = staged changes plus further unstaged edits → two entries.
+        let entries = parse_status("MM src/main.rs\0");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].status, FileStatus::Staged);
+        assert_eq!(entries[1].status, FileStatus::Modified);
+    }
+
+    #[test]
+    fn parse_status_deletions_carry_stagedness() {
+        let entries = parse_status("D  gone-staged.rs\0 D gone-worktree.rs\0");
+        assert_eq!(entries[0].status, FileStatus::StagedDeleted);
+        assert!(entries[0].status.is_staged());
+        assert_eq!(entries[1].status, FileStatus::Deleted);
+        assert!(!entries[1].status.is_staged());
+    }
+
+    #[test]
+    fn parse_status_rename_keeps_both_paths() {
+        let entries = parse_status("R  new-name.rs\0old-name.rs\0");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, FileStatus::Staged);
+        assert_eq!(entries[0].path, "new-name.rs");
+        assert_eq!(entries[0].orig_path.as_deref(), Some("old-name.rs"));
+    }
+
+    #[test]
+    fn parse_status_path_with_spaces_and_quotes() {
+        // -z output is unquoted, so odd paths come through verbatim.
+        let entries = parse_status("?? path with \"quotes\".txt\0");
+        assert_eq!(entries[0].path, "path with \"quotes\".txt");
+    }
+
+    #[test]
+    fn parse_refs_head_and_tags() {
+        let (refs, head) = parse_refs("HEAD -> main, origin/main, tag: v1.0");
+        assert_eq!(refs, vec!["main", "origin/main", "tag:v1.0"]);
+        assert_eq!(head.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn parse_refs_empty() {
+        let (refs, head) = parse_refs("");
+        assert!(refs.is_empty());
+        assert!(head.is_none());
+    }
+
+    #[test]
+    fn parse_tracking_ahead_behind() {
+        let out = "# branch.oid abc\n# branch.head feat/x\n\
+                   # branch.upstream origin/feat/x\n# branch.ab +2 -3\n";
+        let info = parse_tracking(out);
+        assert_eq!(info.branch.as_deref(), Some("feat/x"));
+        assert_eq!(info.upstream.as_deref(), Some("origin/feat/x"));
+        assert_eq!(info.ahead, 2);
+        assert_eq!(info.behind, 3);
+        assert!(!info.detached);
+    }
+
+    #[test]
+    fn parse_tracking_detached() {
+        let info = parse_tracking("# branch.oid abc\n# branch.head (detached)\n");
+        assert!(info.detached);
+        assert!(info.branch.is_none());
+    }
 }

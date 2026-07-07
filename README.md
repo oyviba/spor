@@ -40,7 +40,7 @@ spor
 - `b` — branch picker
 - `R` — open pull/merge request for the current branch
 - `P` — pull (fast-forward only)
-- `p` — push (warns if behind)
+- `p` — push (asks for confirmation when behind upstream)
 
 **Graph pane:**
 - `j` / `k` or arrows — move selection
@@ -88,4 +88,4 @@ spor
 
 ## License
 
-MIT OR Apache-2.0, your choice.
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), your choice.

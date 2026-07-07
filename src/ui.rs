@@ -1,4 +1,4 @@
-use crate::color::{color_for, Rgb};
+use crate::color::{branch_family, color_for, Rgb};
 use crate::git::{Branch, FileStatus, StatusEntry};
 use crate::graph::GraphRow;
 use std::io::{self, Write};
@@ -48,8 +48,8 @@ pub enum Focus {
 pub struct Layout {
     pub width: u16,
     pub height: u16,
-    pub graph_width: u16,    // column split between graph and right pane
-    pub diff_split_y: u16,   // row inside the right pane where the diff starts
+    pub graph_width: u16,  // column split between graph and right pane
+    pub diff_split_y: u16, // row inside the right pane where the diff starts
 }
 
 /// Below this we just paint a "terminal too small" message instead of trying
@@ -107,7 +107,25 @@ pub fn draw_too_small(layout: &Layout) -> io::Result<()> {
     Ok(())
 }
 
-/// Draw a single row of the graph pane.
+/// How old is a commit, compressed to something like "3d" or "2mo".
+fn rel_time(timestamp: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let dt = (now - timestamp).max(0);
+    match dt {
+        0..=59 => format!("{dt}s"),
+        60..=3599 => format!("{}m", dt / 60),
+        3600..=86_399 => format!("{}h", dt / 3600),
+        86_400..=604_799 => format!("{}d", dt / 86_400),
+        604_800..=2_591_999 => format!("{}w", dt / 604_800),
+        2_592_000..=31_535_999 => format!("{}mo", dt / 2_592_000),
+        _ => format!("{}y", dt / 31_536_000),
+    }
+}
+
+/// Draw a single row of the graph pane, clamped to `graph_width` columns.
 /// Each lane takes 2 columns: the node/pipe glyph + a space.
 pub fn draw_graph_row(
     row: &GraphRow,
@@ -115,6 +133,8 @@ pub fn draw_graph_row(
     selected: bool,
     focused: bool,
     max_lanes: usize,
+    graph_width: u16,
+    remotes: &[String],
 ) -> io::Result<()> {
     let mut out = io::stdout();
     move_to(y, 0)?;
@@ -126,14 +146,16 @@ pub fn draw_graph_row(
         }
     }
 
-    // Draw each active lane.
-    let lane_count = row.lanes_before.len().max(row.lanes_after.len()).max(row.lane + 1);
+    // Draw each active lane. Writing "glyph + space" sequentially (instead of
+    // jumping the cursor per lane) keeps the selection background continuous.
+    let lane_count = row
+        .lanes_before
+        .len()
+        .max(row.lanes_after.len())
+        .max(row.lane + 1);
     let lane_count = lane_count.min(max_lanes);
 
     for l in 0..lane_count {
-        let col = (l * 2) as u16;
-        move_to(y, col)?;
-
         let family: &str = if l == row.lane {
             &row.branch_family
         } else {
@@ -176,63 +198,95 @@ pub fn draw_graph_row(
         } else {
             " "
         };
-        write!(out, "{glyph}")?;
+        write!(out, "{glyph} ")?;
     }
 
-    // Subject + refs.
-    let text_col = (lane_count * 2 + 1) as u16;
-    move_to(y, text_col)?;
-    reset()?;
-    if selected && focused {
-        bg((40, 50, 70))?;
-    } else if selected {
-        bg((30, 30, 40))?;
-    }
+    // Refs + subject + metadata, budgeted so nothing bleeds into the right pane.
+    let text_col = lane_count * 2;
+    let mut avail = (graph_width as usize).saturating_sub(text_col);
 
     // Refs as little labels before the subject.
     for r in &row.commit.refs {
+        let label = if let Some(tag) = r.strip_prefix("tag:") {
+            format!("[{tag}] ")
+        } else if row.commit.head_ref.as_deref() == Some(r.as_str()) {
+            format!("(▶{r}) ")
+        } else {
+            format!("({r}) ")
+        };
+        if display_width(&label) + 2 > avail {
+            break; // no room — drop remaining labels rather than overflow
+        }
         if r.starts_with("tag:") {
             fg((220, 180, 60))?;
-            write!(out, "[{}] ", &r[4..])?;
         } else if row.commit.head_ref.as_deref() == Some(r.as_str()) {
             // Currently checked-out branch — bright gold + arrow marker
             fg((255, 210, 60))?;
-            write!(out, "(▶{r}) ")?;
         } else {
-            let fam = r.split('/').next().unwrap_or("_");
-            fg(color_for(fam, r))?;
-            write!(out, "({r}) ")?;
+            fg(color_for(branch_family(r, remotes), r))?;
         }
+        avail -= display_width(&label);
+        write!(out, "{label}")?;
     }
 
     fg((220, 220, 220))?;
-    let subject = truncate(&row.commit.subject, 80);
+    let subject = truncate(&row.commit.subject, avail);
+    avail -= display_width(&subject);
     write!(out, "{subject}")?;
+
+    // If there's still room, tack on dim "hash author age" metadata.
+    let meta = format!(
+        "  {} {} {}",
+        row.commit.short,
+        row.commit.author,
+        rel_time(row.commit.timestamp)
+    );
+    if display_width(&meta) <= avail {
+        fg((110, 110, 125))?;
+        avail -= display_width(&meta);
+        write!(out, "{meta}")?;
+    }
+
+    // Extend the selection highlight across the whole pane.
+    if selected && avail > 0 {
+        write!(out, "{}", " ".repeat(avail))?;
+    }
 
     reset()?;
     Ok(())
 }
 
+/// How many file rows fit in the status pane. Shared with the scroll logic in
+/// main.rs so selection and rendering agree on visibility.
+pub fn status_pane_rows(layout: &Layout) -> usize {
+    layout
+        .diff_split_y
+        .saturating_sub(2)
+        .min(layout.height.saturating_sub(2)) as usize
+}
+
 pub fn draw_status_pane(
     entries: &[StatusEntry],
     selected: usize,
+    scroll: usize,
     focused: bool,
     layout: &Layout,
 ) -> io::Result<()> {
     let mut out = io::stdout();
     let x0 = layout.graph_width + 1;
-    // Don't write past the diff split or off the bottom of the screen.
-    let max_rows = layout
-        .diff_split_y
-        .saturating_sub(2)
-        .min(layout.height.saturating_sub(2));
+    let max_rows = status_pane_rows(layout);
 
-    // Header
+    // Header, with a position indicator when the list doesn't fit.
     move_to(0, x0)?;
     bold()?;
     fg((180, 200, 255))?;
     write!(out, " Working tree ")?;
     reset()?;
+    if entries.len() > max_rows {
+        fg((140, 140, 150))?;
+        write!(out, "({}/{})", selected + 1, entries.len())?;
+        reset()?;
+    }
 
     if entries.is_empty() {
         move_to(2, x0)?;
@@ -242,14 +296,16 @@ pub fn draw_status_pane(
         return Ok(());
     }
 
-    for (i, e) in entries.iter().take(max_rows as usize).enumerate() {
+    for (i, e) in entries.iter().skip(scroll).take(max_rows).enumerate() {
+        let idx = scroll + i;
         let y = (i + 2) as u16;
         move_to(y, x0)?;
-        if i == selected && focused {
+        if idx == selected && focused {
             bg((40, 50, 70))?;
         }
         let (marker, color) = match e.status {
             FileStatus::Staged => ("+", (120, 200, 120)),
+            FileStatus::StagedDeleted => ("-", (120, 200, 120)),
             FileStatus::Modified => ("~", (220, 180, 60)),
             FileStatus::Untracked => ("?", (180, 180, 180)),
             FileStatus::Deleted => ("-", (220, 100, 100)),
@@ -258,7 +314,11 @@ pub fn draw_status_pane(
         write!(out, " {marker} ")?;
         fg((220, 220, 220))?;
         let remaining = layout.width.saturating_sub(x0 + 4) as usize;
-        write!(out, "{}", truncate(&e.path, remaining))?;
+        let label = match &e.orig_path {
+            Some(orig) => format!("{orig} → {}", e.path),
+            None => e.path.clone(),
+        };
+        write!(out, "{}", truncate(&label, remaining))?;
         reset()?;
     }
     Ok(())
@@ -283,7 +343,12 @@ pub fn draw_diff_pane(diff: &str, layout: &Layout, scroll: usize) -> io::Result<
     let max_rows = layout.height.saturating_sub(y0 + 1);
     let max_cols = layout.width.saturating_sub(x0 + 1) as usize;
 
-    for (i, line) in diff.lines().skip(scroll).take(max_rows as usize).enumerate() {
+    for (i, line) in diff
+        .lines()
+        .skip(scroll)
+        .take(max_rows as usize)
+        .enumerate()
+    {
         let y = y0 + i as u16;
         move_to(y, x0)?;
         let color = if line.starts_with("+++") || line.starts_with("---") {
@@ -311,14 +376,17 @@ pub fn draw_statusbar(
     hint: &str,
 ) -> io::Result<()> {
     let mut out = io::stdout();
-    move_to(layout.height - 1, 0)?;
+    move_to(layout.height.saturating_sub(1), 0)?;
 
-    // Build the branch segment text so we know its visible width.
+    // Build the branch segment text so we know its visible width. Long branch
+    // names get truncated so the segment can never eat the whole bar (or
+    // underflow the width math below).
     let branch_label = if tracking.detached {
         "(detached)".to_string()
     } else {
         tracking.branch.clone().unwrap_or_else(|| "?".to_string())
     };
+    let branch_label = truncate(&branch_label, (layout.width / 2) as usize);
 
     // "⎇" is the branch symbol (U+2387), widely supported.
     let mut segment = format!(" ⎇ {branch_label} ");
@@ -337,7 +405,7 @@ pub fn draw_statusbar(
         segment.push_str("(no upstream) ");
     }
 
-    let seg_width = segment.chars().count();
+    let seg_width = display_width(&segment);
 
     // Draw branch segment with a distinct background.
     bg((50, 50, 65))?;
@@ -370,31 +438,76 @@ pub fn draw_statusbar(
     // Rest of the bar.
     bg((30, 30, 40))?;
     fg((200, 200, 200))?;
-    let remaining = layout.width as usize - seg_width;
+    let remaining = (layout.width as usize).saturating_sub(seg_width);
     let rest = format!(" {msg}  │  {hint}");
-    let rest = truncate(&rest, remaining);
-    write!(out, "{:<width$}", rest, width = remaining)?;
+    write!(out, "{}", pad_right(&rest, remaining))?;
     reset()?;
     Ok(())
 }
 
-pub fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut r: String = s.chars().take(max.saturating_sub(1)).collect();
-        r.push('…');
-        r
+/// Approximate terminal cell width of a char. Covers the common wide ranges
+/// (CJK, Hangul, kana, fullwidth forms, emoji) and zero-width combining marks;
+/// not a full Unicode east-asian-width implementation, but keeps columns from
+/// drifting on the inputs a git TUI actually sees.
+fn char_width(c: char) -> usize {
+    let cp = c as u32;
+    match cp {
+        // Combining marks render as zero cells.
+        0x0300..=0x036F | 0x200B..=0x200F | 0xFE00..=0xFE0F => 0,
+        // Wide: CJK & friends, Hangul, kana, fullwidth forms, emoji.
+        0x1100..=0x115F
+        | 0x2E80..=0x303E
+        | 0x3041..=0x33FF
+        | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF
+        | 0xA000..=0xA4CF
+        | 0xAC00..=0xD7A3
+        | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F
+        | 0xFF00..=0xFF60
+        | 0xFFE0..=0xFFE6
+        | 0x1F300..=0x1F64F
+        | 0x1F680..=0x1F6FF
+        | 0x1F900..=0x1F9FF
+        | 0x20000..=0x2FFFD => 2,
+        _ => 1,
     }
 }
 
+pub fn display_width(s: &str) -> usize {
+    s.chars().map(char_width).sum()
+}
+
+/// Cut `s` to at most `max` terminal cells, appending `…` when it was longer.
+pub fn truncate(s: &str, max: usize) -> String {
+    if display_width(s) <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let budget = max - 1; // room for the ellipsis
+    let mut used = 0;
+    let mut r = String::new();
+    for c in s.chars() {
+        let w = char_width(c);
+        if used + w > budget {
+            break;
+        }
+        used += w;
+        r.push(c);
+    }
+    r.push('…');
+    r
+}
+
 fn pad_right(s: &str, w: usize) -> String {
-    let count = s.chars().count();
-    if count >= w {
-        s.chars().take(w).collect()
+    let width = display_width(s);
+    if width > w {
+        truncate(s, w)
     } else {
         let mut r = s.to_string();
-        r.push_str(&" ".repeat(w - count));
+        r.push_str(&" ".repeat(w - width));
         r
     }
 }
@@ -405,13 +518,12 @@ pub fn draw_branch_picker(
     query: &str,
     matches: &[&Branch],
     sel: usize,
+    remotes: &[String],
 ) -> io::Result<()> {
     let mut out = io::stdout();
-    // Cap to screen, then floor at a usable minimum. If the screen is below
-    // the floor, too_small() should have short-circuited render() — but be
-    // defensive in case overlays get drawn from somewhere we didn't expect.
-    let w = layout.width.min(60).max(layout.width.min(40));
-    let h = layout.height.min(18).max(layout.height.min(8));
+    // Cap to the screen; too_small() has already guaranteed a usable minimum.
+    let w = layout.width.min(60);
+    let h = layout.height.min(18);
     let x = (layout.width.saturating_sub(w)) / 2;
     let y = (layout.height.saturating_sub(h)) / 2;
     let inner = (w - 2) as usize;
@@ -472,8 +584,7 @@ pub fn draw_branch_picker(
             fg((120, 200, 120))?;
             write!(out, "{} ", if b.is_current { "●" } else { " " })?;
             // Branch name, colored by family
-            let fam = b.name.split('/').next().unwrap_or("_");
-            fg(color_for(fam, &b.name))?;
+            fg(color_for(branch_family(&b.name, remotes), &b.name))?;
             let content_width = inner.saturating_sub(4);
             let label = if b.is_remote {
                 format!("{} (remote)", b.name)
@@ -527,43 +638,94 @@ const HELP_SECTIONS: &[HelpSection] = &[
     HelpSection {
         title: "Navigation",
         entries: &[
-            HelpEntry { keys: "j  ↓",         desc: "move down" },
-            HelpEntry { keys: "k  ↑",         desc: "move up" },
-            HelpEntry { keys: "Tab",          desc: "switch focus (graph ↔ files)" },
-            HelpEntry { keys: "J  K",         desc: "scroll diff" },
+            HelpEntry {
+                keys: "j  ↓",
+                desc: "move down",
+            },
+            HelpEntry {
+                keys: "k  ↑",
+                desc: "move up",
+            },
+            HelpEntry {
+                keys: "Tab",
+                desc: "switch focus (graph ↔ files)",
+            },
+            HelpEntry {
+                keys: "J  K",
+                desc: "scroll diff",
+            },
         ],
     },
     HelpSection {
         title: "Branches",
         entries: &[
-            HelpEntry { keys: "Enter  o",     desc: "checkout branch at selected commit" },
-            HelpEntry { keys: "n",            desc: "new branch from selected commit" },
-            HelpEntry { keys: "b",            desc: "open branch picker" },
+            HelpEntry {
+                keys: "Enter  o",
+                desc: "checkout branch at selected commit",
+            },
+            HelpEntry {
+                keys: "n",
+                desc: "new branch from selected commit",
+            },
+            HelpEntry {
+                keys: "b",
+                desc: "open branch picker",
+            },
         ],
     },
     HelpSection {
         title: "Working tree (file pane)",
         entries: &[
-            HelpEntry { keys: "Space",        desc: "stage / unstage" },
-            HelpEntry { keys: "Backspace",    desc: "discard unstaged changes (confirm)" },
-            HelpEntry { keys: "Shift-Bksp",   desc: "discard without confirm" },
-            HelpEntry { keys: "c",            desc: "commit" },
+            HelpEntry {
+                keys: "Space",
+                desc: "stage / unstage",
+            },
+            HelpEntry {
+                keys: "Backspace",
+                desc: "discard unstaged changes (confirm)",
+            },
+            HelpEntry {
+                keys: "Shift-Bksp",
+                desc: "discard without confirm (if terminal sends it)",
+            },
+            HelpEntry {
+                keys: "c",
+                desc: "commit",
+            },
         ],
     },
     HelpSection {
         title: "Remote",
         entries: &[
-            HelpEntry { keys: "P",            desc: "pull (fast-forward only)" },
-            HelpEntry { keys: "p",            desc: "push (warns if behind)" },
-            HelpEntry { keys: "R",            desc: "open PR / MR for current branch" },
+            HelpEntry {
+                keys: "P",
+                desc: "pull (fast-forward only)",
+            },
+            HelpEntry {
+                keys: "p",
+                desc: "push (confirms if behind)",
+            },
+            HelpEntry {
+                keys: "R",
+                desc: "open PR / MR for current branch",
+            },
         ],
     },
     HelpSection {
         title: "General",
         entries: &[
-            HelpEntry { keys: "r",            desc: "refresh" },
-            HelpEntry { keys: "?",            desc: "this help" },
-            HelpEntry { keys: "q  Ctrl-C",    desc: "quit" },
+            HelpEntry {
+                keys: "r",
+                desc: "refresh",
+            },
+            HelpEntry {
+                keys: "?",
+                desc: "this help",
+            },
+            HelpEntry {
+                keys: "q  Ctrl-C",
+                desc: "quit",
+            },
         ],
     },
 ];
@@ -575,7 +737,7 @@ pub fn draw_help(layout: &Layout) -> io::Result<()> {
     let total_entries: usize = HELP_SECTIONS.iter().map(|s| s.entries.len()).sum();
     let content_h = total_entries + HELP_SECTIONS.len() * 2;
 
-    let w = layout.width.min(64).max(layout.width.min(48));
+    let w = layout.width.min(64);
     let h = ((content_h + 4) as u16).min(layout.height.saturating_sub(2));
     let x = (layout.width.saturating_sub(w)) / 2;
     let y = (layout.height.saturating_sub(h)) / 2;
@@ -684,4 +846,54 @@ pub fn draw_help(layout: &Layout) -> io::Result<()> {
     )?;
     reset()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_adds_ellipsis() {
+        assert_eq!(truncate("hello world", 6), "hello…");
+        assert_eq!(truncate("hi", 0), "");
+    }
+
+    #[test]
+    fn truncate_counts_wide_chars_as_two_cells() {
+        // Each CJK char is 2 cells; "日本語" is 6 cells wide.
+        assert_eq!(display_width("日本語"), 6);
+        assert_eq!(truncate("日本語", 6), "日本語");
+        // Budget 5 → 4 cells of content (2 chars) + ellipsis.
+        assert_eq!(truncate("日本語", 5), "日本…");
+    }
+
+    #[test]
+    fn combining_marks_are_zero_width() {
+        assert_eq!(display_width("e\u{0301}"), 1); // e + combining acute
+    }
+
+    #[test]
+    fn pad_right_pads_to_display_width() {
+        assert_eq!(pad_right("ab", 4), "ab  ");
+        assert_eq!(pad_right("日本", 5), "日本 ");
+        assert_eq!(pad_right("too long here", 7), "too lo…");
+    }
+
+    #[test]
+    fn rel_time_buckets() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert_eq!(rel_time(now - 30), "30s");
+        assert_eq!(rel_time(now - 120), "2m");
+        assert_eq!(rel_time(now - 7200), "2h");
+        assert_eq!(rel_time(now - 3 * 86_400), "3d");
+    }
 }
