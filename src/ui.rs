@@ -1,6 +1,8 @@
 use crate::color::{branch_family, color_for, Rgb};
 use crate::git::{Branch, FileStatus, StatusEntry};
 use crate::graph::GraphRow;
+use crate::remote::{ChecksState, PrInfo, ReviewState};
+use std::collections::HashMap;
 use std::io::{self, Write};
 
 // ANSI helpers. Direct CSI sequences keep us off ratatui.
@@ -125,6 +127,58 @@ fn rel_time(timestamp: i64) -> String {
     }
 }
 
+/// Repo-level context the graph rows need to label refs: remote names for
+/// prefix-stripping, and open PRs keyed by head branch for the tip badges.
+pub struct RepoMeta<'a> {
+    pub remotes: &'a [String],
+    pub prs: &'a HashMap<String, PrInfo>,
+}
+
+/// Find the open PR whose head is this ref, if the badge belongs on it.
+/// A remote-tracking ref defers to its local twin on the same commit, so
+/// `(feat/x #12✓) (origin/feat/x)` doesn't show the badge twice.
+fn pr_for_ref<'a>(
+    r: &str,
+    all_refs: &[String],
+    remotes: &[String],
+    prs: &'a HashMap<String, PrInfo>,
+) -> Option<&'a PrInfo> {
+    if r.starts_with("tag:") {
+        return None;
+    }
+    let name = match r.split_once('/') {
+        Some((remote, rest)) if remotes.iter().any(|x| x == remote) => {
+            if all_refs.iter().any(|other| other == rest) {
+                return None; // local twin carries the badge
+            }
+            rest
+        }
+        _ => r,
+    };
+    prs.get(name)
+}
+
+/// The ` #42✓` suffix for a branch label: PR number colored by review state,
+/// check glyph colored by CI rollup.
+fn pr_badge(pr: &PrInfo) -> (String, Rgb, &'static str, Rgb) {
+    let num_color = if pr.draft {
+        (110, 110, 125) // drafts stay dim regardless of review state
+    } else {
+        match pr.review {
+            ReviewState::Approved => (120, 200, 120),
+            ReviewState::ChangesRequested => (220, 100, 100),
+            ReviewState::None => (180, 200, 255),
+        }
+    };
+    let (glyph, glyph_color) = match pr.checks {
+        ChecksState::Passing => ("✓", (120, 200, 120)),
+        ChecksState::Failing => ("✗", (220, 100, 100)),
+        ChecksState::Pending => ("●", (220, 180, 60)),
+        ChecksState::None => ("", (0, 0, 0)),
+    };
+    (format!(" #{}", pr.number), num_color, glyph, glyph_color)
+}
+
 /// Draw a single row of the graph pane, clamped to `graph_width` columns.
 /// Each lane takes 2 columns: the node/pipe glyph + a space.
 pub fn draw_graph_row(
@@ -134,7 +188,7 @@ pub fn draw_graph_row(
     focused: bool,
     max_lanes: usize,
     graph_width: u16,
-    remotes: &[String],
+    meta: &RepoMeta,
 ) -> io::Result<()> {
     let mut out = io::stdout();
     move_to(y, 0)?;
@@ -207,26 +261,50 @@ pub fn draw_graph_row(
 
     // Refs as little labels before the subject.
     for r in &row.commit.refs {
-        let label = if let Some(tag) = r.strip_prefix("tag:") {
-            format!("[{tag}] ")
-        } else if row.commit.head_ref.as_deref() == Some(r.as_str()) {
-            format!("(▶{r}) ")
-        } else {
-            format!("({r}) ")
-        };
-        if display_width(&label) + 2 > avail {
+        if let Some(tag) = r.strip_prefix("tag:") {
+            let label = format!("[{tag}] ");
+            if display_width(&label) + 2 > avail {
+                break; // no room — drop remaining labels rather than overflow
+            }
+            fg((220, 180, 60))?;
+            avail -= display_width(&label);
+            write!(out, "{label}")?;
+            continue;
+        }
+
+        let is_head = row.commit.head_ref.as_deref() == Some(r.as_str());
+        let open = if is_head { "(▶" } else { "(" };
+        let pr = pr_for_ref(r, &row.commit.refs, meta.remotes, meta.prs);
+        let badge = pr.map(pr_badge);
+
+        let badge_width = badge
+            .as_ref()
+            .map(|(num, _, glyph, _)| display_width(num) + display_width(glyph))
+            .unwrap_or(0);
+        let width = display_width(open) + display_width(r) + badge_width + 2; // ") "
+        if width + 2 > avail {
             break; // no room — drop remaining labels rather than overflow
         }
-        if r.starts_with("tag:") {
-            fg((220, 180, 60))?;
-        } else if row.commit.head_ref.as_deref() == Some(r.as_str()) {
+
+        let ref_color = if is_head {
             // Currently checked-out branch — bright gold + arrow marker
-            fg((255, 210, 60))?;
+            (255, 210, 60)
         } else {
-            fg(color_for(branch_family(r, remotes), r))?;
+            color_for(branch_family(r, meta.remotes), r)
+        };
+        fg(ref_color)?;
+        write!(out, "{open}{r}")?;
+        if let Some((num, num_color, glyph, glyph_color)) = badge {
+            fg(num_color)?;
+            write!(out, "{num}")?;
+            if !glyph.is_empty() {
+                fg(glyph_color)?;
+                write!(out, "{glyph}")?;
+            }
+            fg(ref_color)?;
         }
-        avail -= display_width(&label);
-        write!(out, "{label}")?;
+        write!(out, ") ")?;
+        avail -= width;
     }
 
     fg((220, 220, 220))?;
@@ -883,6 +961,67 @@ mod tests {
         assert_eq!(pad_right("ab", 4), "ab  ");
         assert_eq!(pad_right("日本", 5), "日本 ");
         assert_eq!(pad_right("too long here", 7), "too lo…");
+    }
+
+    fn pr_map(branches: &[&str]) -> HashMap<String, PrInfo> {
+        branches
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                (
+                    b.to_string(),
+                    PrInfo {
+                        number: i as u64 + 1,
+                        head_branch: b.to_string(),
+                        draft: false,
+                        review: ReviewState::None,
+                        checks: ChecksState::None,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pr_badge_on_local_ref() {
+        let prs = pr_map(&["feat/x"]);
+        let refs = vec!["feat/x".to_string()];
+        let remotes = vec!["origin".to_string()];
+        assert!(pr_for_ref("feat/x", &refs, &remotes, &prs).is_some());
+        assert!(pr_for_ref("feat/other", &refs, &remotes, &prs).is_none());
+    }
+
+    #[test]
+    fn pr_badge_on_remote_ref_when_no_local_twin() {
+        let prs = pr_map(&["feat/x"]);
+        let refs = vec!["origin/feat/x".to_string()];
+        let remotes = vec!["origin".to_string()];
+        assert!(pr_for_ref("origin/feat/x", &refs, &remotes, &prs).is_some());
+    }
+
+    #[test]
+    fn remote_ref_defers_to_local_twin_on_same_commit() {
+        let prs = pr_map(&["feat/x"]);
+        let refs = vec!["feat/x".to_string(), "origin/feat/x".to_string()];
+        let remotes = vec!["origin".to_string()];
+        assert!(pr_for_ref("feat/x", &refs, &remotes, &prs).is_some());
+        assert!(pr_for_ref("origin/feat/x", &refs, &remotes, &prs).is_none());
+    }
+
+    #[test]
+    fn slashed_branch_without_remote_prefix_matches() {
+        // "feat/x" starts with "feat/", but "feat" isn't a remote — the whole
+        // name must be used for the PR lookup even with no local twin check.
+        let prs = pr_map(&["feat/x"]);
+        let refs = vec!["feat/x".to_string()];
+        assert!(pr_for_ref("feat/x", &refs, &[], &prs).is_some());
+    }
+
+    #[test]
+    fn tags_never_get_badges() {
+        let prs = pr_map(&["v1"]);
+        let refs = vec!["tag:v1".to_string()];
+        assert!(pr_for_ref("tag:v1", &refs, &[], &prs).is_none());
     }
 
     #[test]

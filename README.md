@@ -14,6 +14,23 @@ A minimal git TUI inspired by GitKraken's timeline. Single dependency (`crosster
 - Ahead/behind tracking vs upstream
 - Auto-stash on switch when the working tree blocks
 - Open a PR / MR from the current branch (uses `gh` or `glab` if available, falls back to printing the compare URL)
+- PR badges on branch tips — `(feat/login #42✓)` shows the open PR's number, review state, and CI status (GitHub repos with `gh` installed)
+
+## PR badges
+
+When the repo's `origin` is GitHub and `gh` is installed and authenticated, spor
+fetches the open PRs in the background (never blocking the UI) and decorates
+branch-tip labels in the graph:
+
+- `#42` — the PR number, colored by review state: green = approved,
+  red = changes requested, dim = draft, blue = no decision yet
+- `✓` (green) — all checks passing
+- `✗` (red) — at least one check failing
+- `●` (yellow) — checks still running
+- no glyph — the PR has no checks
+
+Badges refresh on startup, on `r`, and after opening a PR with `R`. On other
+hosts, or without `gh`, the graph simply renders without badges.
 
 ## Run
 
