@@ -11,13 +11,15 @@ use crossterm::{
     },
     ExecutableCommand,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use git::{Branch, FileStatus, StatusEntry, TrackingInfo};
 use graph::GraphRow;
-use ui::{Focus, Layout};
+use remote::PrInfo;
+use ui::{Focus, Layout, RepoMeta};
 
 /// Modal states that intercept key handling.
 enum Mode {
@@ -37,6 +39,11 @@ struct App {
     tracking: TrackingInfo,
     branches: Vec<Branch>, // refreshed when opening the picker
     remotes: Vec<String>,
+    /// Open PRs keyed by head branch — badges in the graph. Filled in
+    /// asynchronously; empty until the first fetch lands (or forever, when
+    /// the remote isn't GitHub / `gh` isn't installed).
+    prs: HashMap<String, PrInfo>,
+    pr_rx: Option<mpsc::Receiver<Vec<PrInfo>>>,
     graph_sel: usize,
     status_sel: usize,
     graph_scroll: usize,
@@ -63,6 +70,8 @@ impl App {
             tracking,
             branches: Vec::new(),
             remotes,
+            prs: HashMap::new(),
+            pr_rx: None,
             graph_sel: 0,
             status_sel: 0,
             graph_scroll: 0,
@@ -97,6 +106,42 @@ impl App {
         self.update_diff();
     }
 
+    /// Kick off a background `gh pr list`. It hits the network, so it must
+    /// never run on the UI thread — the run loop drains the channel when the
+    /// result lands. A fetch already in flight is simply abandoned (its send
+    /// fails once the receiver is replaced).
+    fn spawn_pr_fetch(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.pr_rx = Some(rx);
+        std::thread::spawn(move || {
+            let prs = remote::fetch_prs().unwrap_or_default();
+            let _ = tx.send(prs);
+        });
+    }
+
+    /// Pick up a finished PR fetch, if any. Returns true when badges changed
+    /// and the graph needs a repaint.
+    fn poll_pr_fetch(&mut self) -> bool {
+        let Some(rx) = &self.pr_rx else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(prs) => {
+                self.prs = prs
+                    .into_iter()
+                    .map(|p| (p.head_branch.clone(), p))
+                    .collect();
+                self.pr_rx = None;
+                true
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.pr_rx = None;
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+        }
+    }
+
     fn update_diff(&mut self) {
         self.diff_scroll = 0;
         self.diff = match self.focus {
@@ -124,6 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = App::new()?;
     app.update_diff();
+    app.spawn_pr_fetch();
 
     enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
@@ -146,6 +192,11 @@ fn run(app: &mut App) -> Result<(), String> {
     // changes in response to events.
     let mut needs_render = true;
     loop {
+        // A finished background PR fetch means new badges — repaint.
+        if app.poll_pr_fetch() {
+            needs_render = true;
+        }
+
         let (w, h) = terminal::size().map_err(|e| e.to_string())?;
         let layout = Layout::new(w, h);
 
@@ -201,6 +252,10 @@ fn render(app: &mut App, layout: &Layout) -> io::Result<()> {
         app.graph_scroll = app.graph_sel;
     }
 
+    let meta = RepoMeta {
+        remotes: &app.remotes,
+        prs: &app.prs,
+    };
     for (i, row) in app
         .rows
         .iter()
@@ -216,7 +271,7 @@ fn render(app: &mut App, layout: &Layout) -> io::Result<()> {
             app.focus == Focus::Graph,
             max_lanes,
             layout.graph_width,
-            &app.remotes,
+            &meta,
         )?;
     }
 
@@ -372,6 +427,7 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
         }
         (KeyCode::Char('r'), _) => {
             app.refresh();
+            app.spawn_pr_fetch();
             app.message = "refreshed".into();
             return;
         }
@@ -876,6 +932,7 @@ fn open_pull_request(app: &mut App) {
             Ok(()) => {
                 app.message = format!("PR opened via {tool}");
                 app.refresh();
+                app.spawn_pr_fetch(); // pick up the badge for the new PR
             }
             Err(e) => app.message = format!("{tool} failed: {e}"),
         }

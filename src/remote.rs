@@ -137,6 +137,113 @@ pub fn cli_tool(host: &Host) -> Option<&'static str> {
         .map(|_| tool)
 }
 
+/// CI status for a PR's head commit, rolled up across all checks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ChecksState {
+    None, // no checks configured
+    Pending,
+    Passing,
+    Failing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ReviewState {
+    None, // no decision yet (or review not required)
+    Approved,
+    ChangesRequested,
+}
+
+/// An open PR, as much of it as the branch-tip badges need.
+#[derive(Debug, Clone)]
+pub struct PrInfo {
+    pub number: u64,
+    pub head_branch: String,
+    pub draft: bool,
+    pub review: ReviewState,
+    pub checks: ChecksState,
+}
+
+/// gh's built-in jq flattens the PR list to one tab-separated line each:
+///   number \t head branch \t draft|open \t review decision \t check1,check2,…
+/// so we never have to parse JSON ourselves. Empty check conclusions mean
+/// "still running" in gh's export, hence the PENDING mapping.
+const PR_LIST_JQ: &str = r#".[] | [(.number|tostring), .headRefName, (if .isDraft then "draft" else "open" end), (.reviewDecision // ""), ([.statusCheckRollup[]? | ((.conclusion // .state // "") | if . == "" then "PENDING" else . end)] | join(","))] | @tsv"#;
+
+/// List open PRs for the repo we're in. Slow (network) — call off the UI
+/// thread. Returns None when the host isn't GitHub or `gh` isn't installed;
+/// badges simply don't appear.
+pub fn fetch_prs() -> Option<Vec<PrInfo>> {
+    let info = detect()?;
+    if info.host != Host::GitHub {
+        return None;
+    }
+    cli_tool(&info.host)?;
+    let out = Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--limit",
+            "200",
+            "--json",
+            "number,headRefName,isDraft,reviewDecision,statusCheckRollup",
+            "--jq",
+            PR_LIST_JQ,
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    Some(parse_pr_lines(&String::from_utf8_lossy(&out.stdout)))
+}
+
+fn parse_pr_lines(out: &str) -> Vec<PrInfo> {
+    out.lines().filter_map(parse_pr_line).collect()
+}
+
+fn parse_pr_line(line: &str) -> Option<PrInfo> {
+    let fields: Vec<&str> = line.split('\t').collect();
+    if fields.len() < 5 {
+        return None;
+    }
+    Some(PrInfo {
+        number: fields[0].parse().ok()?,
+        head_branch: fields[1].to_string(),
+        draft: fields[2] == "draft",
+        review: match fields[3] {
+            "APPROVED" => ReviewState::Approved,
+            "CHANGES_REQUESTED" => ReviewState::ChangesRequested,
+            _ => ReviewState::None,
+        },
+        checks: rollup_checks(fields[4]),
+    })
+}
+
+/// Fold per-check conclusions into one state. GitHub mixes two vocabularies
+/// (CheckRun conclusions and commit-status states); any failure-ish word makes
+/// the whole rollup Failing, otherwise any pending-ish word makes it Pending.
+fn rollup_checks(list: &str) -> ChecksState {
+    if list.is_empty() {
+        return ChecksState::None;
+    }
+    let mut pending = false;
+    for c in list.split(',') {
+        match c {
+            "FAILURE" | "ERROR" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED"
+            | "STARTUP_FAILURE" => return ChecksState::Failing,
+            "PENDING" | "EXPECTED" | "QUEUED" | "IN_PROGRESS" | "WAITING" | "REQUESTED" => {
+                pending = true
+            }
+            _ => {} // SUCCESS, NEUTRAL, SKIPPED
+        }
+    }
+    if pending {
+        ChecksState::Pending
+    } else {
+        ChecksState::Passing
+    }
+}
+
 /// Build the argv for the PR-create command. Caller invokes this either
 /// directly (auto mode with --fill) or after suspending the TUI (interactive).
 pub fn pr_create_args(host: &Host, base: &str) -> Vec<String> {
@@ -192,6 +299,49 @@ mod tests {
     fn enterprise_host_still_detected() {
         let r = parse_url("git@github.mycorp.com:team/proj.git").unwrap();
         assert_eq!(r.host, Host::GitHub);
+    }
+
+    #[test]
+    fn parse_pr_line_full() {
+        let pr = parse_pr_line("42\tfeat/login\topen\tAPPROVED\tSUCCESS,SKIPPED").unwrap();
+        assert_eq!(pr.number, 42);
+        assert_eq!(pr.head_branch, "feat/login");
+        assert!(!pr.draft);
+        assert_eq!(pr.review, ReviewState::Approved);
+        assert_eq!(pr.checks, ChecksState::Passing);
+    }
+
+    #[test]
+    fn parse_pr_line_draft_no_review_no_checks() {
+        let pr = parse_pr_line("7\twip\tdraft\t\t").unwrap();
+        assert!(pr.draft);
+        assert_eq!(pr.review, ReviewState::None);
+        assert_eq!(pr.checks, ChecksState::None);
+    }
+
+    #[test]
+    fn parse_pr_lines_skips_garbage() {
+        let prs = parse_pr_lines("1\ta\topen\t\tSUCCESS\nnot a record\n\n2\tb\topen\t\t\n");
+        assert_eq!(prs.len(), 2);
+        assert_eq!(prs[1].head_branch, "b");
+    }
+
+    #[test]
+    fn rollup_failure_beats_pending() {
+        assert_eq!(
+            rollup_checks("SUCCESS,PENDING,FAILURE"),
+            ChecksState::Failing
+        );
+        assert_eq!(rollup_checks("SUCCESS,IN_PROGRESS"), ChecksState::Pending);
+        assert_eq!(rollup_checks("SUCCESS,NEUTRAL"), ChecksState::Passing);
+        assert_eq!(rollup_checks(""), ChecksState::None);
+    }
+
+    #[test]
+    fn review_changes_requested() {
+        let pr = parse_pr_line("3\tfix/y\topen\tCHANGES_REQUESTED\tFAILURE").unwrap();
+        assert_eq!(pr.review, ReviewState::ChangesRequested);
+        assert_eq!(pr.checks, ChecksState::Failing);
     }
 
     #[test]
