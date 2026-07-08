@@ -464,6 +464,13 @@ mod tests {
     }
 
     #[test]
+    fn parse_refs_no_head() {
+        let (refs, head) = parse_refs("origin/feat/login");
+        assert_eq!(refs, vec!["origin/feat/login"]);
+        assert_eq!(head, None);
+    }
+
+    #[test]
     fn parse_refs_empty() {
         let (refs, head) = parse_refs("");
         assert!(refs.is_empty());
@@ -484,8 +491,26 @@ mod tests {
 
     #[test]
     fn parse_tracking_detached() {
-        let info = parse_tracking("# branch.oid abc\n# branch.head (detached)\n");
+        let info = parse_tracking("# branch.oid abc123\n# branch.head (detached)\n");
         assert!(info.detached);
-        assert!(info.branch.is_none());
+        assert_eq!(info.branch, None);
+        assert_eq!(info.upstream, None);
+        assert_eq!(info.ahead, 0);
+        assert_eq!(info.behind, 0);
+    }
+
+    #[test]
+    fn parse_tracking_no_upstream() {
+        let info = parse_tracking("# branch.oid abc123\n# branch.head feat/x\n");
+        assert_eq!(info.branch, Some("feat/x".to_string()));
+        assert_eq!(info.upstream, None);
+    }
+
+    #[test]
+    fn worktree_conflict_detection() {
+        assert!(is_worktree_conflict(
+            "error: Your local changes to the following files would be overwritten by checkout"
+        ));
+        assert!(!is_worktree_conflict("fatal: invalid reference: nope"));
     }
 }
