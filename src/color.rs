@@ -61,3 +61,50 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> Rgb {
         ((b1 + m) * 255.0).clamp(0.0, 255.0) as u8,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deterministic() {
+        assert_eq!(
+            color_for("feat", "feat/login"),
+            color_for("feat", "feat/login")
+        );
+    }
+
+    #[test]
+    fn siblings_in_same_family_differ() {
+        assert_ne!(
+            color_for("feat", "feat/login"),
+            color_for("feat", "feat/signup")
+        );
+    }
+
+    #[test]
+    fn family_hue_dominates() {
+        let (r, _, b) = color_for("feat", "feat/login");
+        assert!(b > r, "feat should be blue-ish");
+        let (r, _, b) = color_for("fix", "fix/crash");
+        assert!(r > b, "fix should be red-ish");
+        let (r, g, b) = color_for("main", "main");
+        assert!(g > r && g > b, "main should be green-ish");
+    }
+
+    #[test]
+    fn chore_and_orphan_are_grey() {
+        for (family, name) in [("chore", "chore/deps"), ("_", "whatever")] {
+            let (r, g, b) = color_for(family, name);
+            assert_eq!(r, g, "{family} should be grey");
+            assert_eq!(g, b, "{family} should be grey");
+        }
+    }
+
+    #[test]
+    fn unknown_family_is_stable_and_not_black() {
+        let a = color_for("experiment", "experiment/foo");
+        assert_eq!(a, color_for("experiment", "experiment/foo"));
+        assert_ne!(a, (0, 0, 0));
+    }
+}

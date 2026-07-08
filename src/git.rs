@@ -116,6 +116,10 @@ fn parse_refs(s: &str) -> (Vec<String>, Option<String>) {
 
 pub fn status() -> Result<Vec<StatusEntry>, String> {
     let out = run_ok(&["status", "--porcelain=v1", "-uall"])?;
+    Ok(parse_status(&out))
+}
+
+fn parse_status(out: &str) -> Vec<StatusEntry> {
     let mut entries = Vec::new();
     for line in out.lines() {
         if line.len() < 3 {
@@ -158,7 +162,7 @@ pub fn status() -> Result<Vec<StatusEntry>, String> {
             });
         }
     }
-    Ok(entries)
+    entries
 }
 
 /// Parse the branch headers from `git status --porcelain=v2 --branch`.
@@ -169,6 +173,10 @@ pub fn status() -> Result<Vec<StatusEntry>, String> {
 ///   # branch.ab +<ahead> -<behind>  (absent if no upstream)
 pub fn tracking() -> Result<TrackingInfo, String> {
     let out = run_ok(&["status", "--porcelain=v2", "--branch"])?;
+    Ok(parse_tracking(&out))
+}
+
+fn parse_tracking(out: &str) -> TrackingInfo {
     let mut info = TrackingInfo::default();
 
     for line in out.lines() {
@@ -197,7 +205,7 @@ pub fn tracking() -> Result<TrackingInfo, String> {
         }
     }
 
-    Ok(info)
+    info
 }
 
 pub fn stage(path: &str) -> Result<(), String> {
@@ -361,4 +369,111 @@ pub fn default_base_branch() -> Option<String> {
         }
     }
     main_branch()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_refs_head_branch_and_tag() {
+        let (refs, head) = parse_refs("HEAD -> main, origin/main, tag: v1.0");
+        assert_eq!(refs, vec!["main", "origin/main", "tag:v1.0"]);
+        assert_eq!(head, Some("main".to_string()));
+    }
+
+    #[test]
+    fn parse_refs_no_head() {
+        let (refs, head) = parse_refs("origin/feat/login");
+        assert_eq!(refs, vec!["origin/feat/login"]);
+        assert_eq!(head, None);
+    }
+
+    #[test]
+    fn parse_refs_empty() {
+        let (refs, head) = parse_refs("");
+        assert!(refs.is_empty());
+        assert_eq!(head, None);
+    }
+
+    #[test]
+    fn parse_status_untracked() {
+        let entries = parse_status("?? new.txt\n");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, FileStatus::Untracked);
+        assert_eq!(entries[0].path, "new.txt");
+    }
+
+    #[test]
+    fn parse_status_staged_and_modified() {
+        // "MM" = staged change plus a further unstaged edit -> two entries.
+        let entries = parse_status("M  staged.rs\n M edited.rs\nMM both.rs\n");
+        let pairs: Vec<(&FileStatus, &str)> = entries
+            .iter()
+            .map(|e| (&e.status, e.path.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (&FileStatus::Staged, "staged.rs"),
+                (&FileStatus::Modified, "edited.rs"),
+                (&FileStatus::Staged, "both.rs"),
+                (&FileStatus::Modified, "both.rs"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_status_deletions() {
+        let entries = parse_status("D  gone-staged.rs\n D gone-worktree.rs\n");
+        assert_eq!(entries[0].status, FileStatus::Deleted);
+        assert_eq!(entries[0].path, "gone-staged.rs");
+        assert_eq!(entries[1].status, FileStatus::Deleted);
+        assert_eq!(entries[1].path, "gone-worktree.rs");
+    }
+
+    #[test]
+    fn parse_status_ignores_short_lines() {
+        assert!(parse_status("\nM\n").is_empty());
+    }
+
+    #[test]
+    fn parse_tracking_full_headers() {
+        let out = "# branch.oid abc123\n\
+                   # branch.head main\n\
+                   # branch.upstream origin/main\n\
+                   # branch.ab +2 -3\n\
+                   1 .M N... 100644 100644 100644 abc def src/main.rs\n";
+        let info = parse_tracking(out);
+        assert_eq!(info.branch, Some("main".to_string()));
+        assert_eq!(info.upstream, Some("origin/main".to_string()));
+        assert_eq!(info.ahead, 2);
+        assert_eq!(info.behind, 3);
+        assert!(!info.detached);
+    }
+
+    #[test]
+    fn parse_tracking_detached() {
+        let info = parse_tracking("# branch.oid abc123\n# branch.head (detached)\n");
+        assert!(info.detached);
+        assert_eq!(info.branch, None);
+        assert_eq!(info.upstream, None);
+        assert_eq!(info.ahead, 0);
+        assert_eq!(info.behind, 0);
+    }
+
+    #[test]
+    fn parse_tracking_no_upstream() {
+        let info = parse_tracking("# branch.oid abc123\n# branch.head feat/x\n");
+        assert_eq!(info.branch, Some("feat/x".to_string()));
+        assert_eq!(info.upstream, None);
+    }
+
+    #[test]
+    fn worktree_conflict_detection() {
+        assert!(is_worktree_conflict(
+            "error: Your local changes to the following files would be overwritten by checkout"
+        ));
+        assert!(!is_worktree_conflict("fatal: invalid reference: nope"));
+    }
 }

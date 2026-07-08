@@ -165,3 +165,104 @@ fn ensure_len(lanes: &mut Vec<Option<String>>, n: usize) {
         lanes.push(None);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit(hash: &str, parents: &[&str], refs: &[&str]) -> Commit {
+        Commit {
+            hash: hash.to_string(),
+            short: hash.to_string(),
+            parents: parents.iter().map(|s| s.to_string()).collect(),
+            refs: refs.iter().map(|s| s.to_string()).collect(),
+            head_ref: None,
+            subject: format!("commit {hash}"),
+            author: "test".to_string(),
+            timestamp: 0,
+        }
+    }
+
+    fn chain(hashes: &[&str]) -> HashSet<String> {
+        hashes.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn linear_main_history_stays_in_lane_zero() {
+        // Newest first, like git log output.
+        let commits = vec![
+            commit("c", &["b"], &["main"]),
+            commit("b", &["a"], &[]),
+            commit("a", &[], &[]),
+        ];
+        let rows = assign_lanes(&commits, &chain(&["a", "b", "c"]));
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|r| r.lane == 0));
+        assert_eq!(rows[0].branch_family, "main");
+    }
+
+    #[test]
+    fn feature_branch_gets_its_own_lane() {
+        let commits = vec![
+            commit("f1", &["m1"], &["origin/feat/login"]),
+            commit("m1", &["m0"], &["main"]),
+            commit("m0", &[], &[]),
+        ];
+        let rows = assign_lanes(&commits, &chain(&["m0", "m1"]));
+        assert_eq!(rows[0].lane, 1, "feature tip must not take main's lane");
+        assert_eq!(rows[1].lane, 0);
+        assert_eq!(rows[2].lane, 0);
+        // Family comes from the ref with the remote prefix stripped.
+        assert_eq!(rows[0].branch_family, "feat");
+    }
+
+    #[test]
+    fn merge_commit_opens_lane_for_second_parent() {
+        let commits = vec![
+            commit("m2", &["m1", "f1"], &["main"]),
+            commit("f1", &["m0"], &["origin/feat/x"]),
+            commit("m1", &["m0"], &[]),
+            commit("m0", &[], &[]),
+        ];
+        let rows = assign_lanes(&commits, &chain(&["m0", "m1", "m2"]));
+        assert_eq!(rows[0].lane, 0); // merge sits on main
+        assert_eq!(rows[1].lane, 1); // merged branch got the lane opened by the merge
+        assert_eq!(rows[2].lane, 0);
+        assert_eq!(rows[3].lane, 0);
+        // After the merge row, lane 1 waits for the second parent.
+        assert_eq!(rows[0].lanes_after.get(1), Some(&Some("f1".to_string())));
+    }
+
+    #[test]
+    fn main_bumps_squatter_out_of_lane_zero() {
+        // A feature commit is newest; its parent chain would claim lane 0's
+        // wait slot only if lanes were assigned naively. Main must stay at 0.
+        let commits = vec![
+            commit("f2", &["f1"], &["origin/feat/x"]),
+            commit("m1", &["m0"], &["main"]),
+            commit("f1", &["m0"], &[]),
+            commit("m0", &[], &[]),
+        ];
+        let rows = assign_lanes(&commits, &chain(&["m0", "m1"]));
+        let lane_of = |h: &str| rows.iter().find(|r| r.commit.hash == h).unwrap().lane;
+        assert_eq!(lane_of("m1"), 0);
+        assert_eq!(lane_of("m0"), 0);
+        assert_ne!(lane_of("f2"), 0);
+        assert_eq!(lane_of("f1"), lane_of("f2"), "branch stays in one lane");
+    }
+
+    #[test]
+    fn root_commit_frees_its_lane() {
+        let commits = vec![commit("a", &[], &["main"])];
+        let rows = assign_lanes(&commits, &chain(&["a"]));
+        assert_eq!(rows[0].lane, 0);
+        assert_eq!(rows[0].lanes_after, vec![None]);
+    }
+
+    #[test]
+    fn unlabeled_lane_falls_back_to_orphan_family() {
+        let commits = vec![commit("a", &[], &[])];
+        let rows = assign_lanes(&commits, &chain(&["a"]));
+        assert_eq!(rows[0].branch_family, "_");
+    }
+}
