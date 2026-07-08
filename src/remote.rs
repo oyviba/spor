@@ -19,7 +19,11 @@ pub struct RemoteInfo {
     pub host: Host,
     /// Web URL for the repo, e.g. https://github.com/owner/repo
     pub web_url: String,
+    // owner/repo are parsed out but currently only consumed by tests; kept
+    // because PR-title/description prefill will want them.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub owner: String,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub repo: String,
 }
 
@@ -54,13 +58,20 @@ fn parse_url(url: &str) -> Option<RemoteInfo> {
     // Strip trailing .git
     let normalized = normalized.trim_end_matches(".git").trim_end_matches('/');
 
-    // host detection by substring — handles enterprise hosts that include the
-    // canonical domain (e.g. github.mycorp.com would still match GitHub).
-    let host = if normalized.contains("github") {
+    let after_scheme = normalized
+        .split_once("://")
+        .map(|(_, r)| r)
+        .unwrap_or(normalized);
+    let host_part = after_scheme.split('/').next().unwrap_or("");
+
+    // Host detection by substring on the host only — a repo *named*
+    // "gitlab-mirror" on some other host must not match, but enterprise hosts
+    // that include the canonical domain (github.mycorp.com) still should.
+    let host = if host_part.contains("github") {
         Host::GitHub
-    } else if normalized.contains("gitlab") {
+    } else if host_part.contains("gitlab") {
         Host::GitLab
-    } else if normalized.contains("bitbucket") {
+    } else if host_part.contains("bitbucket") {
         Host::Bitbucket
     } else {
         Host::Unknown
@@ -68,7 +79,6 @@ fn parse_url(url: &str) -> Option<RemoteInfo> {
 
     // Pull owner/repo from the last two path segments. This handles GitLab
     // subgroups by treating "everything before the last segment" as owner.
-    let after_scheme = normalized.split_once("://").map(|(_, r)| r).unwrap_or(normalized);
     let path = after_scheme.split_once('/').map(|(_, p)| p).unwrap_or("");
     let mut parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     if parts.len() < 2 {
@@ -79,11 +89,20 @@ fn parse_url(url: &str) -> Option<RemoteInfo> {
 
     let web_url = format!(
         "{}://{}/{owner}/{repo}",
-        if normalized.starts_with("http://") { "http" } else { "https" },
+        if normalized.starts_with("http://") {
+            "http"
+        } else {
+            "https"
+        },
         after_scheme.split_once('/').map(|(h, _)| h).unwrap_or("")
     );
 
-    Some(RemoteInfo { host, web_url, owner, repo })
+    Some(RemoteInfo {
+        host,
+        web_url,
+        owner,
+        repo,
+    })
 }
 
 /// Compose a "compare" URL for opening a PR/MR in the browser.
@@ -159,6 +178,20 @@ mod tests {
         assert_eq!(r.host, Host::GitLab);
         assert_eq!(r.owner, "group/subgroup");
         assert_eq!(r.repo, "proj");
+    }
+
+    #[test]
+    fn host_matched_on_host_part_only() {
+        // "gitlab" in the repo name must not override the actual host.
+        let r = parse_url("https://example.com/team/gitlab-mirror.git").unwrap();
+        assert_eq!(r.host, Host::Unknown);
+        assert_eq!(r.repo, "gitlab-mirror");
+    }
+
+    #[test]
+    fn enterprise_host_still_detected() {
+        let r = parse_url("git@github.mycorp.com:team/proj.git").unwrap();
+        assert_eq!(r.host, Host::GitHub);
     }
 
     #[test]

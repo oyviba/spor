@@ -5,8 +5,10 @@ mod remote;
 mod ui;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    terminal::{self, disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    terminal::{
+        self, disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    },
     ExecutableCommand,
 };
 use std::collections::HashSet;
@@ -25,6 +27,7 @@ enum Mode {
     BranchPicker { query: String, sel: usize },
     ConfirmStashAndSwitch { target: String },
     ConfirmDiscardUnstaged { path: String, status: FileStatus },
+    ConfirmPush { behind: usize },
     Help,
 }
 
@@ -33,9 +36,11 @@ struct App {
     status: Vec<StatusEntry>,
     tracking: TrackingInfo,
     branches: Vec<Branch>, // refreshed when opening the picker
+    remotes: Vec<String>,
     graph_sel: usize,
     status_sel: usize,
     graph_scroll: usize,
+    status_scroll: usize,
     diff_scroll: usize,
     focus: Focus,
     diff: String,
@@ -48,7 +53,8 @@ impl App {
     fn new() -> Result<Self, String> {
         let commits = git::log_all(2000)?;
         let chain: HashSet<String> = git::main_chain()?.into_iter().collect();
-        let rows = graph::assign_lanes(&commits, &chain);
+        let remotes = git::remotes();
+        let rows = graph::assign_lanes(&commits, &chain, &remotes);
         let status = git::status().unwrap_or_default();
         let tracking = git::tracking().unwrap_or_default();
         Ok(Self {
@@ -56,9 +62,11 @@ impl App {
             status,
             tracking,
             branches: Vec::new(),
+            remotes,
             graph_sel: 0,
             status_sel: 0,
             graph_scroll: 0,
+            status_scroll: 0,
             diff_scroll: 0,
             focus: Focus::Graph,
             diff: String::new(),
@@ -69,10 +77,12 @@ impl App {
     }
 
     fn refresh(&mut self) {
+        self.remotes = git::remotes();
         match git::log_all(2000) {
             Ok(commits) => {
-                let chain: HashSet<String> = git::main_chain().unwrap_or_default().into_iter().collect();
-                self.rows = graph::assign_lanes(&commits, &chain);
+                let chain: HashSet<String> =
+                    git::main_chain().unwrap_or_default().into_iter().collect();
+                self.rows = graph::assign_lanes(&commits, &chain, &self.remotes);
             }
             Err(e) => self.message = format!("log error: {e}"),
         }
@@ -98,10 +108,7 @@ impl App {
             Focus::Status => self
                 .status
                 .get(self.status_sel)
-                .and_then(|e| {
-                    let staged = matches!(e.status, git::FileStatus::Staged);
-                    git::diff_file(&e.path, staged).ok()
-                })
+                .and_then(|e| git::diff_file(&e.path, e.status.is_staged()).ok())
                 .unwrap_or_default(),
         };
     }
@@ -133,12 +140,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run(app: &mut App) -> Result<(), String> {
+    // Only repaint after something happened. Redrawing on every poll timeout
+    // (the old behavior) cleared and rewrote the whole screen twice a second,
+    // which flickered on slower terminals for no benefit — app state only
+    // changes in response to events.
+    let mut needs_render = true;
     loop {
         let (w, h) = terminal::size().map_err(|e| e.to_string())?;
         let layout = Layout::new(w, h);
 
-        render(app, &layout).map_err(|e| e.to_string())?;
-        io::stdout().flush().ok();
+        if needs_render {
+            render(app, &layout).map_err(|e| e.to_string())?;
+            io::stdout().flush().ok();
+            needs_render = false;
+        }
 
         if app.quit {
             return Ok(());
@@ -146,12 +161,20 @@ fn run(app: &mut App) -> Result<(), String> {
 
         if event::poll(Duration::from_millis(500)).map_err(|e| e.to_string())? {
             match event::read().map_err(|e| e.to_string())? {
-                Event::Key(key) => handle_key(app, key, &layout),
+                Event::Key(key) => {
+                    // Windows delivers Release (and Repeat) events too — only
+                    // act on Press, or every keystroke fires twice.
+                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
+                        handle_key(app, key, &layout);
+                        needs_render = true;
+                    }
+                }
                 Event::Resize(_, _) => {
                     // Top of the loop will call terminal::size() and recompute
                     // the layout, so all we need to do is fall through.
                     // Clear so any artifacts from the larger size are wiped.
                     ui::clear().ok();
+                    needs_render = true;
                 }
                 _ => {}
             }
@@ -192,6 +215,8 @@ fn render(app: &mut App, layout: &Layout) -> io::Result<()> {
             idx == app.graph_sel,
             app.focus == Focus::Graph,
             max_lanes,
+            layout.graph_width,
+            &app.remotes,
         )?;
     }
 
@@ -203,23 +228,52 @@ fn render(app: &mut App, layout: &Layout) -> io::Result<()> {
         ui::reset()?;
     }
 
-    // Right side: status list on top, diff below.
-    ui::draw_status_pane(&app.status, app.status_sel, app.focus == Focus::Status, layout)?;
+    // Right side: status list on top, diff below. Keep the file selection on
+    // screen the same way the graph does.
+    let visible = ui::status_pane_rows(layout).max(1);
+    if app.status_sel >= app.status_scroll + visible {
+        app.status_scroll = app.status_sel + 1 - visible;
+    }
+    if app.status_scroll > app.status_sel {
+        app.status_scroll = app.status_sel;
+    }
+    ui::draw_status_pane(
+        &app.status,
+        app.status_sel,
+        app.status_scroll,
+        app.focus == Focus::Status,
+        layout,
+    )?;
     ui::draw_diff_pane(&app.diff, layout, app.diff_scroll)?;
 
     // Status bar or active prompt
     match &app.mode {
         Mode::CommitMessage(buf) => {
             let prompt = format!("commit message: {buf}_");
-            ui::draw_statusbar(layout, &app.tracking, &prompt, "[enter] commit  [esc] cancel")?;
+            ui::draw_statusbar(
+                layout,
+                &app.tracking,
+                &prompt,
+                "[enter] commit  [esc] cancel",
+            )?;
         }
         Mode::NewBranch { name, .. } => {
             let prompt = format!("new branch: {name}_");
-            ui::draw_statusbar(layout, &app.tracking, &prompt, "[enter] create  [esc] cancel")?;
+            ui::draw_statusbar(
+                layout,
+                &app.tracking,
+                &prompt,
+                "[enter] create  [esc] cancel",
+            )?;
         }
         Mode::ConfirmStashAndSwitch { target } => {
             let prompt = format!("uncommitted changes conflict with switch to '{target}'");
-            ui::draw_statusbar(layout, &app.tracking, &prompt, "[s] stash & switch  [c] cancel")?;
+            ui::draw_statusbar(
+                layout,
+                &app.tracking,
+                &prompt,
+                "[s] stash & switch  [c] cancel",
+            )?;
         }
         Mode::ConfirmDiscardUnstaged { path, status } => {
             let action = match status {
@@ -228,13 +282,31 @@ fn render(app: &mut App, layout: &Layout) -> io::Result<()> {
                 _ => "discard changes to",
             };
             let prompt = format!("{action} '{path}'? this cannot be undone");
-            ui::draw_statusbar(layout, &app.tracking, &prompt, "[y/⏎] yes, discard  [n/esc] no, keep")?;
+            ui::draw_statusbar(
+                layout,
+                &app.tracking,
+                &prompt,
+                "[y/⏎] yes, discard  [n/esc] no, keep",
+            )?;
+        }
+        Mode::ConfirmPush { behind } => {
+            let prompt = format!(
+                "behind upstream by {behind} — git will reject a plain push of diverged history"
+            );
+            ui::draw_statusbar(
+                layout,
+                &app.tracking,
+                &prompt,
+                "[p] push anyway  [P] pull first  [esc] cancel",
+            )?;
         }
         Mode::Help | Mode::BranchPicker { .. } | Mode::Normal => {
             // Slim hint — full reference lives in the help overlay (`?`).
             let hint = match app.focus {
                 Focus::Graph => "[?] help  [j/k] move  [enter] checkout  [tab] files  [q]uit",
-                Focus::Status => "[?] help  [j/k] move  [space] stage  [c]ommit  [tab] graph  [q]uit",
+                Focus::Status => {
+                    "[?] help  [j/k] move  [space] stage  [c]ommit  [tab] graph  [q]uit"
+                }
             };
             ui::draw_statusbar(layout, &app.tracking, &app.message, hint)?;
         }
@@ -243,7 +315,7 @@ fn render(app: &mut App, layout: &Layout) -> io::Result<()> {
     // Overlays sit on top of everything.
     if let Mode::BranchPicker { query, sel } = &app.mode {
         let matches = filtered_branches(&app.branches, query);
-        ui::draw_branch_picker(layout, query, &matches, *sel)?;
+        ui::draw_branch_picker(layout, query, &matches, *sel, &app.remotes)?;
     }
     if matches!(app.mode, Mode::Help) {
         ui::draw_help(layout)?;
@@ -257,7 +329,9 @@ fn filtered_branches<'a>(all: &'a [Branch], query: &str) -> Vec<&'a Branch> {
         return all.iter().collect();
     }
     let q = query.to_lowercase();
-    all.iter().filter(|b| b.name.to_lowercase().contains(&q)).collect()
+    all.iter()
+        .filter(|b| b.name.to_lowercase().contains(&q))
+        .collect()
 }
 
 fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
@@ -268,6 +342,7 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
         Mode::BranchPicker { .. } => return handle_picker_key(app, key),
         Mode::ConfirmStashAndSwitch { .. } => return handle_stash_confirm_key(app, key),
         Mode::ConfirmDiscardUnstaged { .. } => return handle_discard_confirm_key(app, key),
+        Mode::ConfirmPush { .. } => return handle_push_confirm_key(app, key),
         Mode::Help => return handle_help_key(app, key),
         Mode::Normal => {}
     }
@@ -309,32 +384,17 @@ fn handle_key(app: &mut App, key: KeyEvent, layout: &Layout) {
             return;
         }
         (KeyCode::Char('P'), _) => {
-            let args: Vec<String> = ["pull", "--ff-only"].iter().map(|s| s.to_string()).collect();
-            match run_suspended("git", &args) {
-                Ok(()) => {
-                    app.message = "pulled".into();
-                    app.refresh();
-                }
-                Err(e) => app.message = format!("pull failed: {}", e.lines().next().unwrap_or(&e)),
-            }
+            do_pull(app);
             return;
         }
         (KeyCode::Char('p'), _) => {
             if app.tracking.behind > 0 {
-                app.message = format!(
-                    "behind by {} — pull first ([P]), or press [p] again to force-push intent",
-                    app.tracking.behind
-                );
-                app.tracking.behind = 0;
+                app.mode = Mode::ConfirmPush {
+                    behind: app.tracking.behind,
+                };
                 return;
             }
-            match git::push_args().and_then(|args| run_suspended("git", &args)) {
-                Ok(()) => {
-                    app.message = "pushed".into();
-                    app.refresh();
-                }
-                Err(e) => app.message = format!("push failed: {}", e.lines().next().unwrap_or(&e)),
-            }
+            do_push(app);
             return;
         }
         _ => {}
@@ -399,8 +459,8 @@ fn handle_status_key(app: &mut App, key: KeyEvent, _layout: &Layout) {
         }
         KeyCode::Char(' ') => {
             if let Some(entry) = app.status.get(app.status_sel).cloned() {
-                let result = if matches!(entry.status, FileStatus::Staged) {
-                    git::unstage(&entry.path)
+                let result = if entry.status.is_staged() {
+                    git::unstage(&entry)
                 } else {
                     git::stage(&entry.path)
                 };
@@ -414,8 +474,10 @@ fn handle_status_key(app: &mut App, key: KeyEvent, _layout: &Layout) {
             }
         }
         KeyCode::Backspace => {
-            let Some(entry) = app.status.get(app.status_sel).cloned() else { return };
-            if matches!(entry.status, FileStatus::Staged) {
+            let Some(entry) = app.status.get(app.status_sel).cloned() else {
+                return;
+            };
+            if entry.status.is_staged() {
                 app.message = "file is staged — [space] to unstage first".into();
                 return;
             }
@@ -435,6 +497,30 @@ fn handle_status_key(app: &mut App, key: KeyEvent, _layout: &Layout) {
     }
 }
 
+fn do_pull(app: &mut App) {
+    let args: Vec<String> = ["pull", "--ff-only"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    match run_suspended("git", &args) {
+        Ok(()) => {
+            app.message = "pulled".into();
+            app.refresh();
+        }
+        Err(e) => app.message = format!("pull failed: {}", e.lines().next().unwrap_or(&e)),
+    }
+}
+
+fn do_push(app: &mut App) {
+    match git::push_args().and_then(|args| run_suspended("git", &args)) {
+        Ok(()) => {
+            app.message = "pushed".into();
+            app.refresh();
+        }
+        Err(e) => app.message = format!("push failed: {}", e.lines().next().unwrap_or(&e)),
+    }
+}
+
 fn discard_entry(app: &mut App, entry: &StatusEntry) {
     let result = match entry.status {
         FileStatus::Untracked => git::remove_untracked(&entry.path),
@@ -451,8 +537,26 @@ fn discard_entry(app: &mut App, entry: &StatusEntry) {
 
 // ── Modal handlers ───────────────────────────────────────────────────────────
 
+/// Ctrl-C must quit from any modal, and other Ctrl-modified chars must not be
+/// treated as literal input (Ctrl-C used to type a 'c' into the commit
+/// message). Returns true when the key was consumed here.
+fn handle_ctrl(app: &mut App, key: &KeyEvent) -> bool {
+    if !key.modifiers.contains(KeyModifiers::CONTROL) {
+        return false;
+    }
+    if key.code == KeyCode::Char('c') {
+        app.quit = true;
+    }
+    true
+}
+
 fn handle_commit_message_key(app: &mut App, key: KeyEvent) {
-    let Mode::CommitMessage(buf) = &mut app.mode else { return };
+    if handle_ctrl(app, &key) {
+        return;
+    }
+    let Mode::CommitMessage(buf) = &mut app.mode else {
+        return;
+    };
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
@@ -469,7 +573,9 @@ fn handle_commit_message_key(app: &mut App, key: KeyEvent) {
                         app.message = format!("committed: {msg}");
                         app.refresh();
                     }
-                    Err(e) => app.message = format!("commit failed: {}", e.lines().next().unwrap_or(&e)),
+                    Err(e) => {
+                        app.message = format!("commit failed: {}", e.lines().next().unwrap_or(&e))
+                    }
                 }
             }
         }
@@ -482,7 +588,12 @@ fn handle_commit_message_key(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_new_branch_key(app: &mut App, key: KeyEvent) {
-    let Mode::NewBranch { name, target_sha } = &mut app.mode else { return };
+    if handle_ctrl(app, &key) {
+        return;
+    }
+    let Mode::NewBranch { name, target_sha } = &mut app.mode else {
+        return;
+    };
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
@@ -500,7 +611,9 @@ fn handle_new_branch_key(app: &mut App, key: KeyEvent) {
                         app.message = format!("created and switched to {name_owned}");
                         app.refresh();
                     }
-                    Err(e) => app.message = format!("create failed: {}", e.lines().next().unwrap_or(&e)),
+                    Err(e) => {
+                        app.message = format!("create failed: {}", e.lines().next().unwrap_or(&e))
+                    }
                 }
             }
         }
@@ -513,6 +626,9 @@ fn handle_new_branch_key(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_picker_key(app: &mut App, key: KeyEvent) {
+    if handle_ctrl(app, &key) {
+        return;
+    }
     // Take current query/sel out to sidestep the split-borrow hassle.
     let (query, sel) = match &app.mode {
         Mode::BranchPicker { query, sel } => (query.clone(), *sel),
@@ -532,11 +648,17 @@ fn handle_picker_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Down => {
             if sel + 1 < match_count {
-                app.mode = Mode::BranchPicker { query, sel: sel + 1 };
+                app.mode = Mode::BranchPicker {
+                    query,
+                    sel: sel + 1,
+                };
             }
         }
         KeyCode::Up => {
-            app.mode = Mode::BranchPicker { query, sel: sel.saturating_sub(1) };
+            app.mode = Mode::BranchPicker {
+                query,
+                sel: sel.saturating_sub(1),
+            };
         }
         KeyCode::Backspace => {
             let mut q = query;
@@ -562,10 +684,14 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_discard_confirm_key(app: &mut App, key: KeyEvent) {
+    if handle_ctrl(app, &key) {
+        return;
+    }
     let entry = match &app.mode {
         Mode::ConfirmDiscardUnstaged { path, status } => StatusEntry {
             path: path.clone(),
             status: status.clone(),
+            orig_path: None,
         },
         _ => return,
     };
@@ -582,8 +708,34 @@ fn handle_discard_confirm_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+fn handle_push_confirm_key(app: &mut App, key: KeyEvent) {
+    if handle_ctrl(app, &key) {
+        return;
+    }
+    match key.code {
+        KeyCode::Char('p') => {
+            app.mode = Mode::Normal;
+            do_push(app);
+        }
+        KeyCode::Char('P') => {
+            app.mode = Mode::Normal;
+            do_pull(app);
+        }
+        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('c') => {
+            app.mode = Mode::Normal;
+            app.message = "push cancelled".into();
+        }
+        _ => {}
+    }
+}
+
 fn handle_stash_confirm_key(app: &mut App, key: KeyEvent) {
-    let Mode::ConfirmStashAndSwitch { target } = &app.mode else { return };
+    if handle_ctrl(app, &key) {
+        return;
+    }
+    let Mode::ConfirmStashAndSwitch { target } = &app.mode else {
+        return;
+    };
     let target = target.clone();
     match key.code {
         KeyCode::Char('s') => {
@@ -594,7 +746,10 @@ fn handle_stash_confirm_key(app: &mut App, key: KeyEvent) {
                         app.message = format!("stashed and switched to {target}");
                         app.refresh();
                     }
-                    Err(e) => app.message = format!("switch still failed: {}", e.lines().next().unwrap_or(&e)),
+                    Err(e) => {
+                        app.message =
+                            format!("switch still failed: {}", e.lines().next().unwrap_or(&e))
+                    }
                 },
                 Err(e) => app.message = format!("stash failed: {}", e.lines().next().unwrap_or(&e)),
             }
@@ -630,7 +785,9 @@ fn open_branch_picker(app: &mut App) {
 }
 
 fn checkout_at_selection(app: &mut App) {
-    let Some(row) = app.rows.get(app.graph_sel) else { return };
+    let Some(row) = app.rows.get(app.graph_sel) else {
+        return;
+    };
     let refs: Vec<String> = row
         .commit
         .refs
@@ -732,7 +889,9 @@ fn open_pull_request(app: &mut App) {
 /// terminal (so it can prompt the user), then come back. This is the same
 /// pattern git itself uses to open `$EDITOR` mid-command.
 fn run_suspended(program: &str, args: &[String]) -> Result<(), String> {
-    use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+    use crossterm::terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    };
     use crossterm::ExecutableCommand;
     use std::process::Command;
 
@@ -763,7 +922,9 @@ fn run_suspended(program: &str, args: &[String]) -> Result<(), String> {
 
     // Restore the TUI no matter what the child did.
     enable_raw_mode().map_err(|e| e.to_string())?;
-    io::stdout().execute(EnterAlternateScreen).map_err(|e| e.to_string())?;
+    io::stdout()
+        .execute(EnterAlternateScreen)
+        .map_err(|e| e.to_string())?;
     let _ = ui::hide_cursor();
 
     if !status.success() {
@@ -782,15 +943,22 @@ fn run_askpass(prompt: &str) {
     enable_raw_mode().unwrap_or(());
     let mut buf = String::new();
     loop {
-        match read() {
-            Ok(Event::Key(KeyEvent { code, .. })) => match code {
+        if let Ok(Event::Key(KeyEvent { code, kind, .. })) = read() {
+            if kind != KeyEventKind::Press {
+                continue; // Windows also reports Release events
+            }
+            match code {
                 KeyCode::Enter => break,
                 KeyCode::Char(c) => buf.push(c),
-                KeyCode::Backspace => { buf.pop(); }
-                KeyCode::Esc => { buf.clear(); break; }
+                KeyCode::Backspace => {
+                    buf.pop();
+                }
+                KeyCode::Esc => {
+                    buf.clear();
+                    break;
+                }
                 _ => {}
-            },
-            _ => {}
+            }
         }
     }
     disable_raw_mode().unwrap_or(());
