@@ -2,14 +2,32 @@
 name = "spor"
 version = "0.1.0"
 edition = "2021"
-description = "A minimal git TUI with a GitKraken-inspired timeline"
+description = "A minimal git client with a GitKraken-inspired timeline, as a TUI and a native app"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/oyviba/spor"
-keywords = ["git", "tui", "terminal", "timeline"]
+keywords = ["git", "tui", "gui", "terminal", "timeline"]
 categories = ["command-line-utilities", "development-tools"]
+default-run = "spor"
+
+[[bin]]
+name = "spor"
+path = "src/main.rs"
+
+# Native desktop app (macOS .app, also runs on Linux/Windows). Opt-in so the
+# terminal build keeps its single dependency:
+#   cargo run --features gui --bin spor-app
+[[bin]]
+name = "spor-app"
+path = "src/gui/main.rs"
+required-features = ["gui"]
+
+[features]
+gui = ["dep:eframe", "dep:rfd"]
 
 [dependencies]
 crossterm = "0.27"
+eframe = { version = "0.36", optional = true }
+rfd = { version = "0.17", optional = true }
 
 [profile.release]
 lto = true

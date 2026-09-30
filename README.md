@@ -1,6 +1,8 @@
 # spor
 
-A minimal git TUI inspired by GitKraken's timeline. Single dependency (`crossterm`).
+A minimal git client inspired by GitKraken's timeline — as a terminal UI and as
+a native Mac app, both built on the same core. The terminal build has a single
+dependency (`crossterm`); the app is opt-in behind the `gui` feature.
 
 "Spor" means *track* or *trace* in Norwegian — what you follow to see where a branch has been.
 
@@ -46,6 +48,49 @@ cargo install --path /path/to/spor
 cd your-repo
 spor
 ```
+
+## Mac app
+
+The same timeline, working tree and diff in a native window (egui). Build the
+app bundle on a Mac with the Xcode command line tools installed:
+
+```sh
+scripts/bundle-macos.sh              # this Mac's architecture
+scripts/bundle-macos.sh --universal  # Apple Silicon + Intel
+open target/macos/Spor.app
+```
+
+CI also builds a universal `Spor.app` on every push — grab the `Spor-macos`
+artifact from the workflow run. It's ad-hoc signed, not notarized, so the first
+launch of a downloaded copy needs right-click → Open (or
+`xattr -dr com.apple.quarantine Spor.app`).
+
+To run it without bundling (works on Linux and Windows too):
+
+```sh
+cargo run --release --features gui --bin spor-app -- /path/to/repo
+```
+
+Open a repository with **Open…** (⌘O), by dropping a folder on the window, or
+by passing a path. Then:
+
+- click a commit to see its diff; double-click to check out its branch;
+  right-click for *Checkout ‹branch›*, *New branch here…* and *Copy SHA*
+- tick a file to stage / untick to unstage; right-click an unstaged file to
+  discard it; write a message and **Commit** (⌘⏎)
+- **Branches** switches branch (type to filter, Enter picks the first match);
+  a dirty tree that blocks the switch offers stash & switch
+- **Pull** (fast-forward only) and **Push** run in the background — the app
+  has no terminal, so credentials must come from a helper (macOS keychain,
+  ssh-agent); a push that would need a password fails with the reason instead
+  of hanging
+- **Pull Request** opens this branch's PR in the browser, or the compare page
+  to start one
+- keyboard: `j`/`k` or arrows move, `Tab` switches graph ↔ files, `Space`
+  stages, `Enter` checks out, ⌘R refreshes
+
+PR badges work the same as in the terminal (the app finds Homebrew's `gh` even
+when launched from Finder).
 
 ## Keys
 
@@ -97,11 +142,23 @@ spor
 
 ## Design notes
 
+The core is a library (`src/lib.rs`) that knows nothing about how it's drawn:
+
 - `src/git.rs` — shells out to `git`, parses porcelain output
 - `src/graph.rs` — lane assignment, with main pinned to lane 0
 - `src/color.rs` — HSL color families by branch prefix
+- `src/remote.rs` — remote host detection, compare URLs, PR badges via `gh`
+
+Terminal UI (`spor`):
+
 - `src/ui.rs` — ANSI rendering (no ratatui)
 - `src/main.rs` — event loop, state, modal key handling
+
+Mac app (`spor-app`, `--features gui`):
+
+- `src/gui/main.rs` — egui app: panels, actions, background push/pull
+- `src/gui/graph_view.rs` — paints timeline rows (lanes, curves, ref pills)
+- `scripts/bundle-macos.sh` — wraps the binary into `Spor.app`
 
 ## License
 

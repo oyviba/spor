@@ -19,9 +19,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --check
-      - name: Clippy
+      - name: Clippy (terminal)
         run: cargo clippy --all-targets -- -D warnings
+      - name: Clippy (terminal + app)
+        run: cargo clippy --all-targets --features gui -- -D warnings
       - name: Build
-        run: cargo build --all-targets --locked
+        run: cargo build --all-targets --features gui --locked
       - name: Test
         run: cargo test --locked
+
+  macos-app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Bundle Spor.app (universal)
+        run: scripts/bundle-macos.sh --universal
+      - name: Smoke-test the bundle
+        run: |
+          plutil -lint target/macos/Spor.app/Contents/Info.plist
+          lipo -archs target/macos/Spor.app/Contents/MacOS/spor-app
+          codesign --verify --verbose target/macos/Spor.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Spor-macos
+          path: target/macos/Spor-*-macos.zip
