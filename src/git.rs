@@ -291,6 +291,20 @@ pub fn diff_file(path: &str, staged: bool) -> Result<String, String> {
     }
 }
 
+/// Diff for one working-tree entry. Untracked files have nothing in the index
+/// to compare against, so they're shown as entirely new content.
+pub fn diff_entry(entry: &StatusEntry) -> Result<String, String> {
+    if entry.status != FileStatus::Untracked {
+        return diff_file(&entry.path, entry.status.is_staged());
+    }
+    let out = run(&["diff", "--no-index", "--", "/dev/null", &entry.path])?;
+    // --no-index exits 1 when the files differ — which, here, they always do.
+    match out.status.code() {
+        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        _ => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
+    }
+}
+
 pub fn diff_commit(hash: &str) -> Result<String, String> {
     run_ok(&["show", "--stat", "--patch", hash])
 }
