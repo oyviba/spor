@@ -463,6 +463,57 @@ pub fn stash_pop() -> Result<(), String> {
     run_ok(&["stash", "pop"]).map(|_| ())
 }
 
+/// Apply stash entry `index` and drop it.
+pub fn stash_pop_at(index: usize) -> Result<(), String> {
+    run_ok(&["stash", "pop", &format!("stash@{{{index}}}")]).map(|_| ())
+}
+
+/// Stash entries, newest first, as their messages ("WIP on main: …").
+pub fn stash_list() -> Vec<String> {
+    run_ok(&["stash", "list", "--format=%gs"])
+        .map(|s| s.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// Paths staged as brand-new files (git status reports these as plain
+/// "staged", same as modifications).
+pub fn staged_new_files() -> std::collections::HashSet<String> {
+    run_ok(&["diff", "--cached", "--name-only", "--diff-filter=A", "-z"])
+        .map(|s| {
+            s.split('\0')
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn head_sha() -> Result<String, String> {
+    run_ok(&["rev-parse", "HEAD"]).map(|s| s.trim().to_string())
+}
+
+/// Undo the last commit, keeping its changes staged.
+pub fn uncommit() -> Result<(), String> {
+    run_ok(&["reset", "--soft", "HEAD~1"]).map(|_| ())
+}
+
+/// Everything that changed in `path` since the last commit — staged and
+/// unstaged together. Untracked files show as entirely new.
+pub fn diff_since_head(path: &str, untracked: bool) -> Result<String, String> {
+    if untracked {
+        return diff_entry(&StatusEntry {
+            status: FileStatus::Untracked,
+            path: path.to_string(),
+            orig_path: None,
+        });
+    }
+    // An unborn branch has no HEAD yet: compare against the empty tree.
+    match run_ok(&["diff", "-M", "HEAD", "--", path]) {
+        Ok(out) => Ok(out),
+        Err(_) => run_ok(&["diff", "--cached", "--", path]),
+    }
+}
+
 /// Number of stash entries.
 pub fn stash_count() -> usize {
     run_ok(&["stash", "list"])
