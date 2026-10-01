@@ -22,11 +22,12 @@ path = "src/gui/main.rs"
 required-features = ["gui"]
 
 [features]
-gui = ["dep:eframe", "dep:rfd"]
+gui = ["dep:eframe", "dep:egui-phosphor", "dep:rfd"]
 
 [dependencies]
 crossterm = "0.27"
 eframe = { version = "0.36", optional = true }
+egui-phosphor = { version = "0.14", optional = true }
 rfd = { version = "0.17", optional = true }
 
 [profile.release]

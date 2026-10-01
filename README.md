@@ -71,23 +71,32 @@ To run it without bundling (works on Linux and Windows too):
 cargo run --release --features gui --bin spor-app -- /path/to/repo
 ```
 
-Open a repository with **Open…** (⌘O), by dropping a folder on the window, or
-by passing a path. Then:
+The window is laid out like a desktop git client:
 
-- click a commit to see its diff; double-click to check out its branch;
-  right-click for *Checkout ‹branch›*, *New branch here…* and *Copy SHA*
-- tick a file to stage / untick to unstage; right-click an unstaged file to
-  discard it; write a message and **Commit** (⌘⏎)
-- **Branches** switches branch (type to filter, Enter picks the first match);
-  a dirty tree that blocks the switch offers stash & switch
-- **Pull** (fast-forward only) and **Push** run in the background — the app
-  has no terminal, so credentials must come from a helper (macOS keychain,
-  ssh-agent); a push that would need a password fails with the reason instead
-  of hanging
-- **Pull Request** opens this branch's PR in the browser, or the compare page
-  to start one
-- keyboard: `j`/`k` or arrows move, `Tab` switches graph ↔ files, `Space`
-  stages, `Enter` checks out, ⌘R refreshes
+- **Toolbar** — repository and branch switchers (type to filter branches),
+  then Fetch, Pull, Push (with ahead/behind counts), Branch, Stash and Pop,
+  and on the right Pull request and Refresh
+- **Sidebar** — local branches, remote branches per remote, and tags. Click
+  to jump to a branch's tip, double-click to check it out, right-click for
+  more
+- **Commit list** — the timeline graph with branch/tag pills (a local branch
+  and its remote twin share one pill), author avatars, dates and SHAs. When
+  the working tree is dirty, an *Uncommitted changes* row sits on top
+- **Inspector** — for a commit: message, author, SHA, parents and changed
+  files; for uncommitted changes: unstaged/staged files with hover actions
+  (stage, unstage, discard) and a commit composer (summary + description,
+  ⌘⏎ to commit)
+- **Diff** — the selected file with line numbers and highlighted
+  additions/removals
+
+Open a repository with **Open…** (⌘O), by dropping a folder on the window,
+from the recent list on the start screen, or by passing a path. Keyboard:
+`j`/`k` or arrows move through commits, `Enter` checks out, ⌘R refreshes.
+Appearance follows the system; pick Light or Dark in the repository menu.
+
+Pull and push run in the background. The app has no terminal, so
+credentials must come from a helper (macOS keychain, ssh-agent); a push that
+would need a password fails with the reason instead of hanging.
 
 PR badges work the same as in the terminal (the app finds Homebrew's `gh` even
 when launched from Finder).
@@ -148,6 +157,7 @@ The core is a library (`src/lib.rs`) that knows nothing about how it's drawn:
 - `src/graph.rs` — lane assignment, with main pinned to lane 0
 - `src/color.rs` — HSL color families by branch prefix
 - `src/remote.rs` — remote host detection, compare URLs, PR badges via `gh`
+- `src/diff.rs` — unified-diff parser (files, hunks, numbered lines)
 
 Terminal UI (`spor`):
 
@@ -156,8 +166,13 @@ Terminal UI (`spor`):
 
 Mac app (`spor-app`, `--features gui`):
 
-- `src/gui/main.rs` — egui app: panels, actions, background push/pull
+- `src/gui/main.rs` — app state, git actions, background fetch/pull/push
+- `src/gui/views.rs` — welcome screen, workspace layout, commit list
 - `src/gui/graph_view.rs` — paints timeline rows (lanes, curves, ref pills)
+- `src/gui/toolbar.rs`, `sidebar.rs`, `inspector.rs`, `diff_view.rs`,
+  `modals.rs` — the panes and dialogs
+- `src/gui/theme.rs` — light/dark palettes, fonts (Inter, JetBrains Mono,
+  Phosphor icons)
 - `scripts/bundle-macos.sh` — wraps the binary into `Spor.app`
 
 ## License
