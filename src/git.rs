@@ -70,7 +70,18 @@ pub fn log_all(limit: usize) -> Result<Vec<Commit>, String> {
     let fmt = "%H%x1f%h%x1f%P%x1f%D%x1f%s%x1f%an%x1f%at%x1e";
     let n = format!("-n{limit}");
     let pretty = format!("--pretty=format:{fmt}");
-    let out = run_ok(&["log", "--all", "--date-order", &n, &pretty])?;
+    // Not `--all`: that would pull in refs/stash, whose internal "WIP on" /
+    // "index on" commits would show up as phantom branches.
+    let out = run_ok(&[
+        "log",
+        "--branches",
+        "--remotes",
+        "--tags",
+        "HEAD",
+        "--date-order",
+        &n,
+        &pretty,
+    ])?;
 
     let mut commits = Vec::new();
     for record in out.split('\x1e') {
@@ -305,6 +316,54 @@ pub fn diff_entry(entry: &StatusEntry) -> Result<String, String> {
     }
 }
 
+/// Full message and authorship of one commit, for a details view.
+#[derive(Debug, Clone, Default)]
+pub struct CommitDetails {
+    pub author: String,
+    pub email: String,
+    pub author_time: i64,
+    pub committer: String,
+    pub commit_time: i64,
+    /// Author date in local time, formatted by git, e.g. "Oct 01, 2026 at 14:02".
+    pub date: String,
+    pub message: String,
+}
+
+pub fn commit_details(hash: &str) -> Result<CommitDetails, String> {
+    let out = run_ok(&[
+        "show",
+        "-s",
+        "--date=format-local:%b %d, %Y at %H:%M",
+        "--format=%an%x1f%ae%x1f%at%x1f%cn%x1f%ct%x1f%ad%x1f%B",
+        hash,
+    ])?;
+    Ok(parse_commit_details(&out))
+}
+
+fn parse_commit_details(out: &str) -> CommitDetails {
+    let mut f = out.splitn(7, '\x1f');
+    let mut next = || f.next().unwrap_or("").to_string();
+    CommitDetails {
+        author: next(),
+        email: next(),
+        author_time: next().trim().parse().unwrap_or(0),
+        committer: next(),
+        commit_time: next().trim().parse().unwrap_or(0),
+        date: next(),
+        message: next().trim_end().to_string(),
+    }
+}
+
+/// The patch a commit introduced, without the commit header. Merges are
+/// diffed against their first parent — what the merge brought into the
+/// branch — rather than git's combined-diff format.
+pub fn commit_patch(hash: &str, parents: &[String]) -> Result<String, String> {
+    match parents.first() {
+        Some(first) => run_ok(&["diff", "-M", first, hash]),
+        None => run_ok(&["show", "--format=", "-M", hash]),
+    }
+}
+
 pub fn diff_commit(hash: &str) -> Result<String, String> {
     run_ok(&["show", "--stat", "--patch", hash])
 }
@@ -400,6 +459,17 @@ pub fn create_branch_at(name: &str, sha: &str) -> Result<(), String> {
     run_ok(&["switch", "-c", name, sha]).map(|_| ())
 }
 
+pub fn stash_pop() -> Result<(), String> {
+    run_ok(&["stash", "pop"]).map(|_| ())
+}
+
+/// Number of stash entries.
+pub fn stash_count() -> usize {
+    run_ok(&["stash", "list"])
+        .map(|s| s.lines().count())
+        .unwrap_or(0)
+}
+
 pub fn stash_push() -> Result<(), String> {
     run_ok(&["stash", "push", "-u", "-m", "spor-auto-stash"]).map(|_| ())
 }
@@ -424,6 +494,19 @@ pub fn default_base_branch() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn commit_details_parse() {
+        let d = super::parse_commit_details(
+            "Ada\x1fada@x.org\x1f100\x1fBob\x1f200\x1fJan 01, 1970 at 00:01\x1fSubject\n\nBody line\n\n",
+        );
+        assert_eq!(d.author, "Ada");
+        assert_eq!(d.email, "ada@x.org");
+        assert_eq!((d.author_time, d.commit_time), (100, 200));
+        assert_eq!(d.committer, "Bob");
+        assert_eq!(d.date, "Jan 01, 1970 at 00:01");
+        assert_eq!(d.message, "Subject\n\nBody line");
+    }
+
     use super::*;
 
     #[test]
