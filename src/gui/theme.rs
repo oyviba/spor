@@ -13,90 +13,98 @@ pub use egui_phosphor::regular as icon;
 /// Family name for the semibold weight (headings, emphasis).
 pub const SEMIBOLD: &str = "semibold";
 
+/// Colors modeled on macOS's semantic system colors (windowBackground,
+/// controlBackground, separator, label/secondaryLabel/tertiaryLabel, the
+/// system accent and system green/red/orange…), one set per appearance.
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub dark: bool,
-    /// Main content background (commit list, diff).
+    /// Content background (lists, diff).
     pub bg: Color32,
-    /// Sidebar and toolbar.
+    /// Unified title bar / toolbar.
     pub chrome: Color32,
-    /// Inspector and other secondary surfaces.
+    /// Source-list sidebar.
+    pub sidebar: Color32,
+    /// Secondary surfaces: headers inside content, grouped boxes.
     pub surface: Color32,
-    /// Cards, inputs, buttons.
+    /// Controls: buttons, fields.
     pub raised: Color32,
     pub hover: Color32,
+    /// Hairline separators.
     pub border: Color32,
+    /// label / secondaryLabel / tertiaryLabel.
     pub text: Color32,
     pub muted: Color32,
     pub faint: Color32,
     pub accent: Color32,
     pub on_accent: Color32,
+    /// Selected row in a focused list: the accent itself, with white text.
     pub selection: Color32,
+    /// Selected row in the sidebar: a neutral rounded highlight.
+    pub sidebar_sel: Color32,
     pub green: Color32,
     pub red: Color32,
     pub yellow: Color32,
-    pub blue: Color32,
     pub purple: Color32,
     pub add_bg: Color32,
     pub del_bg: Color32,
     pub add_gutter: Color32,
     pub del_gutter: Color32,
     pub hunk_bg: Color32,
-    pub head: Color32,
 }
 
 const DARK: Palette = Palette {
     dark: true,
-    bg: Color32::from_rgb(0x17, 0x18, 0x1d),
-    chrome: Color32::from_rgb(0x1d, 0x1e, 0x24),
-    surface: Color32::from_rgb(0x1b, 0x1c, 0x22),
-    raised: Color32::from_rgb(0x26, 0x27, 0x2f),
-    hover: Color32::from_rgb(0x24, 0x25, 0x2d),
-    border: Color32::from_rgb(0x2c, 0x2e, 0x37),
-    text: Color32::from_rgb(0xe4, 0xe5, 0xea),
-    muted: Color32::from_rgb(0x9a, 0x9c, 0xa8),
-    faint: Color32::from_rgb(0x67, 0x69, 0x75),
-    accent: Color32::from_rgb(0x6d, 0x8d, 0xff),
+    bg: Color32::from_rgb(0x1e, 0x1e, 0x20),
+    chrome: Color32::from_rgb(0x2a, 0x2a, 0x2d),
+    sidebar: Color32::from_rgb(0x26, 0x26, 0x29),
+    surface: Color32::from_rgb(0x25, 0x25, 0x28),
+    raised: Color32::from_rgb(0x46, 0x46, 0x49),
+    hover: Color32::from_rgb(0x2e, 0x2e, 0x31),
+    border: Color32::from_rgb(0x3a, 0x3a, 0x3d),
+    text: Color32::from_rgb(0xe8, 0xe8, 0xea),
+    muted: Color32::from_rgb(0x98, 0x98, 0x9d),
+    faint: Color32::from_rgb(0x63, 0x63, 0x67),
+    accent: Color32::from_rgb(0x0a, 0x84, 0xff),
     on_accent: Color32::WHITE,
-    selection: Color32::from_rgb(0x26, 0x31, 0x52),
-    green: Color32::from_rgb(0x4f, 0xc2, 0x86),
-    red: Color32::from_rgb(0xf0, 0x6a, 0x6a),
-    yellow: Color32::from_rgb(0xe8, 0xb4, 0x4c),
-    blue: Color32::from_rgb(0x6d, 0x8d, 0xff),
-    purple: Color32::from_rgb(0xb3, 0x8a, 0xf5),
-    add_bg: Color32::from_rgb(0x19, 0x2c, 0x24),
-    del_bg: Color32::from_rgb(0x33, 0x1d, 0x21),
-    add_gutter: Color32::from_rgb(0x1f, 0x3a, 0x2d),
-    del_gutter: Color32::from_rgb(0x45, 0x23, 0x28),
-    hunk_bg: Color32::from_rgb(0x1e, 0x22, 0x33),
-    head: Color32::from_rgb(0xff, 0xc8, 0x3d),
+    selection: Color32::from_rgb(0x0a, 0x5c, 0xc2),
+    sidebar_sel: Color32::from_rgb(0x3d, 0x3d, 0x41),
+    green: Color32::from_rgb(0x32, 0xd7, 0x4b),
+    red: Color32::from_rgb(0xff, 0x45, 0x3a),
+    yellow: Color32::from_rgb(0xff, 0x9f, 0x0a),
+    purple: Color32::from_rgb(0xbf, 0x5a, 0xf2),
+    add_bg: Color32::from_rgb(0x1f, 0x33, 0x25),
+    del_bg: Color32::from_rgb(0x3d, 0x22, 0x22),
+    add_gutter: Color32::from_rgb(0x23, 0x3d, 0x2b),
+    del_gutter: Color32::from_rgb(0x4a, 0x27, 0x27),
+    hunk_bg: Color32::from_rgb(0x25, 0x25, 0x28),
 };
 
 const LIGHT: Palette = Palette {
     dark: false,
     bg: Color32::from_rgb(0xff, 0xff, 0xff),
-    chrome: Color32::from_rgb(0xf4, 0xf4, 0xf6),
-    surface: Color32::from_rgb(0xf9, 0xf9, 0xfb),
+    chrome: Color32::from_rgb(0xf6, 0xf6, 0xf6),
+    sidebar: Color32::from_rgb(0xec, 0xec, 0xee),
+    surface: Color32::from_rgb(0xf7, 0xf7, 0xf8),
     raised: Color32::from_rgb(0xff, 0xff, 0xff),
-    hover: Color32::from_rgb(0xec, 0xed, 0xf1),
-    border: Color32::from_rgb(0xe0, 0xe1, 0xe6),
-    text: Color32::from_rgb(0x1d, 0x1e, 0x24),
-    muted: Color32::from_rgb(0x5f, 0x61, 0x6d),
-    faint: Color32::from_rgb(0x96, 0x98, 0xa3),
-    accent: Color32::from_rgb(0x3d, 0x63, 0xe8),
+    hover: Color32::from_rgb(0xf0, 0xf0, 0xf2),
+    border: Color32::from_rgb(0xdd, 0xdd, 0xe0),
+    text: Color32::from_rgb(0x1d, 0x1d, 0x1f),
+    muted: Color32::from_rgb(0x6e, 0x6e, 0x73),
+    faint: Color32::from_rgb(0xae, 0xae, 0xb2),
+    accent: Color32::from_rgb(0x00, 0x7a, 0xff),
     on_accent: Color32::WHITE,
-    selection: Color32::from_rgb(0xdf, 0xe7, 0xff),
-    green: Color32::from_rgb(0x1f, 0x9d, 0x5c),
-    red: Color32::from_rgb(0xd6, 0x3b, 0x3b),
-    yellow: Color32::from_rgb(0xb7, 0x7c, 0x0b),
-    blue: Color32::from_rgb(0x3d, 0x63, 0xe8),
-    purple: Color32::from_rgb(0x84, 0x52, 0xd9),
-    add_bg: Color32::from_rgb(0xe8, 0xf7, 0xee),
-    del_bg: Color32::from_rgb(0xfd, 0xec, 0xec),
-    add_gutter: Color32::from_rgb(0xcf, 0xef, 0xdc),
-    del_gutter: Color32::from_rgb(0xf9, 0xd4, 0xd4),
-    hunk_bg: Color32::from_rgb(0xee, 0xf1, 0xfc),
-    head: Color32::from_rgb(0xd9, 0x92, 0x00),
+    selection: Color32::from_rgb(0x00, 0x64, 0xe1),
+    sidebar_sel: Color32::from_rgb(0xd9, 0xd9, 0xdd),
+    green: Color32::from_rgb(0x28, 0xa7, 0x45),
+    red: Color32::from_rgb(0xe0, 0x30, 0x26),
+    yellow: Color32::from_rgb(0xd4, 0x80, 0x00),
+    purple: Color32::from_rgb(0xaf, 0x52, 0xde),
+    add_bg: Color32::from_rgb(0xea, 0xf7, 0xed),
+    del_bg: Color32::from_rgb(0xfd, 0xec, 0xeb),
+    add_gutter: Color32::from_rgb(0xd5, 0xf0, 0xdb),
+    del_gutter: Color32::from_rgb(0xf9, 0xd8, 0xd6),
+    hunk_bg: Color32::from_rgb(0xf5, 0xf5, 0xf7),
 };
 
 pub fn palette(ctx: &egui::Context) -> Palette {
@@ -225,18 +233,18 @@ pub fn semibold(size: f32) -> FontId {
 fn apply(style: &mut egui::Style, p: &Palette) {
     use FontFamily::{Monospace, Proportional};
     style.text_styles = [
-        (TextStyle::Small, FontId::new(11.5, Proportional)),
-        (TextStyle::Body, FontId::new(13.5, Proportional)),
-        (TextStyle::Button, FontId::new(13.5, Proportional)),
-        (TextStyle::Heading, semibold(17.0)),
+        (TextStyle::Small, FontId::new(11.0, Proportional)),
+        (TextStyle::Body, FontId::new(13.0, Proportional)),
+        (TextStyle::Button, FontId::new(13.0, Proportional)),
+        (TextStyle::Heading, semibold(15.0)),
         (TextStyle::Monospace, FontId::new(12.5, Monospace)),
     ]
     .into();
 
     let s = &mut style.spacing;
     s.item_spacing = egui::vec2(8.0, 6.0);
-    s.button_padding = egui::vec2(10.0, 5.0);
-    s.interact_size.y = 26.0;
+    s.button_padding = egui::vec2(10.0, 3.0);
+    s.interact_size.y = 22.0;
     s.menu_margin = Margin::same(6);
     s.window_margin = Margin::same(16);
     s.scroll = ScrollStyle {
@@ -250,7 +258,11 @@ fn apply(style: &mut egui::Style, p: &Palette) {
     v.dark_mode = p.dark;
     v.override_text_color = None;
     v.panel_fill = p.bg;
-    v.window_fill = p.raised;
+    v.window_fill = if p.dark {
+        Color32::from_rgb(0x2c, 0x2c, 0x2f)
+    } else {
+        Color32::from_rgb(0xfb, 0xfb, 0xfb)
+    };
     v.window_stroke = Stroke::new(1.0, p.border);
     v.window_corner_radius = CornerRadius::same(10);
     v.menu_corner_radius = CornerRadius::same(8);
@@ -268,7 +280,7 @@ fn apply(style: &mut egui::Style, p: &Palette) {
         color: Color32::from_black_alpha(shadow_alpha),
     };
     v.extreme_bg_color = if p.dark {
-        Color32::from_rgb(0x13, 0x14, 0x18)
+        Color32::from_rgb(0x1c, 0x1c, 0x1e)
     } else {
         Color32::WHITE
     };
@@ -278,7 +290,7 @@ fn apply(style: &mut egui::Style, p: &Palette) {
     v.hyperlink_color = p.accent;
     v.warn_fg_color = p.yellow;
     v.error_fg_color = p.red;
-    v.selection.bg_fill = p.accent.gamma_multiply(if p.dark { 0.45 } else { 0.3 });
+    v.selection.bg_fill = p.accent.gamma_multiply(if p.dark { 0.5 } else { 0.3 });
     v.selection.stroke = Stroke::new(1.0, p.accent);
     v.collapsing_header_frame = false;
     v.indent_has_left_vline = false;
@@ -298,15 +310,18 @@ fn apply(style: &mut egui::Style, p: &Palette) {
     w.inactive.corner_radius = radius;
     w.inactive.expansion = 0.0;
 
-    w.hovered.bg_fill = p.hover;
-    w.hovered.weak_bg_fill = p.hover;
-    w.hovered.bg_stroke = Stroke::new(1.0, p.border.lerp_to_gamma(p.muted, 0.35));
+    // Controls lighten on hover and press, like AppKit push buttons.
+    let hover = p.raised.lerp_to_gamma(p.text, 0.08);
+    let press = p.raised.lerp_to_gamma(p.text, 0.16);
+    w.hovered.bg_fill = hover;
+    w.hovered.weak_bg_fill = hover;
+    w.hovered.bg_stroke = Stroke::new(1.0, p.border);
     w.hovered.fg_stroke = Stroke::new(1.5, p.text);
     w.hovered.corner_radius = radius;
     w.hovered.expansion = 0.0;
 
-    w.active.bg_fill = p.selection;
-    w.active.weak_bg_fill = p.selection;
+    w.active.bg_fill = press;
+    w.active.weak_bg_fill = press;
     w.active.bg_stroke = Stroke::new(1.0, p.accent);
     w.active.fg_stroke = Stroke::new(1.5, p.text);
     w.active.corner_radius = radius;

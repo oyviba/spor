@@ -1,30 +1,28 @@
-//! Left sidebar: local branches, remote branches grouped by remote, and tags.
-//! Click reveals the tip in the commit list; double-click checks out.
+//! Source-list sidebar, Finder/Mail style: the two views at the top
+//! (Changes, History), then collapsible Branches, Remotes, Tags and Stashes.
+//! Icons take the accent color; selection is a neutral rounded highlight.
 
-use super::graph_view::rgb;
-use super::theme::{self, adapt, icon, Palette};
+use super::theme::{self, icon, Palette};
 use super::widgets::{list_row, text_until};
-use super::SporApp;
-use eframe::egui::{self, Align2, FontId, Pos2, Rect, Ui};
-use spor::color::{branch_family, color_for};
-use spor::remote::{ChecksState, PrInfo};
+use super::{SidebarSel, SporApp};
+use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Ui, Vec2};
 
 enum Action {
+    Changes,
+    History,
     Reveal(String),
     Checkout(String),
     NewBranch(String),
+    ApplyStash(usize),
     Copy(String),
 }
 
 struct Item {
-    /// Ref key used to find the tip row (`main`, `origin/main`, `tag:v1`).
     key: String,
     label: String,
-    color: egui::Color32,
     glyph: &'static str,
     current: bool,
     trailing: String,
-    pr: Option<PrInfo>,
 }
 
 impl SporApp {
@@ -32,35 +30,12 @@ impl SporApp {
         let p = theme::palette(ui.ctx());
         let Some(repo) = &self.repo else { return };
 
-        ui.add_space(10.0);
-        ui.add(
-            egui::TextEdit::singleline(&mut self.sidebar_filter)
-                .hint_text(format!("{}  Filter", icon::MAGNIFYING_GLASS))
-                .desired_width(f32::INFINITY)
-                .margin(egui::Margin::symmetric(8, 5)),
-        );
-        ui.add_space(6.0);
-
         let q = self.sidebar_filter.to_lowercase();
         let keep = |name: &str| q.is_empty() || name.to_lowercase().contains(&q);
-        let selected_hash = match self.sel {
-            super::Sel::Commit(i) => repo.rows.get(i).map(|r| r.commit.hash.clone()),
-            super::Sel::Wip => None,
-        };
-        let tip_is_selected = |key: &str| {
-            selected_hash.as_ref().is_some_and(|h| {
-                repo.ref_rows
-                    .get(key)
-                    .and_then(|&i| repo.rows.get(i))
-                    .is_some_and(|r| &r.commit.hash == h)
-            })
-        };
 
-        let branch_color =
-            |name: &str| adapt(rgb(color_for(branch_family(name, &repo.remotes), name)), &p);
-
+        let changes = repo.changes.len();
         let mut local = Vec::new();
-        let mut remote: Vec<(String, Vec<Item>)> = repo
+        let mut remotes: Vec<(String, Vec<Item>)> = repo
             .remotes
             .iter()
             .map(|r| (r.clone(), Vec::new()))
@@ -71,50 +46,38 @@ impl SporApp {
                 let item = Item {
                     key: b.name.clone(),
                     label: rest.to_string(),
-                    color: branch_color(&b.name),
                     glyph: icon::GIT_BRANCH,
                     current: false,
                     trailing: String::new(),
-                    pr: None,
                 };
-                match remote.iter_mut().find(|(r, _)| r == rem) {
+                match remotes.iter_mut().find(|(r, _)| r == rem) {
                     Some((_, list)) => list.push(item),
-                    None => remote.push((rem.to_string(), vec![item])),
+                    None => remotes.push((rem.to_string(), vec![item])),
                 }
             } else {
-                let trailing = if b.is_current {
+                let mut trailing = String::new();
+                if b.is_current {
                     let t = &repo.tracking;
-                    let mut s = String::new();
                     if t.ahead > 0 {
-                        s.push_str(&format!("{}{}", icon::ARROW_UP, t.ahead));
+                        trailing.push_str(&format!("{}{} ", icon::ARROW_UP, t.ahead));
                     }
                     if t.behind > 0 {
-                        s.push_str(&format!(" {}{}", icon::ARROW_DOWN, t.behind));
+                        trailing.push_str(&format!("{}{} ", icon::ARROW_DOWN, t.behind));
                     }
-                    s.trim().to_string()
-                } else {
-                    String::new()
-                };
+                    trailing.push_str(icon::CHECK);
+                }
+                if let Some(pr) = repo.prs.get(&b.name) {
+                    trailing = format!("#{} {trailing}", pr.number);
+                }
                 local.push(Item {
                     key: b.name.clone(),
                     label: b.name.clone(),
-                    color: if b.is_current {
-                        p.head
-                    } else {
-                        branch_color(&b.name)
-                    },
-                    glyph: if b.is_current {
-                        icon::CHECK_CIRCLE
-                    } else {
-                        icon::GIT_BRANCH
-                    },
+                    glyph: icon::GIT_BRANCH,
                     current: b.is_current,
-                    trailing,
-                    pr: repo.prs.get(&b.name).cloned(),
+                    trailing: trailing.trim().to_string(),
                 });
             }
         }
-        // Tags, newest first (graph order).
         let mut tags: Vec<(usize, String)> = repo
             .ref_rows
             .iter()
@@ -127,70 +90,134 @@ impl SporApp {
             .map(|(_, t)| Item {
                 key: format!("tag:{t}"),
                 label: t,
-                color: p.yellow,
                 glyph: icon::TAG,
                 current: false,
                 trailing: String::new(),
-                pr: None,
             })
             .collect();
-        let stashes = repo.stashes;
+        let stashes: Vec<(usize, String)> = repo
+            .stashes
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| keep(s))
+            .map(|(i, s)| (i, s.clone()))
+            .collect();
 
+        let sel = self.sidebar_sel.clone();
         let mut action = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
+
+        // Filter pinned to the bottom, like Xcode's navigator.
+        egui::Panel::bottom("sidebar_filter")
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 8)))
+            .show_separator_line(false)
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 1.0;
-                group(
-                    ui,
-                    "Local",
-                    icon::GIT_BRANCH,
-                    &local,
-                    &tip_is_selected,
-                    &mut action,
-                    &p,
-                    true,
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.sidebar_filter)
+                        .hint_text(format!("{}  Filter", icon::FUNNEL_SIMPLE))
+                        .desired_width(f32::INFINITY)
+                        .margin(egui::Margin::symmetric(8, 4)),
                 );
-                for (name, items) in &remote {
-                    if !items.is_empty() {
-                        group(
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new())
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.add_space(6.0);
+                        let count = (changes > 0).then(|| changes.to_string());
+                        if nav_row(
                             ui,
-                            name,
-                            icon::CLOUD,
-                            items,
-                            &tip_is_selected,
-                            &mut action,
+                            icon::TRAY,
+                            "Changes",
+                            count,
+                            sel == SidebarSel::Changes,
                             &p,
-                            true,
-                        );
-                    }
-                }
-                if !tags.is_empty() {
-                    group(
-                        ui,
-                        "Tags",
-                        icon::TAG,
-                        &tags,
-                        &tip_is_selected,
-                        &mut action,
-                        &p,
-                        false,
-                    );
-                }
-                if stashes > 0 {
-                    ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}  {stashes} stash{}",
-                            icon::STACK,
-                            if stashes == 1 { "" } else { "es" }
-                        ))
-                        .color(p.muted),
-                    );
-                }
+                        )
+                        .clicked()
+                        {
+                            action = Some(Action::Changes);
+                        }
+                        if nav_row(
+                            ui,
+                            icon::CLOCK_COUNTER_CLOCKWISE,
+                            "History",
+                            None,
+                            sel == SidebarSel::History,
+                            &p,
+                        )
+                        .clicked()
+                        {
+                            action = Some(Action::History);
+                        }
+
+                        group(ui, "Branches", true, &p, |ui| {
+                            for item in &local {
+                                item_row(ui, item, &sel, &mut action, &p, true);
+                            }
+                        });
+                        for (remote, items) in &remotes {
+                            if items.is_empty() {
+                                continue;
+                            }
+                            group(ui, &format!("Remote: {remote}"), false, &p, |ui| {
+                                for item in items {
+                                    item_row(ui, item, &sel, &mut action, &p, true);
+                                }
+                            });
+                        }
+                        if !tags.is_empty() {
+                            group(ui, "Tags", false, &p, |ui| {
+                                for item in &tags {
+                                    item_row(ui, item, &sel, &mut action, &p, false);
+                                }
+                            });
+                        }
+                        if !stashes.is_empty() {
+                            group(ui, "Stashes", true, &p, |ui| {
+                                for (i, msg) in &stashes {
+                                    // "WIP on main: abc123 subject" → "subject"
+                                    let label = msg
+                                        .split_once(": ")
+                                        .map(|(_, rest)| {
+                                            rest.split_once(' ').map_or(rest, |(_, s)| s)
+                                        })
+                                        .unwrap_or(msg);
+                                    let resp = list_row(ui, false, 24.0, |painter, rect, p| {
+                                        paint_item(
+                                            painter,
+                                            rect,
+                                            icon::ARCHIVE_BOX,
+                                            label,
+                                            "",
+                                            false,
+                                            p,
+                                        );
+                                    })
+                                    .on_hover_text(msg.as_str());
+                                    resp.context_menu(|ui| {
+                                        if ui.button("Apply and Remove").clicked() {
+                                            action = Some(Action::ApplyStash(*i));
+                                        }
+                                    });
+                                    if resp.double_clicked() {
+                                        action = Some(Action::ApplyStash(*i));
+                                    }
+                                }
+                            });
+                        }
+                        ui.add_space(10.0);
+                    });
             });
 
         match action {
+            Some(Action::Changes) => self.show_changes(),
+            Some(Action::History) => {
+                self.sidebar_sel = SidebarSel::History;
+                self.show_history();
+            }
             Some(Action::Reveal(key)) => self.reveal_ref(&key),
             Some(Action::Checkout(name)) => self.checkout(&name),
             Some(Action::NewBranch(key)) => {
@@ -201,134 +228,182 @@ impl SporApp {
                     .map(|row| {
                         (
                             row.commit.hash.clone(),
-                            format!("{} {}", row.commit.short, key),
+                            format!("{} — {key}", row.commit.short),
                         )
                     });
                 if let Some((sha, label)) = target {
                     self.new_branch_dialog(sha, label);
                 }
             }
+            Some(Action::ApplyStash(i)) => self.apply_stash(i),
             Some(Action::Copy(text)) => {
                 ui.ctx().copy_text(text);
-                self.info("Copied to clipboard");
             }
             None => {}
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn group(
-    ui: &mut Ui,
-    title: &str,
-    glyph: &str,
-    items: &[Item],
-    is_selected: &dyn Fn(&str) -> bool,
-    action: &mut Option<Action>,
-    p: &Palette,
-    default_open: bool,
-) {
+/// Collapsible section with a caption; the chevron shows on hover, as in
+/// Finder.
+fn group(ui: &mut Ui, title: &str, default_open: bool, p: &Palette, body: impl FnOnce(&mut Ui)) {
     let id = ui.make_persistent_id(("sidebar-group", title));
-    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open)
-        .show_header(ui, |ui| {
-            ui.label(
-                egui::RichText::new(format!("{glyph}  {}", title.to_uppercase()))
-                    .font(theme::semibold(10.5))
-                    .color(p.faint),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(items.len().to_string())
-                        .font(FontId::proportional(10.5))
-                        .color(p.faint),
-                );
-            });
-        })
-        .body_unindented(|ui| {
-            for item in items {
-                let resp = list_row(ui, is_selected(&item.key), 26.0, |painter, rect, p| {
-                    paint_item(painter, rect, item, p)
-                });
-                if resp.clicked() {
-                    *action = Some(Action::Reveal(item.key.clone()));
-                }
-                let is_tag = item.key.starts_with("tag:");
-                if resp.double_clicked() && !is_tag && !item.current {
-                    *action = Some(Action::Checkout(item.key.clone()));
-                }
-                resp.context_menu(|ui| {
-                    if !is_tag
-                        && !item.current
-                        && ui
-                            .button(format!("{}  Check out", icon::ARROW_RIGHT))
-                            .clicked()
-                    {
-                        *action = Some(Action::Checkout(item.key.clone()));
-                    }
-                    if ui
-                        .button(format!("{}  New branch from here…", icon::GIT_BRANCH))
-                        .clicked()
-                    {
-                        *action = Some(Action::NewBranch(item.key.clone()));
-                    }
-                    if ui.button(format!("{}  Copy name", icon::COPY)).clicked() {
-                        *action = Some(Action::Copy(item.label.clone()));
-                    }
-                });
-            }
-            ui.add_space(6.0);
-        });
+    let mut open = ui
+        .ctx()
+        .data_mut(|d| *d.get_persisted_mut_or(id, default_open));
+    ui.add_space(10.0);
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 20.0), Sense::click());
+    ui.painter().text(
+        Pos2::new(rect.left() + 8.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        title,
+        theme::semibold(11.0),
+        p.faint,
+    );
+    if resp.hovered() {
+        let glyph = if open {
+            icon::CARET_DOWN
+        } else {
+            icon::CARET_RIGHT
+        };
+        ui.painter().text(
+            Pos2::new(rect.right() - 10.0, rect.center().y),
+            Align2::CENTER_CENTER,
+            glyph,
+            FontId::proportional(11.0),
+            p.muted,
+        );
+    }
+    if resp.clicked() {
+        open = !open;
+        ui.ctx().data_mut(|d| d.insert_persisted(id, open));
+    }
+    if open {
+        body(ui);
+    }
 }
 
-fn paint_item(painter: &egui::Painter, rect: Rect, item: &Item, p: &Palette) {
-    let mid = rect.center().y;
-    painter.text(
-        Pos2::new(rect.left() + 18.0, mid),
-        Align2::CENTER_CENTER,
-        item.glyph,
-        FontId::proportional(14.0),
-        item.color,
-    );
-    // Right side first so the name can be clipped against it.
-    let mut right = rect.right() - 8.0;
-    if let Some(pr) = &item.pr {
-        let (glyph, color) = match pr.checks {
-            ChecksState::Passing => (icon::CHECK_CIRCLE, p.green),
-            ChecksState::Failing => (icon::X_CIRCLE, p.red),
-            ChecksState::Pending => (icon::CIRCLE_DASHED, p.yellow),
-            ChecksState::None => (icon::GIT_PULL_REQUEST, p.blue),
-        };
-        let r = painter.text(
-            Pos2::new(right, mid),
-            Align2::RIGHT_CENTER,
-            format!("#{} {glyph}", pr.number),
-            FontId::proportional(11.5),
-            color,
-        );
-        right = r.left() - 6.0;
-    }
-    if !item.trailing.is_empty() {
-        let r = painter.text(
-            Pos2::new(right, mid),
-            Align2::RIGHT_CENTER,
-            &item.trailing,
-            FontId::proportional(11.5),
+/// Top-level view entry with an optional count badge.
+fn nav_row(
+    ui: &mut Ui,
+    glyph: &str,
+    label: &str,
+    count: Option<String>,
+    selected: bool,
+    p: &Palette,
+) -> egui::Response {
+    list_row(ui, selected, 28.0, |painter, rect, _| {
+        let mid = rect.center().y;
+        painter.text(
+            Pos2::new(rect.left() + 16.0, mid),
+            Align2::CENTER_CENTER,
+            glyph,
+            FontId::proportional(16.0),
             p.accent,
         );
+        painter.text(
+            Pos2::new(rect.left() + 32.0, mid),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::proportional(13.0),
+            p.text,
+        );
+        if let Some(c) = count {
+            let g = painter.layout_no_wrap(c, theme::semibold(10.5), p.muted);
+            let w = g.size().x + 12.0;
+            let r = Rect::from_center_size(
+                Pos2::new(rect.right() - 8.0 - w / 2.0, mid),
+                Vec2::new(w, 16.0),
+            );
+            painter.rect_filled(
+                r,
+                CornerRadius::same(8),
+                if p.dark {
+                    Color32::from_white_alpha(22)
+                } else {
+                    Color32::from_black_alpha(16)
+                },
+            );
+            let gs = g.size();
+            painter.galley(r.center() - gs / 2.0, g, p.muted);
+        }
+    })
+}
+
+fn item_row(
+    ui: &mut Ui,
+    item: &Item,
+    sel: &SidebarSel,
+    action: &mut Option<Action>,
+    p: &Palette,
+    branch: bool,
+) {
+    let selected = matches!(sel, SidebarSel::Ref(k) if *k == item.key);
+    let resp = list_row(ui, selected, 24.0, |painter, rect, _| {
+        paint_item(
+            painter,
+            rect,
+            item.glyph,
+            &item.label,
+            &item.trailing,
+            item.current,
+            p,
+        )
+    });
+    if resp.clicked() {
+        *action = Some(Action::Reveal(item.key.clone()));
+    }
+    if branch && resp.double_clicked() && !item.current {
+        *action = Some(Action::Checkout(item.key.clone()));
+    }
+    resp.context_menu(|ui| {
+        if branch && !item.current && ui.button(format!("Check Out “{}”", item.label)).clicked()
+        {
+            *action = Some(Action::Checkout(item.key.clone()));
+        }
+        if ui.button("New Branch from Here…").clicked() {
+            *action = Some(Action::NewBranch(item.key.clone()));
+        }
+        ui.separator();
+        if ui.button("Copy Name").clicked() {
+            *action = Some(Action::Copy(item.label.clone()));
+        }
+    });
+}
+
+fn paint_item(
+    painter: &egui::Painter,
+    rect: Rect,
+    glyph: &str,
+    label: &str,
+    trailing: &str,
+    current: bool,
+    p: &Palette,
+) {
+    let mid = rect.center().y;
+    painter.text(
+        Pos2::new(rect.left() + 16.0, mid),
+        Align2::CENTER_CENTER,
+        glyph,
+        FontId::proportional(14.0),
+        p.accent,
+    );
+    let mut right = rect.right() - 8.0;
+    if !trailing.is_empty() {
+        let r = painter.text(
+            Pos2::new(right, mid),
+            Align2::RIGHT_CENTER,
+            trailing,
+            FontId::proportional(11.0),
+            p.muted,
+        );
         right = r.left() - 6.0;
     }
-    let font = if item.current {
+    let font = if current {
         theme::semibold(13.0)
     } else {
         FontId::proportional(13.0)
     };
-    text_until(
-        painter,
-        rect.left() + 32.0,
-        mid,
-        right,
-        &item.label,
-        font,
-        p.text,
-    );
+    text_until(painter, rect.left() + 32.0, mid, right, label, font, p.text);
 }

@@ -2,17 +2,21 @@
 //! `spor::graph`, …), rendered with egui. Built with `--features gui`; on
 //! macOS `scripts/bundle-macos.sh` wraps it into `Spor.app`.
 //!
-//! Layout: toolbar on top, branches on the left, the commit list with the
-//! diff of the selected file below it in the middle, and an inspector for
-//! the selected commit (or the uncommitted changes) on the right.
+//! The design follows macOS conventions rather than a classic git GUI: a
+//! source-list sidebar switches between two views — **Changes** (what you're
+//! working on, with a commit composer) and **History** (a quiet timeline) —
+//! each laid out in columns like Mail. The toolbar is a unified title bar
+//! with one Sync button; destructive actions are undoable (⌘Z) instead of
+//! guarded by confirmation dialogs.
 
+mod changes;
 mod diff_view;
 mod graph_view;
-mod inspector;
+mod history;
 mod modals;
 mod sidebar;
 mod theme;
-mod toolbar;
+mod titlebar;
 mod views;
 mod widgets;
 
@@ -29,6 +33,8 @@ use std::sync::mpsc;
 use std::time::Instant;
 use widgets::{Toast, ToastKind};
 
+pub use diff_view::DiffMode;
+
 const LOG_LIMIT: usize = 2000;
 const MAX_RECENT: usize = 8;
 
@@ -39,7 +45,12 @@ fn main() -> eframe::Result {
         .with_title("Spor")
         .with_inner_size([1360.0, 860.0])
         .with_min_inner_size([900.0, 520.0])
-        .with_drag_and_drop(true);
+        .with_drag_and_drop(true)
+        // macOS: draw under a transparent title bar so the toolbar and the
+        // traffic lights share one strip, like Finder, Mail or Xcode.
+        .with_fullsize_content_view(true)
+        .with_title_shown(false)
+        .with_titlebar_shown(false);
     // The .app bundle carries its own icon; this covers `cargo run` and
     // non-mac platforms.
     if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon.png")) {
@@ -152,12 +163,20 @@ fn first_line(e: &str) -> &str {
     e.lines().next().unwrap_or(e)
 }
 
-/// What the inspector and diff pane are showing.
+/// Which main view is showing.
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum Sel {
-    /// The uncommitted-changes pseudo-row.
-    Wip,
-    Commit(usize),
+enum View {
+    Changes,
+    History,
+}
+
+/// What the sidebar highlights.
+#[derive(Clone, PartialEq, Debug)]
+enum SidebarSel {
+    Changes,
+    History,
+    /// A branch or tag whose tip was revealed in History.
+    Ref(String),
 }
 
 enum Modal {
@@ -169,18 +188,101 @@ enum Modal {
     StashAndSwitch {
         target: String,
     },
-    Discard {
-        entry: StatusEntry,
+}
+
+/// One changed file in the Changes list. git status reports a file that is
+/// partly staged as two entries; here they're one row with a mixed checkbox.
+#[derive(Clone, Debug)]
+pub struct Change {
+    pub path: String,
+    pub orig_path: Option<String>,
+    pub staged: bool,
+    pub unstaged: bool,
+    pub untracked: bool,
+    /// Deleted (in the index or the working tree).
+    pub deleted: bool,
+    pub added: bool,
+    /// The raw entries, for staging/unstaging.
+    pub entries: Vec<StatusEntry>,
+}
+
+impl Change {
+    fn from_status(status: &[StatusEntry], staged_new: &HashSet<String>) -> Vec<Change> {
+        let mut out: Vec<Change> = Vec::new();
+        for e in status {
+            let idx = match out.iter().position(|c| c.path == e.path) {
+                Some(i) => i,
+                None => {
+                    out.push(Change {
+                        path: e.path.clone(),
+                        orig_path: None,
+                        staged: false,
+                        unstaged: false,
+                        untracked: false,
+                        deleted: false,
+                        added: false,
+                        entries: Vec::new(),
+                    });
+                    out.len() - 1
+                }
+            };
+            let c = &mut out[idx];
+            match e.status {
+                FileStatus::Staged => {
+                    c.staged = true;
+                    c.added |= staged_new.contains(&e.path);
+                }
+                FileStatus::StagedDeleted => {
+                    c.staged = true;
+                    c.deleted = true;
+                }
+                FileStatus::Modified => c.unstaged = true,
+                FileStatus::Deleted => {
+                    c.unstaged = true;
+                    c.deleted = true;
+                }
+                FileStatus::Untracked => {
+                    c.unstaged = true;
+                    c.untracked = true;
+                    c.added = true;
+                }
+            }
+            if e.orig_path.is_some() {
+                c.orig_path = e.orig_path.clone();
+            }
+            c.entries.push(e.clone());
+        }
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        out
+    }
+
+    /// Fully staged, so its checkbox is ticked.
+    pub fn included(&self) -> bool {
+        self.staged && !self.unstaged
+    }
+}
+
+/// Something ⌘Z can take back.
+enum Undo {
+    /// Put a file's working-tree contents back (None: it didn't exist).
+    Restore {
+        path: String,
+        contents: Option<Vec<u8>>,
     },
-    PushBehind {
-        behind: usize,
+    Stage(Vec<String>),
+    Unstage(Vec<StatusEntry>),
+    Uncommit {
+        hash: String,
+        summary: String,
+        description: String,
     },
 }
 
-/// A slow command (fetch/pull/push) running off the UI thread.
+/// A slow network command running off the UI thread. It reports a
+/// human-readable outcome ("Sent 2 commits") or an error.
 struct Job {
     label: &'static str,
-    rx: mpsc::Receiver<Result<(), String>>,
+    rx: mpsc::Receiver<Result<String, String>>,
 }
 
 struct Repo {
@@ -191,10 +293,11 @@ struct Repo {
     ref_rows: HashMap<String, usize>,
     max_lanes: usize,
     status: Vec<StatusEntry>,
+    changes: Vec<Change>,
     tracking: TrackingInfo,
     remotes: Vec<String>,
     branches: Vec<Branch>,
-    stashes: usize,
+    stashes: Vec<String>,
     prs: HashMap<String, PrInfo>,
     pr_rx: Option<mpsc::Receiver<Vec<PrInfo>>>,
 }
@@ -215,10 +318,11 @@ impl Repo {
             ref_rows: HashMap::new(),
             max_lanes: 1,
             status: Vec::new(),
+            changes: Vec::new(),
             tracking: TrackingInfo::default(),
             remotes: Vec::new(),
             branches: Vec::new(),
-            stashes: 0,
+            stashes: Vec::new(),
             prs: HashMap::new(),
             pr_rx: None,
         };
@@ -253,8 +357,9 @@ impl Repo {
             }
         }
         self.status = git::status().unwrap_or_default();
+        self.changes = Change::from_status(&self.status, &git::staged_new_files());
         self.tracking = git::tracking().unwrap_or_default();
-        self.stashes = git::stash_count();
+        self.stashes = git::stash_list();
         let mut branches = git::list_branches().unwrap_or_default();
         branches.sort_by_key(|b| b.name.to_lowercase());
         self.branches = branches;
@@ -292,7 +397,7 @@ impl Repo {
     }
 }
 
-/// The selected commit, loaded for the inspector.
+/// The selected commit, loaded for the detail column.
 struct Inspected {
     hash: String,
     details: CommitDetails,
@@ -303,12 +408,19 @@ struct SporApp {
     repo: Option<Repo>,
     open_error: Option<String>,
     recent: Vec<PathBuf>,
-    sel: Sel,
+    view: View,
+    sidebar_sel: SidebarSel,
+    sidebar_open: bool,
+    /// Last laid-out sidebar width, so the title bar can line up with it.
+    sidebar_w: f32,
+    /// History: selected row, its loaded details, and the selected file.
+    commit_sel: usize,
     inspected: Option<Inspected>,
-    /// Selected file: an index into `inspected.files` for a commit, or into
-    /// `repo.status` for the uncommitted changes.
-    file_sel: Option<usize>,
+    commit_file: Option<usize>,
+    /// Changes: selected path.
+    change_sel: Option<String>,
     diff: Option<DiffDoc>,
+    diff_mode: DiffMode,
     scroll_to_sel: bool,
     summary: String,
     description: String,
@@ -317,6 +429,7 @@ struct SporApp {
     modal: Option<Modal>,
     job: Option<Job>,
     toasts: Vec<Toast>,
+    undo: Vec<(String, Undo)>,
     needs_pr_fetch: bool,
     title: String,
 }
@@ -327,10 +440,16 @@ impl SporApp {
             repo: None,
             open_error: None,
             recent: recent_repos(),
-            sel: Sel::Commit(0),
+            view: View::Changes,
+            sidebar_sel: SidebarSel::Changes,
+            sidebar_open: true,
+            sidebar_w: 220.0,
+            commit_sel: 0,
             inspected: None,
-            file_sel: None,
+            commit_file: None,
+            change_sel: None,
             diff: None,
+            diff_mode: DiffMode::Unified,
             scroll_to_sel: false,
             summary: String::new(),
             description: String::new(),
@@ -339,6 +458,7 @@ impl SporApp {
             modal: None,
             job: None,
             toasts: Vec::new(),
+            undo: Vec::new(),
             needs_pr_fetch: false,
             title: String::new(),
         };
@@ -354,20 +474,25 @@ impl SporApp {
             Ok(repo) => {
                 remember_repo(&repo.root);
                 self.recent = recent_repos();
+                let dirty = !repo.changes.is_empty();
+                let head = repo.head_row().unwrap_or(0);
                 self.repo = Some(repo);
                 self.open_error = None;
                 self.summary.clear();
                 self.description.clear();
                 self.modal = None;
+                self.undo.clear();
                 self.needs_pr_fetch = true;
                 self.inspected = None;
-                let has_wip = self.repo.as_ref().is_some_and(|r| !r.status.is_empty());
-                let start = if has_wip {
-                    Sel::Wip
+                self.commit_sel = head;
+                self.change_sel = None;
+                // Start where the work is: uncommitted changes if there are
+                // any, otherwise the history at HEAD.
+                if dirty {
+                    self.show_changes();
                 } else {
-                    Sel::Commit(self.repo.as_ref().and_then(Repo::head_row).unwrap_or(0))
-                };
-                self.select(start);
+                    self.show_history();
+                }
                 self.scroll_to_sel = true;
             }
             Err(e) => self.open_error = Some(e),
@@ -378,7 +503,7 @@ impl SporApp {
         self.repo = None;
         self.inspected = None;
         self.diff = None;
-        self.file_sel = None;
+        self.undo.clear();
         self.recent = recent_repos();
     }
 
@@ -396,8 +521,9 @@ impl SporApp {
             text: text.into(),
             kind,
             born: Instant::now(),
+            undoable: false,
         });
-        if self.toasts.len() > 4 {
+        if self.toasts.len() > 3 {
             self.toasts.remove(0);
         }
     }
@@ -414,131 +540,117 @@ impl SporApp {
         self.toast(ToastKind::Error, text);
     }
 
-    fn has_wip(&self) -> bool {
-        self.repo.as_ref().is_some_and(|r| !r.status.is_empty())
+    /// Record an undoable action and say what happened, with an Undo button.
+    fn did(&mut self, text: impl Into<String>, undo: Undo) {
+        let text = text.into();
+        self.undo.push((text.clone(), undo));
+        if self.undo.len() > 50 {
+            self.undo.remove(0);
+        }
+        self.toasts.retain(|t| !t.undoable);
+        self.toasts.push(Toast {
+            text,
+            kind: ToastKind::Success,
+            born: Instant::now(),
+            undoable: true,
+        });
     }
 
-    /// Reload everything from git, keeping the selection where it makes sense.
-    fn refresh(&mut self) {
-        let Some(repo) = &mut self.repo else { return };
-        let keep_hash = self.inspected.as_ref().map(|i| i.hash.clone());
-        if let Err(e) = repo.reload() {
-            let msg = format!("Couldn't read history: {}", first_line(&e));
-            self.error(msg);
+    // ── Navigation ───────────────────────────────────────────────────────────
+
+    fn show_changes(&mut self) {
+        self.view = View::Changes;
+        self.sidebar_sel = SidebarSel::Changes;
+        let keep = self.change_sel.clone();
+        self.select_change(keep);
+    }
+
+    fn show_history(&mut self) {
+        self.view = View::History;
+        if !matches!(self.sidebar_sel, SidebarSel::Ref(_)) {
+            self.sidebar_sel = SidebarSel::History;
         }
-        let rows = &self.repo.as_ref().expect("checked above").rows;
-        let sel = match self.sel {
-            Sel::Wip if self.has_wip() => Sel::Wip,
-            Sel::Wip => Sel::Commit(self.repo.as_ref().and_then(Repo::head_row).unwrap_or(0)),
-            Sel::Commit(i) => {
-                // Follow the same commit if it moved (e.g. after a commit).
-                let found = keep_hash
-                    .as_ref()
-                    .and_then(|h| rows.iter().position(|r| &r.commit.hash == h));
-                Sel::Commit(found.unwrap_or(i.min(rows.len().saturating_sub(1))))
-            }
-        };
-        let file = self.file_sel;
         self.inspected = None;
-        self.select(sel);
-        // Stay on the same file in the working tree when it still exists.
-        if sel == Sel::Wip {
-            if let Some(f) = file {
-                let n = self.repo.as_ref().map_or(0, |r| r.status.len());
-                if n > 0 {
-                    self.select_file(f.min(n - 1));
-                }
-            }
-        }
+        self.select_commit(self.commit_sel);
     }
 
-    fn select(&mut self, sel: Sel) {
-        self.sel = sel;
-        match sel {
-            Sel::Wip => {
-                self.inspected = None;
-                let any = self.has_wip();
-                self.file_sel = None;
-                self.diff = None;
-                if any {
-                    self.select_file(0);
-                }
-            }
-            Sel::Commit(i) => {
-                let Some(row) = self.repo.as_ref().and_then(|r| r.rows.get(i)) else {
-                    self.inspected = None;
-                    self.diff = None;
-                    return;
-                };
-                if self
-                    .inspected
-                    .as_ref()
-                    .is_some_and(|x| x.hash == row.commit.hash)
-                {
-                    return;
-                }
-                let hash = row.commit.hash.clone();
-                let details = git::commit_details(&hash).unwrap_or_default();
-                let files = git::commit_patch(&hash, &row.commit.parents)
-                    .map(|p| diff::parse(&p))
-                    .unwrap_or_default();
-                self.inspected = Some(Inspected {
-                    hash,
-                    details,
-                    files,
-                });
-                self.file_sel = None;
-                self.diff = None;
-                self.select_file(0);
-            }
-        }
-    }
-
-    fn select_file(&mut self, idx: usize) {
-        match self.sel {
-            Sel::Wip => {
-                let Some(entry) = self.repo.as_ref().and_then(|r| r.status.get(idx)) else {
-                    return;
-                };
-                self.file_sel = Some(idx);
-                let parsed = git::diff_entry(entry)
-                    .map(|p| diff::parse(&p))
-                    .unwrap_or_default();
-                self.diff = parsed.into_iter().next().map(DiffDoc::new);
-            }
-            Sel::Commit(_) => {
-                let Some(f) = self.inspected.as_ref().and_then(|i| i.files.get(idx)) else {
-                    return;
-                };
-                self.file_sel = Some(idx);
-                self.diff = Some(DiffDoc::new(f.clone()));
-            }
-        }
-    }
-
-    /// Move the commit-list selection by `delta` rows (the WIP row counts).
-    fn step(&mut self, delta: i32) {
+    /// Select a changed file (or the first one) and load its diff.
+    fn select_change(&mut self, path: Option<String>) {
         let Some(repo) = &self.repo else { return };
-        let wip = self.has_wip();
-        let pos = match self.sel {
-            Sel::Wip => 0,
-            Sel::Commit(i) => i as i32 + wip as i32,
+        let change = path
+            .and_then(|p| repo.changes.iter().find(|c| c.path == p))
+            .or_else(|| repo.changes.first())
+            .cloned();
+        self.change_sel = change.as_ref().map(|c| c.path.clone());
+        self.diff = change.and_then(|c| {
+            git::diff_since_head(&c.path, c.untracked)
+                .ok()
+                .and_then(|p| diff::parse(&p).into_iter().next())
+                .map(DiffDoc::new)
+        });
+    }
+
+    fn select_commit(&mut self, i: usize) {
+        let Some(row) = self.repo.as_ref().and_then(|r| r.rows.get(i)) else {
+            self.inspected = None;
+            self.diff = None;
+            return;
         };
-        let total = repo.rows.len() as i32 + wip as i32;
-        let next = (pos + delta).clamp(0, total - 1);
-        if next == pos {
+        self.commit_sel = i;
+        if self
+            .inspected
+            .as_ref()
+            .is_some_and(|x| x.hash == row.commit.hash)
+        {
             return;
         }
-        let sel = if wip && next == 0 {
-            Sel::Wip
-        } else {
-            Sel::Commit((next - wip as i32) as usize)
-        };
-        self.select(sel);
-        self.scroll_to_sel = true;
+        let hash = row.commit.hash.clone();
+        let details = git::commit_details(&hash).unwrap_or_default();
+        let files = git::commit_patch(&hash, &row.commit.parents)
+            .map(|p| diff::parse(&p))
+            .unwrap_or_default();
+        self.inspected = Some(Inspected {
+            hash,
+            details,
+            files,
+        });
+        self.select_commit_file(0);
     }
 
-    /// Select the commit a ref points at (sidebar click).
+    fn select_commit_file(&mut self, idx: usize) {
+        let file = self.inspected.as_ref().and_then(|i| i.files.get(idx));
+        self.commit_file = file.map(|_| idx);
+        self.diff = file.cloned().map(DiffDoc::new);
+    }
+
+    /// Move the History selection by `delta` rows.
+    fn step(&mut self, delta: i32) {
+        let Some(repo) = &self.repo else { return };
+        let last = repo.rows.len().saturating_sub(1) as i32;
+        let next = (self.commit_sel as i32 + delta).clamp(0, last) as usize;
+        if next != self.commit_sel {
+            self.select_commit(next);
+            self.scroll_to_sel = true;
+        }
+    }
+
+    /// Step through the Changes list.
+    fn step_change(&mut self, delta: i32) {
+        let Some(repo) = &self.repo else { return };
+        if repo.changes.is_empty() {
+            return;
+        }
+        let pos = self
+            .change_sel
+            .as_ref()
+            .and_then(|p| repo.changes.iter().position(|c| &c.path == p))
+            .unwrap_or(0) as i32;
+        let next = (pos + delta).clamp(0, repo.changes.len() as i32 - 1) as usize;
+        let path = repo.changes[next].path.clone();
+        self.select_change(Some(path));
+    }
+
+    /// Show a branch or tag's tip in History.
     fn reveal_ref(&mut self, key: &str) {
         let Some(i) = self
             .repo
@@ -548,54 +660,143 @@ impl SporApp {
             self.info(format!("{key} is beyond the loaded history"));
             return;
         };
-        self.select(Sel::Commit(i));
+        self.view = View::History;
+        self.sidebar_sel = SidebarSel::Ref(key.to_string());
+        self.select_commit(i);
         self.scroll_to_sel = true;
     }
 
-    // ── Actions ──────────────────────────────────────────────────────────────
-
-    fn toggle_stage(&mut self, entry: &StatusEntry) {
-        let result = if entry.status.is_staged() {
-            git::unstage(entry)
-        } else {
-            git::stage(&entry.path)
-        };
-        match result {
-            Ok(()) => self.refresh(),
-            Err(e) => self.error(format!("Couldn't stage: {}", first_line(&e))),
+    /// Reload everything from git, keeping selections where they still apply.
+    fn refresh(&mut self) {
+        let Some(repo) = &mut self.repo else { return };
+        let keep_hash = self.inspected.as_ref().map(|i| i.hash.clone());
+        if let Err(e) = repo.reload() {
+            let msg = format!("Couldn't read history: {}", first_line(&e));
+            self.error(msg);
+        }
+        let repo = self.repo.as_ref().expect("checked above");
+        // Follow the same commit if it moved (e.g. after a commit).
+        self.commit_sel = keep_hash
+            .and_then(|h| repo.rows.iter().position(|r| r.commit.hash == h))
+            .unwrap_or(self.commit_sel.min(repo.rows.len().saturating_sub(1)));
+        self.inspected = None;
+        match self.view {
+            View::Changes => {
+                let keep = self.change_sel.clone();
+                self.select_change(keep);
+            }
+            View::History => {
+                let keep_file = self.commit_file;
+                self.select_commit(self.commit_sel);
+                if let Some(f) = keep_file {
+                    self.select_commit_file(f);
+                }
+            }
         }
     }
 
-    fn stage_all(&mut self, staged: bool) {
-        let Some(repo) = &self.repo else { return };
-        let entries: Vec<StatusEntry> = repo
-            .status
-            .iter()
-            .filter(|e| e.status.is_staged() == staged)
-            .cloned()
-            .collect();
-        for e in &entries {
-            let r = if staged {
-                git::unstage(e)
-            } else {
-                git::stage(&e.path)
-            };
-            if let Err(err) = r {
-                self.error(format!("Couldn't stage: {}", first_line(&err)));
-                break;
+    // ── Working tree ─────────────────────────────────────────────────────────
+
+    /// Tick or untick a file: stage everything in it, or unstage it.
+    fn toggle_change(&mut self, change: &Change) {
+        if change.included() {
+            let staged: Vec<StatusEntry> = change
+                .entries
+                .iter()
+                .filter(|e| e.status.is_staged())
+                .cloned()
+                .collect();
+            if let Err(e) = staged.iter().try_for_each(git::unstage) {
+                return self.error(format!("Couldn't unstage: {}", first_line(&e)));
             }
+            self.undo.push((
+                format!("Unstage {}", change.path),
+                Undo::Stage(vec![change.path.clone()]),
+            ));
+        } else {
+            if let Err(e) = git::stage(&change.path) {
+                return self.error(format!("Couldn't stage: {}", first_line(&e)));
+            }
+            self.undo.push((
+                format!("Stage {}", change.path),
+                Undo::Unstage(vec![StatusEntry {
+                    status: FileStatus::Staged,
+                    path: change.path.clone(),
+                    orig_path: change.orig_path.clone(),
+                }]),
+            ));
         }
         self.refresh();
     }
 
-    fn discard(&mut self, entry: &StatusEntry) {
-        let result = match entry.status {
-            FileStatus::Untracked => git::remove_untracked(&entry.path),
-            _ => git::discard_worktree(&entry.path),
+    /// Include or exclude every file.
+    fn set_all_included(&mut self, include: bool) {
+        let Some(repo) = &self.repo else { return };
+        let changes = repo.changes.clone();
+        let mut done_paths = Vec::new();
+        let mut done_entries = Vec::new();
+        for c in &changes {
+            let r = if include && !c.included() {
+                done_paths.push(c.path.clone());
+                git::stage(&c.path)
+            } else if !include && c.staged {
+                let staged: Vec<StatusEntry> = c
+                    .entries
+                    .iter()
+                    .filter(|e| e.status.is_staged())
+                    .cloned()
+                    .collect();
+                done_entries.extend(staged.iter().cloned());
+                staged.iter().try_for_each(git::unstage)
+            } else {
+                Ok(())
+            };
+            if let Err(e) = r {
+                self.error(format!("Couldn't stage: {}", first_line(&e)));
+                break;
+            }
+        }
+        if include && !done_paths.is_empty() {
+            self.undo.push((
+                "Stage all".into(),
+                Undo::Unstage(
+                    done_paths
+                        .into_iter()
+                        .map(|path| StatusEntry {
+                            status: FileStatus::Staged,
+                            path,
+                            orig_path: None,
+                        })
+                        .collect(),
+                ),
+            ));
+        } else if !include && !done_entries.is_empty() {
+            let paths = done_entries.iter().map(|e| e.path.clone()).collect();
+            self.undo.push(("Unstage all".into(), Undo::Stage(paths)));
+        }
+        self.refresh();
+    }
+
+    /// Throw away a file's unstaged changes — immediately, but undoably: the
+    /// current contents are kept in memory so ⌘Z can put them back.
+    fn discard(&mut self, change: &Change) {
+        let path = change.path.clone();
+        let before = std::fs::read(&path).ok();
+        let result = if change.untracked {
+            git::remove_untracked(&path)
+        } else {
+            git::discard_worktree(&path)
         };
         match result {
             Ok(()) => {
-                self.ok(format!("Discarded changes to {}", entry.path));
+                let name = widgets::split_path(&path).0.to_string();
+                self.did(
+                    format!("Discarded changes to {name}"),
+                    Undo::Restore {
+                        path,
+                        contents: before,
+                    },
+                );
                 self.refresh();
             }
             Err(e) => self.error(format!("Couldn't discard: {}", first_line(&e))),
@@ -603,31 +804,90 @@ impl SporApp {
     }
 
     fn commit(&mut self) {
-        let summary = self.summary.trim();
+        let summary = self.summary.trim().to_string();
         if summary.is_empty() {
             return;
         }
-        let msg = match self.description.trim() {
-            "" => summary.to_string(),
-            body => format!("{summary}\n\n{body}"),
+        let description = self.description.trim().to_string();
+        let msg = if description.is_empty() {
+            summary.clone()
+        } else {
+            format!("{summary}\n\n{description}")
         };
         match git::commit(&msg) {
             Ok(()) => {
-                self.ok(format!("Committed “{}”", first_line(&msg)));
+                let hash = git::head_sha().unwrap_or_default();
                 self.summary.clear();
                 self.description.clear();
+                self.did(
+                    format!("Committed “{summary}”"),
+                    Undo::Uncommit {
+                        hash,
+                        summary,
+                        description,
+                    },
+                );
+                self.commit_sel = 0;
                 self.refresh();
-                let head = self.repo.as_ref().and_then(Repo::head_row).unwrap_or(0);
-                if !self.has_wip() || self.sel != Sel::Wip {
-                    self.select(Sel::Commit(head));
-                }
+                self.commit_sel = self.repo.as_ref().and_then(Repo::head_row).unwrap_or(0);
             }
             Err(e) => self.error(format!("Commit failed: {}", first_line(&e))),
         }
     }
 
+    /// Take back the most recent undoable action.
+    fn undo_last(&mut self) {
+        let Some((label, action)) = self.undo.pop() else {
+            return self.info("Nothing to undo");
+        };
+        self.toasts.retain(|t| !t.undoable);
+        let done = match &action {
+            Undo::Restore { path, .. } => format!("Restored {}", widgets::split_path(path).0),
+            Undo::Uncommit { .. } => "Commit undone — its changes are staged again".to_string(),
+            _ => format!("Undid {}", label.to_lowercase()),
+        };
+        let result = match action {
+            Undo::Restore { path, contents } => match contents {
+                Some(bytes) => {
+                    if let Some(dir) = Path::new(&path).parent() {
+                        let _ = std::fs::create_dir_all(dir);
+                    }
+                    std::fs::write(&path, bytes).map_err(|e| e.to_string())
+                }
+                None => std::fs::remove_file(&path).map_err(|e| e.to_string()),
+            },
+            Undo::Stage(paths) => paths.iter().try_for_each(|p| git::stage(p)),
+            Undo::Unstage(entries) => entries.iter().try_for_each(git::unstage),
+            Undo::Uncommit {
+                hash,
+                summary,
+                description,
+            } => {
+                if git::head_sha().ok().as_deref() != Some(hash.as_str()) {
+                    Err("the branch has moved on since that commit".into())
+                } else {
+                    git::uncommit().map(|()| {
+                        self.summary = summary;
+                        self.description = description;
+                        self.view = View::Changes;
+                        self.sidebar_sel = SidebarSel::Changes;
+                    })
+                }
+            }
+        };
+        match result {
+            Ok(()) => {
+                self.info(done);
+                self.refresh();
+            }
+            Err(e) => self.error(format!("Couldn't undo: {}", first_line(&e))),
+        }
+    }
+
+    // ── Branches & stashes ───────────────────────────────────────────────────
+
     fn checkout(&mut self, name: &str) {
-        // Checking out `origin/x` should land on a local `x` tracking it, not
+        // Checking out `origin/x` lands on a local `x` tracking it rather than
         // a detached HEAD.
         let target = match self.repo.as_ref() {
             Some(repo) => match name.split_once('/') {
@@ -650,72 +910,63 @@ impl SporApp {
         }
     }
 
+    /// Check out the branch at the selected commit (double-click / Return).
     fn checkout_selected(&mut self) {
-        let Sel::Commit(i) = self.sel else { return };
-        let Some(row) = self.repo.as_ref().and_then(|r| r.rows.get(i)) else {
+        let Some(repo) = &self.repo else { return };
+        let Some(row) = repo.rows.get(self.commit_sel) else {
             return;
         };
-        let refs: Vec<String> = row
+        let is_remote = |r: &str| {
+            r.split_once('/')
+                .is_some_and(|(rem, _)| repo.remotes.iter().any(|x| x == rem))
+        };
+        let refs: Vec<&String> = row
             .commit
             .refs
             .iter()
             .filter(|r| !r.starts_with("tag:") && !r.ends_with("/HEAD"))
-            .cloned()
             .collect();
-        match refs.as_slice() {
-            [] => self.info("No branch here — right-click to create one"),
-            [only] => {
-                let only = only.clone();
-                self.checkout(&only);
-            }
-            // Prefer a local branch when local and remote twins share the tip.
-            [first, ..] => {
-                let local = refs
-                    .iter()
-                    .find(|r| {
-                        !self.repo.as_ref().is_some_and(|repo| {
-                            r.split_once('/')
-                                .is_some_and(|(rem, _)| repo.remotes.iter().any(|x| x == rem))
-                        })
-                    })
-                    .unwrap_or(first)
-                    .clone();
-                self.checkout(&local);
-            }
+        // Prefer a local branch when local and remote twins share the tip.
+        let pick = refs
+            .iter()
+            .find(|r| !is_remote(r))
+            .or(refs.first())
+            .map(|r| r.to_string());
+        match pick {
+            Some(name) if row.commit.head_ref.as_deref() == Some(name.as_str()) => {}
+            Some(name) => self.checkout(&name),
+            None => self.info("No branch here — right-click to create one"),
         }
     }
 
     fn stash_and_switch(&mut self, target: &str) {
         match git::stash_push().and_then(|_| git::checkout_branch(target)) {
             Ok(()) => {
-                self.ok(format!("Stashed changes and switched to {target}"));
+                self.ok(format!("Stashed your changes and switched to {target}"));
                 self.refresh();
             }
-            Err(e) => self.error(format!("Stash & switch failed: {}", first_line(&e))),
+            Err(e) => self.error(format!("Couldn't switch: {}", first_line(&e))),
         }
     }
 
     fn stash(&mut self) {
         match git::stash_push() {
             Ok(()) => {
-                self.ok("Stashed uncommitted changes");
+                self.ok("Changes stashed");
                 self.refresh();
             }
-            Err(e) => self.error(format!("Stash failed: {}", first_line(&e))),
+            Err(e) => self.error(format!("Couldn't stash: {}", first_line(&e))),
         }
     }
 
-    fn stash_pop(&mut self) {
-        match git::stash_pop() {
+    fn apply_stash(&mut self, index: usize) {
+        match git::stash_pop_at(index) {
             Ok(()) => {
-                self.ok("Restored stashed changes");
+                self.ok("Stashed changes restored");
                 self.refresh();
-                if self.has_wip() {
-                    self.select(Sel::Wip);
-                    self.scroll_to_sel = true;
-                }
+                self.show_changes();
             }
-            Err(e) => self.error(format!("Couldn't pop stash: {}", first_line(&e))),
+            Err(e) => self.error(format!("Couldn't apply stash: {}", first_line(&e))),
         }
     }
 
@@ -737,63 +988,128 @@ impl SporApp {
         });
     }
 
-    fn request_push(&mut self) {
-        let behind = self.repo.as_ref().map_or(0, |r| r.tracking.behind);
-        if behind > 0 {
-            self.modal = Some(Modal::PushBehind { behind });
-        } else {
-            self.push();
+    /// New branch from the selected commit in History, or from HEAD.
+    fn new_branch_here(&mut self) {
+        let Some(repo) = &self.repo else { return };
+        let i = match self.view {
+            View::History => Some(self.commit_sel),
+            View::Changes => repo.head_row(),
+        };
+        if let Some(row) = i.and_then(|i| repo.rows.get(i)) {
+            let label = format!("{} — {}", row.commit.short, row.commit.subject);
+            let sha = row.commit.hash.clone();
+            self.new_branch_dialog(sha, label);
         }
+    }
+
+    // ── Network ──────────────────────────────────────────────────────────────
+
+    /// One button for fetch + pull + push: bring the branch level with its
+    /// upstream in whichever direction is needed, or publish it if it has
+    /// none yet.
+    fn sync(&mut self) {
+        let Some(repo) = &self.repo else { return };
+        let branch = repo.tracking.branch.clone();
+        let has_upstream = repo.tracking.upstream.is_some();
+        let remote = repo
+            .remotes
+            .iter()
+            .find(|r| *r == "origin")
+            .or(repo.remotes.first())
+            .cloned();
+        let Some(remote) = remote else {
+            return self.info("This repository has no remote to sync with");
+        };
+        self.spawn("Sync", move |git| {
+            git(&["fetch", "--all", "--prune"])?;
+            let Some(branch) = branch else {
+                return Ok("Fetched — HEAD is detached, so nothing to sync".into());
+            };
+            if !has_upstream {
+                git(&["push", "--set-upstream", &remote, &branch])?;
+                return Ok(format!("Published {branch} to {remote}"));
+            }
+            let counts = git(&["rev-list", "--left-right", "--count", "HEAD...@{u}"])?;
+            let mut it = counts
+                .split_whitespace()
+                .map(|n| n.parse::<usize>().unwrap_or(0));
+            let (ahead, behind) = (it.next().unwrap_or(0), it.next().unwrap_or(0));
+            if ahead > 0 && behind > 0 {
+                return Err(format!(
+                    "{branch} and its upstream have diverged ({ahead} here, {behind} there). \
+                         Merge or rebase, then sync again."
+                ));
+            }
+            if behind > 0 {
+                git(&["pull", "--ff-only"])?;
+                return Ok(format!("Received {behind} commit{}", plural(behind)));
+            }
+            if ahead > 0 {
+                git(&["push"])?;
+                return Ok(format!("Sent {ahead} commit{}", plural(ahead)));
+            }
+            Ok("Everything is up to date".into())
+        });
+    }
+
+    fn fetch(&mut self) {
+        self.spawn("Fetch", |git| {
+            git(&["fetch", "--all", "--prune"]).map(|_| "Fetched all remotes".into())
+        });
+    }
+
+    fn pull(&mut self) {
+        self.spawn("Pull", |git| {
+            git(&["pull", "--ff-only"]).map(|_| "Pulled".into())
+        });
     }
 
     fn push(&mut self) {
         match git::push_args() {
-            Ok(args) => self.spawn_job("Push", args),
+            Ok(args) => self.spawn("Push", move |git| {
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                git(&args).map(|_| "Pushed".into())
+            }),
             Err(e) => self.error(format!("Push failed: {}", first_line(&e))),
         }
     }
 
-    fn pull(&mut self) {
-        self.spawn_job("Pull", vec!["pull".into(), "--ff-only".into()]);
-    }
-
-    fn fetch(&mut self) {
-        self.spawn_job(
-            "Fetch",
-            vec!["fetch".into(), "--all".into(), "--prune".into()],
-        );
-    }
-
-    /// Run a network git command in the background. There's no terminal to
-    /// prompt in, so credentials must come from a helper (the macOS keychain,
+    /// Run network work in the background. There's no terminal to prompt
+    /// in, so credentials must come from a helper (the macOS keychain,
     /// ssh-agent); interactive prompts are disabled so git fails instead of
     /// hanging forever.
-    fn spawn_job(&mut self, label: &'static str, args: Vec<String>) {
+    fn spawn(
+        &mut self,
+        label: &'static str,
+        work: impl FnOnce(&dyn Fn(&[&str]) -> Result<String, String>) -> Result<String, String>
+            + Send
+            + 'static,
+    ) {
         if self.job.is_some() {
             return;
         }
         let (tx, rx) = mpsc::channel();
         let dir = self.repo.as_ref().map(|r| r.root.clone());
         std::thread::spawn(move || {
-            let mut cmd = Command::new("git");
-            if let Some(dir) = dir {
-                cmd.current_dir(dir);
-            }
-            let result = cmd
-                .args(&args)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .env("GIT_SSH_COMMAND", ssh_command())
-                .stdin(Stdio::null())
-                .output()
-                .map_err(|e| format!("failed to run git: {e}"))
-                .and_then(|out| {
-                    if out.status.success() {
-                        Ok(())
-                    } else {
-                        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-                    }
-                });
-            let _ = tx.send(result);
+            let git = |args: &[&str]| -> Result<String, String> {
+                let mut cmd = Command::new("git");
+                if let Some(dir) = &dir {
+                    cmd.current_dir(dir);
+                }
+                let out = cmd
+                    .args(args)
+                    .env("GIT_TERMINAL_PROMPT", "0")
+                    .env("GIT_SSH_COMMAND", ssh_command())
+                    .stdin(Stdio::null())
+                    .output()
+                    .map_err(|e| format!("failed to run git: {e}"))?;
+                if out.status.success() {
+                    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+                } else {
+                    Err(git_error(&String::from_utf8_lossy(&out.stderr)))
+                }
+            };
+            let _ = tx.send(work(&git));
         });
         self.job = Some(Job { label, rx });
     }
@@ -805,30 +1121,20 @@ impl SporApp {
                 let label = job.label;
                 self.job = None;
                 match result {
-                    Ok(()) => {
-                        let done = match label {
-                            "Push" => "Pushed",
-                            "Pull" => "Pulled",
-                            _ => "Fetched",
-                        };
-                        self.ok(format!("{done} successfully"));
-                        self.refresh();
-                        self.needs_pr_fetch = true;
+                    Ok(msg) => {
+                        // Once commits are pushed, taking one back would
+                        // rewrite published history — no longer undoable.
+                        if matches!(label, "Sync" | "Push") {
+                            self.undo
+                                .retain(|(_, u)| !matches!(u, Undo::Uncommit { .. }));
+                            self.toasts.retain(|t| !t.undoable);
+                        }
+                        self.ok(msg)
                     }
-                    Err(e) => {
-                        // git prints hints after the real error; the last
-                        // "fatal:"/"error:" line is the useful one.
-                        let line = e
-                            .lines()
-                            .rev()
-                            .find(|l| l.starts_with("fatal:") || l.starts_with("error:"))
-                            .unwrap_or_else(|| first_line(&e))
-                            .trim_start_matches("fatal: ")
-                            .trim_start_matches("error: ")
-                            .to_string();
-                        self.error(format!("{label} failed: {line}"));
-                    }
+                    Err(e) => self.error(format!("{label} failed: {e}")),
                 }
+                self.refresh();
+                self.needs_pr_fetch = true;
             }
             Err(mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(100))
@@ -840,7 +1146,7 @@ impl SporApp {
     fn open_pull_request(&mut self, ctx: &egui::Context) {
         let Some(repo) = &self.repo else { return };
         let Some(head) = repo.tracking.branch.clone() else {
-            return self.info("Detached HEAD — switch to a branch first");
+            return self.info("Switch to a branch first");
         };
         let Some(info) = remote::detect() else {
             return self.error("Couldn't detect the remote host");
@@ -852,7 +1158,7 @@ impl SporApp {
             ));
         }
         if repo.tracking.upstream.is_none() {
-            return self.info("Push this branch first so it exists on the remote");
+            return self.info("Sync first to publish this branch");
         }
         if let Some(pr) = repo.prs.get(&head) {
             let url = format!("{}/pull/{}", info.web_url, pr.number);
@@ -863,40 +1169,122 @@ impl SporApp {
         ctx.open_url(egui::OpenUrl::new_tab(&url));
     }
 
+    fn reveal_in_finder(&mut self, path: &str) {
+        let Some(root) = self.repo.as_ref().map(|r| r.root.clone()) else {
+            return;
+        };
+        let full = root.join(path);
+        let result = if cfg!(target_os = "macos") {
+            Command::new("open").arg("-R").arg(&full).spawn()
+        } else {
+            let dir = full.parent().map(Path::to_path_buf).unwrap_or(root);
+            Command::new("xdg-open").arg(dir).spawn()
+        };
+        if let Err(e) = result {
+            self.error(format!("Couldn't reveal file: {e}"));
+        }
+    }
+
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        let (cmd_o, cmd_r) = ctx.input(|i| {
-            (
-                i.modifiers.command && i.key_pressed(Key::O),
-                i.modifiers.command && i.key_pressed(Key::R),
-            )
-        });
-        if cmd_o {
+        let cmd = |key: Key| ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, key));
+        if cmd(Key::O) {
             self.pick_repo();
         }
-        if cmd_r && self.repo.is_some() {
+        if self.repo.is_none() {
+            return;
+        }
+        let typing = ctx.memory(|m| m.focused().is_some());
+        if cmd(Key::R) {
             self.refresh();
             self.needs_pr_fetch = true;
         }
-        if self.modal.is_some() || ctx.memory(|m| m.focused().is_some()) || self.repo.is_none() {
+        if cmd(Key::Num1) {
+            self.show_changes();
+        }
+        if cmd(Key::Num2) {
+            self.show_history();
+        }
+        // ⌘↩ commits from anywhere in Changes, including the message fields.
+        if self.view == View::Changes && self.modal.is_none() && cmd(Key::Enter) {
+            let staged = self
+                .repo
+                .as_ref()
+                .is_some_and(|r| r.changes.iter().any(|c| c.staged));
+            if staged && !self.summary.trim().is_empty() {
+                self.commit();
+            }
+        }
+        // ⌘Z belongs to the text field while typing.
+        if !typing && cmd(Key::Z) {
+            self.undo_last();
+        }
+        if self.modal.is_some() || typing {
             return;
         }
-        let (down, up, enter) = ctx.input(|i| {
+        let (down, up, enter, space) = ctx.input(|i| {
             (
                 i.key_pressed(Key::J) || i.key_pressed(Key::ArrowDown),
                 i.key_pressed(Key::K) || i.key_pressed(Key::ArrowUp),
                 i.key_pressed(Key::Enter),
+                i.key_pressed(Key::Space),
             )
         });
-        if down {
-            self.step(1);
-        }
-        if up {
-            self.step(-1);
-        }
-        if enter {
-            self.checkout_selected();
+        match self.view {
+            View::History => {
+                if down {
+                    self.step(1);
+                }
+                if up {
+                    self.step(-1);
+                }
+                if enter {
+                    self.checkout_selected();
+                }
+            }
+            View::Changes => {
+                if down {
+                    self.step_change(1);
+                }
+                if up {
+                    self.step_change(-1);
+                }
+                if space {
+                    let change = self.repo.as_ref().and_then(|r| {
+                        r.changes
+                            .iter()
+                            .find(|c| Some(&c.path) == self.change_sel.as_ref())
+                            .cloned()
+                    });
+                    if let Some(c) = change {
+                        self.toggle_change(&c);
+                    }
+                }
+            }
         }
     }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
+/// git prints hints around the real error; keep the last "fatal:"/"error:"
+/// line, minus its prefix.
+fn git_error(stderr: &str) -> String {
+    let line = stderr
+        .lines()
+        .rev()
+        .find(|l| l.starts_with("fatal:") || l.starts_with("error:"))
+        .or_else(|| stderr.lines().find(|l| !l.trim().is_empty()))
+        .unwrap_or("unknown error");
+    line.trim_start_matches("fatal: ")
+        .trim_start_matches("error: ")
+        .trim()
+        .to_string()
 }
 
 /// ssh must never wait on a terminal prompt we can't show; fail fast instead
@@ -940,6 +1328,8 @@ impl eframe::App for SporApp {
         }
 
         self.modals(&ctx);
-        widgets::show_toasts(&ctx, &mut self.toasts);
+        if widgets::show_toasts(&ctx, &mut self.toasts) {
+            self.undo_last();
+        }
     }
 }

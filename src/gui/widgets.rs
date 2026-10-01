@@ -48,152 +48,167 @@ pub fn fnv(s: &str) -> u32 {
     h
 }
 
-/// One segment of a pill label: text in a color.
-pub struct Seg {
-    pub text: String,
-    pub color: Color32,
-}
-
-impl Seg {
-    pub fn new(text: impl Into<String>, color: Color32) -> Self {
-        Self {
-            text: text.into(),
-            color,
-        }
-    }
-}
-
-/// A rounded label made of colored segments, painted at `x` and vertically
-/// centered on `mid`. `solid` fills with `tint` (for HEAD); otherwise it's a
-/// soft tint with a hairline border. Returns the right edge.
-pub fn paint_pill(
+/// A small capsule label (branch or tag on a commit row). Returns the right
+/// edge.
+pub fn tag(
     painter: &egui::Painter,
     x: f32,
     mid: f32,
-    segs: &[Seg],
-    tint: Color32,
-    solid: bool,
+    text: &str,
+    fg: Color32,
+    fill: Color32,
 ) -> f32 {
-    let font = FontId::proportional(11.5);
-    let galleys: Vec<_> = segs
-        .iter()
-        .map(|s| painter.layout_no_wrap(s.text.clone(), font.clone(), s.color))
-        .collect();
-    let w: f32 = galleys.iter().map(|g| g.size().x).sum();
-    let h = 18.0;
-    let rect = Rect::from_min_size(Pos2::new(x, mid - h / 2.0), Vec2::new(w + 14.0, h));
-    if solid {
-        painter.rect_filled(rect, CornerRadius::same(9), tint);
-    } else {
-        painter.rect_filled(rect, CornerRadius::same(9), tint.gamma_multiply(0.16));
-        painter.rect_stroke(
-            rect,
-            CornerRadius::same(9),
-            Stroke::new(1.0, tint.gamma_multiply(0.45)),
-            StrokeKind::Inside,
-        );
-    }
-    let mut tx = x + 7.0;
-    for g in galleys {
-        let gw = g.size().x;
-        let gh = g.size().y;
-        painter.galley(Pos2::new(tx, mid - gh / 2.0), g, Color32::WHITE);
-        tx += gw;
-    }
+    let g = painter.layout_no_wrap(text.to_string(), FontId::proportional(10.5), fg);
+    let rect = Rect::from_min_size(Pos2::new(x, mid - 8.0), Vec2::new(g.size().x + 10.0, 16.0));
+    painter.rect_filled(rect, CornerRadius::same(4), fill);
+    let h = g.size().y;
+    painter.galley(Pos2::new(x + 5.0, mid - h / 2.0), g, fg);
     rect.right()
 }
 
-/// Width a pill will take, for layout decisions before painting.
-pub fn pill_width(painter: &egui::Painter, segs: &[Seg]) -> f32 {
-    let font = FontId::proportional(11.5);
-    segs.iter()
-        .map(|s| {
-            painter
-                .layout_no_wrap(s.text.clone(), font.clone(), s.color)
-                .size()
-                .x
-        })
-        .sum::<f32>()
-        + 14.0
+pub fn tag_width(painter: &egui::Painter, text: &str) -> f32 {
+    painter
+        .layout_no_wrap(text.to_string(), FontId::proportional(10.5), Color32::WHITE)
+        .size()
+        .x
+        + 10.0
 }
 
-/// Toolbar action: icon over a small caption, with an optional count badge
-/// and a spinner while `busy`.
-pub fn tool_button(
-    ui: &mut Ui,
-    glyph: &str,
-    label: &str,
-    badge: Option<String>,
-    enabled: bool,
-    busy: bool,
-) -> Response {
+/// Borderless toolbar button: just an SF-Symbols-style glyph that gets a
+/// rounded highlight on hover, like macOS toolbar items.
+pub fn toolbar_button(ui: &mut Ui, glyph: &str, tooltip: &str, enabled: bool) -> Response {
     let p = theme::palette(ui.ctx());
-    let size = Vec2::new(58.0, 44.0);
     let sense = if enabled {
         Sense::click()
     } else {
         Sense::hover()
     };
-    let (rect, resp) = ui.allocate_exact_size(size, sense);
-    let painter = ui.painter_at(rect.expand(4.0));
-    if enabled && (resp.hovered() || busy) {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(32.0, 28.0), sense);
+    if enabled && resp.hovered() {
         let fill = if resp.is_pointer_button_down_on() {
-            p.selection
+            p.raised.lerp_to_gamma(p.text, 0.12)
         } else {
-            p.hover
+            p.hover.lerp_to_gamma(p.text, 0.05)
         };
-        painter.rect_filled(rect, CornerRadius::same(8), fill);
+        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
     }
-    let color = if enabled { p.text } else { p.faint };
-    let icon_center = Pos2::new(rect.center().x, rect.top() + 15.0);
-    if busy {
-        let t = ui.input(|i| i.time) as f32;
-        let r = 7.0;
-        let start = t * 6.0;
-        let points: Vec<Pos2> = (0..=20)
-            .map(|i| {
-                let a = start + i as f32 / 20.0 * std::f32::consts::PI * 1.5;
-                icon_center + Vec2::angled(a) * r
-            })
-            .collect();
-        painter.add(egui::Shape::line(points, Stroke::new(2.0, p.accent)));
-        ui.ctx().request_repaint();
-    } else {
-        painter.text(
-            icon_center,
-            Align2::CENTER_CENTER,
-            glyph,
-            FontId::proportional(19.0),
-            color,
-        );
-    }
-    painter.text(
-        Pos2::new(rect.center().x, rect.bottom() - 9.0),
+    ui.painter().text(
+        rect.center(),
         Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(11.0),
+        glyph,
+        FontId::proportional(17.0),
         if enabled { p.muted } else { p.faint },
     );
-    if let Some(badge) = badge {
-        let font = theme::semibold(10.0);
-        let g = painter.layout_no_wrap(badge, font, p.on_accent);
-        let bw = g.size().x + 8.0;
-        let br = Rect::from_center_size(
-            Pos2::new(icon_center.x + 13.0, icon_center.y - 8.0),
-            Vec2::new(bw.max(15.0), 15.0),
-        );
-        painter.rect_filled(br, CornerRadius::same(8), p.accent);
-        painter.galley(br.center() - g.size() / 2.0, g, p.on_accent);
-    }
-    if enabled {
-        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-    } else {
-        resp
+    resp.on_hover_text(tooltip)
+}
+
+/// Spinning arc, for work in progress.
+pub fn spinner(painter: &egui::Painter, center: Pos2, r: f32, color: Color32, t: f32) {
+    let start = t * 6.0;
+    let points: Vec<Pos2> = (0..=24)
+        .map(|i| {
+            let a = start + i as f32 / 24.0 * std::f32::consts::PI * 1.5;
+            center + Vec2::angled(a) * r
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, Stroke::new(1.8, color)));
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Check {
+    Off,
+    On,
+    Mixed,
+}
+
+/// A macOS-style checkbox painted in `rect` (14pt square, accent when on).
+pub fn paint_checkbox(painter: &egui::Painter, center: Pos2, state: Check, p: &Palette) {
+    let rect = Rect::from_center_size(center, Vec2::splat(14.0));
+    match state {
+        Check::Off => {
+            painter.rect_filled(rect, CornerRadius::same(4), p.bg);
+            painter.rect_stroke(
+                rect,
+                CornerRadius::same(4),
+                Stroke::new(1.0, p.muted.gamma_multiply(0.7)),
+                StrokeKind::Inside,
+            );
+        }
+        Check::On | Check::Mixed => {
+            painter.rect_filled(rect, CornerRadius::same(4), p.accent);
+            let stroke = Stroke::new(1.8, Color32::WHITE);
+            if state == Check::On {
+                let c = rect.center();
+                painter.line_segment([c + Vec2::new(-3.5, 0.2), c + Vec2::new(-1.0, 2.8)], stroke);
+                painter.line_segment([c + Vec2::new(-1.0, 2.8), c + Vec2::new(3.8, -2.8)], stroke);
+            } else {
+                let c = rect.center();
+                painter.line_segment([c + Vec2::new(-3.5, 0.0), c + Vec2::new(3.5, 0.0)], stroke);
+            }
+        }
     }
 }
 
-/// A flat clickable row of text with icon, used for menus and sidebar items.
-/// Returns the response for the whole row.
+/// A segmented control. Returns true when the selection changed.
+pub fn segmented(ui: &mut Ui, options: &[&str], selected: &mut usize) -> bool {
+    let p = theme::palette(ui.ctx());
+    let font = FontId::proportional(11.5);
+    let widths: Vec<f32> = options
+        .iter()
+        .map(|o| {
+            ui.painter()
+                .layout_no_wrap(o.to_string(), font.clone(), p.text)
+                .size()
+                .x
+                + 20.0
+        })
+        .collect();
+    let total: f32 = widths.iter().sum::<f32>() + 4.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(total, 22.0), Sense::hover());
+    let painter = ui.painter_at(rect.expand(1.0));
+    let track = if p.dark {
+        Color32::from_rgb(0x32, 0x32, 0x35)
+    } else {
+        Color32::from_rgb(0xe4, 0xe4, 0xe7)
+    };
+    painter.rect_filled(rect, CornerRadius::same(6), track);
+    let mut x = rect.left() + 2.0;
+    let mut changed = false;
+    for (i, (opt, w)) in options.iter().zip(&widths).enumerate() {
+        let seg = Rect::from_min_size(Pos2::new(x, rect.top() + 2.0), Vec2::new(*w, 18.0));
+        let resp = ui.interact(seg, ui.id().with(("seg", i, *opt)), Sense::click());
+        if i == *selected {
+            let fill = if p.dark {
+                Color32::from_rgb(0x5a, 0x5a, 0x5e)
+            } else {
+                Color32::WHITE
+            };
+            painter.rect_filled(seg, CornerRadius::same(5), fill);
+        } else if resp.hovered() {
+            painter.rect_filled(
+                seg,
+                CornerRadius::same(5),
+                track.lerp_to_gamma(p.text, 0.06),
+            );
+        }
+        painter.text(
+            seg.center(),
+            Align2::CENTER_CENTER,
+            *opt,
+            font.clone(),
+            p.text,
+        );
+        if resp.clicked() && i != *selected {
+            *selected = i;
+            changed = true;
+        }
+        x += w;
+    }
+    changed
+}
+
+/// A flat clickable row, for the sidebar: rounded neutral highlight when
+/// selected.
 pub fn list_row(
     ui: &mut Ui,
     selected: bool,
@@ -205,34 +220,23 @@ pub fn list_row(
         ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
     let painter = ui.painter_at(rect);
     if selected {
-        painter.rect_filled(rect, CornerRadius::same(6), p.selection);
-    } else if resp.hovered() {
-        painter.rect_filled(rect, CornerRadius::same(6), p.hover);
+        painter.rect_filled(rect, CornerRadius::same(6), p.sidebar_sel);
     }
     paint(&painter, rect, &p);
     resp
 }
 
-/// Uppercase small section caption with an optional right-aligned action.
-pub fn section_header(ui: &mut Ui, title: &str, count: Option<usize>) {
+/// Sidebar group caption ("Branches", "Tags"): small, semibold, secondary.
+pub fn section_header(ui: &mut Ui, title: &str) {
     let p = theme::palette(ui.ctx());
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(title.to_uppercase())
-                .font(theme::semibold(10.5))
-                .color(p.faint),
-        );
-        if let Some(n) = count {
-            ui.label(
-                egui::RichText::new(n.to_string())
-                    .font(theme::semibold(10.5))
-                    .color(p.faint),
-            );
-        }
-    });
+    ui.label(
+        egui::RichText::new(title)
+            .font(theme::semibold(11.0))
+            .color(p.faint),
+    );
 }
 
-/// Accent-filled primary button.
+/// Accent-filled default button.
 pub fn primary_button(ui: &mut Ui, text: &str, enabled: bool) -> Response {
     let p = theme::palette(ui.ctx());
     let btn = egui::Button::new(
@@ -243,27 +247,12 @@ pub fn primary_button(ui: &mut Ui, text: &str, enabled: bool) -> Response {
     .fill(if enabled { p.accent } else { p.raised })
     .stroke(Stroke::NONE)
     .corner_radius(CornerRadius::same(6))
-    .min_size(Vec2::new(0.0, 30.0));
+    .min_size(Vec2::new(72.0, 24.0));
     ui.add_enabled(enabled, btn)
 }
 
-/// Danger button for destructive confirmations.
-pub fn danger_button(ui: &mut Ui, text: &str) -> Response {
-    let p = theme::palette(ui.ctx());
-    ui.add(
-        egui::Button::new(
-            egui::RichText::new(text)
-                .font(theme::semibold(13.0))
-                .color(Color32::WHITE),
-        )
-        .fill(p.red)
-        .stroke(Stroke::NONE)
-        .min_size(Vec2::new(0.0, 30.0)),
-    )
-}
-
 pub fn secondary_button(ui: &mut Ui, text: &str) -> Response {
-    ui.add(egui::Button::new(text).min_size(Vec2::new(0.0, 30.0)))
+    ui.add(egui::Button::new(text).min_size(Vec2::new(72.0, 24.0)))
 }
 
 // ── Toasts ───────────────────────────────────────────────────────────────────
@@ -279,71 +268,119 @@ pub struct Toast {
     pub text: String,
     pub kind: ToastKind,
     pub born: Instant,
+    /// Shows an Undo button that takes back the latest undoable action.
+    pub undoable: bool,
 }
 
 impl Toast {
     fn ttl(&self) -> Duration {
-        match self.kind {
-            ToastKind::Error => Duration::from_secs(9),
+        match (self.kind, self.undoable) {
+            (ToastKind::Error, _) => Duration::from_secs(9),
+            (_, true) => Duration::from_secs(8),
             _ => Duration::from_secs(4),
         }
     }
 }
 
-/// Stack of transient notifications in the bottom-right corner. Clicking a
-/// toast dismisses it.
-pub fn show_toasts(ctx: &egui::Context, toasts: &mut Vec<Toast>) {
+/// Notifications stacked in the bottom-right corner, clear of the commit
+/// composer. Each is measured first and
+/// pinned at a fixed position (an auto-sized, anchored area drifts while it
+/// settles, which makes buttons inside it hard to click). Plain toasts
+/// dismiss on click; undoable ones carry an Undo button. Returns true when
+/// Undo was pressed.
+pub fn show_toasts(ctx: &egui::Context, toasts: &mut Vec<Toast>) -> bool {
     toasts.retain(|t| t.born.elapsed() < t.ttl());
     if toasts.is_empty() {
-        return;
+        return false;
     }
     let p = theme::palette(ctx);
+    let screen = ctx.content_rect();
+    let fill = ctx.global_style().visuals.window_fill;
+    let shadow = ctx.global_style().visuals.popup_shadow;
     let mut dismiss = None;
-    egui::Area::new(egui::Id::new("toasts"))
-        .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -20.0))
-        .order(egui::Order::Foreground)
-        .interactable(true)
-        .show(ctx, |ui| {
-            ui.set_max_width(460.0);
-            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                for (i, t) in toasts.iter().enumerate() {
-                    let (glyph, color) = match t.kind {
-                        ToastKind::Info => (icon::INFO, p.accent),
-                        ToastKind::Success => (icon::CHECK_CIRCLE, p.green),
-                        ToastKind::Error => (icon::WARNING, p.red),
-                    };
-                    let resp = egui::Frame::new()
-                        .fill(p.raised)
-                        .stroke(Stroke::new(1.0, p.border))
-                        .corner_radius(CornerRadius::same(10))
-                        .inner_margin(egui::Margin::symmetric(14, 10))
-                        .shadow(ctx.global_style().visuals.popup_shadow)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(glyph)
-                                        .font(FontId::proportional(16.0))
-                                        .color(color),
-                                );
-                                ui.add(
-                                    egui::Label::new(egui::RichText::new(&t.text).color(p.text))
-                                        .wrap(),
-                                );
-                            });
-                        })
-                        .response
-                        .interact(Sense::click());
-                    if resp.clicked() {
-                        dismiss = Some(i);
+    let mut undo = false;
+    let mut bottom = screen.bottom() - 20.0;
+
+    for (i, t) in toasts.iter().enumerate().rev() {
+        let (glyph, color) = match t.kind {
+            ToastKind::Info => (icon::INFO, p.muted),
+            ToastKind::Success => (icon::CHECK_CIRCLE, p.green),
+            ToastKind::Error => (icon::WARNING_CIRCLE, p.red),
+        };
+        let galley =
+            ctx.fonts_mut(|f| f.layout(t.text.clone(), FontId::proportional(13.0), p.text, 440.0));
+        let undo_w = if t.undoable { 52.0 } else { 0.0 };
+        let size = Vec2::new(
+            14.0 + 22.0 + galley.size().x + undo_w + 14.0,
+            (galley.size().y + 18.0).max(36.0),
+        );
+        let rect = Rect::from_min_size(
+            Pos2::new(screen.right() - 20.0 - size.x, bottom - size.y),
+            size,
+        );
+        bottom = rect.top() - 8.0;
+
+        egui::Area::new(egui::Id::new(("toast", i)))
+            .fixed_pos(rect.min)
+            .order(egui::Order::Foreground)
+            .interactable(true)
+            .show(ctx, |ui| {
+                let painter = ui.painter();
+                painter.add(shadow.as_shape(rect, CornerRadius::same(12)));
+                painter.rect_filled(rect, CornerRadius::same(12), fill);
+                painter.rect_stroke(
+                    rect,
+                    CornerRadius::same(12),
+                    Stroke::new(1.0, p.border),
+                    StrokeKind::Inside,
+                );
+                painter.text(
+                    Pos2::new(rect.left() + 22.0, rect.center().y),
+                    Align2::CENTER_CENTER,
+                    glyph,
+                    FontId::proportional(15.0),
+                    color,
+                );
+                let gs = galley.size();
+                painter.galley(
+                    Pos2::new(rect.left() + 36.0, rect.center().y - gs.y / 2.0),
+                    galley.clone(),
+                    p.text,
+                );
+                let whole = ui.interact(rect, ui.id().with("toast_bg"), Sense::click());
+                if t.undoable {
+                    let ur = Rect::from_min_max(
+                        Pos2::new(rect.right() - 14.0 - undo_w + 8.0, rect.top()),
+                        Pos2::new(rect.right() - 6.0, rect.bottom()),
+                    );
+                    let b = ui
+                        .interact(ur, ui.id().with("toast_undo"), Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    ui.painter().text(
+                        ur.center(),
+                        Align2::CENTER_CENTER,
+                        "Undo",
+                        theme::semibold(12.5),
+                        if b.hovered() {
+                            p.accent.lerp_to_gamma(p.text, 0.2)
+                        } else {
+                            p.accent
+                        },
+                    );
+                    if b.clicked() {
+                        undo = true;
                     }
-                    ui.add_space(6.0);
+                } else if whole.clicked() {
+                    dismiss = Some(i);
                 }
+                ui.allocate_rect(rect, Sense::hover());
             });
-        });
+    }
     if let Some(i) = dismiss {
         toasts.remove(i);
     }
     ctx.request_repaint_after(Duration::from_millis(250));
+    undo
 }
 
 /// Lay out one line of text, cut with "…" if it's wider than `max_width`.

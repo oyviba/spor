@@ -71,32 +71,35 @@ To run it without bundling (works on Linux and Windows too):
 cargo run --release --features gui --bin spor-app -- /path/to/repo
 ```
 
-The window is laid out like a desktop git client:
+The app follows macOS conventions rather than a classic git GUI:
 
-- **Toolbar** — repository and branch switchers (type to filter branches),
-  then Fetch, Pull, Push (with ahead/behind counts), Branch, Stash and Pop,
-  and on the right Pull request and Refresh
-- **Sidebar** — local branches, remote branches per remote, and tags. Click
-  to jump to a branch's tip, double-click to check it out, right-click for
-  more
-- **Commit list** — the timeline graph with branch/tag pills (a local branch
-  and its remote twin share one pill), author avatars, dates and SHAs. When
-  the working tree is dirty, an *Uncommitted changes* row sits on top
-- **Inspector** — for a commit: message, author, SHA, parents and changed
-  files; for uncommitted changes: unstaged/staged files with hover actions
-  (stage, unstage, discard) and a commit composer (summary + description,
-  ⌘⏎ to commit)
-- **Diff** — the selected file with line numbers and highlighted
-  additions/removals
+- **Two views, picked in the sidebar** — **Changes** (⌘1) is what you're
+  working on: tick files to include them, write a summary and description,
+  ⌘↩ to commit. **History** (⌘2) is a quiet, Mail-style timeline with a
+  thin graph; select a commit to see its message, files and diffs
+- **Sidebar** — the two views, then Branches, Remotes, Tags and Stashes.
+  Click a branch to show it in History, double-click to check it out
+- **Unified title bar** — the repository and branch as title and subtitle
+  (click either to switch), New Branch, and one **Sync** button that
+  fetches, then pulls or pushes as needed (or publishes a new branch). The
+  menu next to it has Fetch, Pull and Push on their own
+- **Undo instead of confirmations** — discarding changes, staging and
+  committing all happen immediately and can be taken back with ⌘Z or the
+  Undo button in the notification (a commit stops being undoable once it's
+  pushed)
+- **Diffs** — unified or side by side
+- **Sheets** for the few decisions that need input (new branch name,
+  stashing before a switch); light and dark appearance follows the system
+  or can be set from the repository menu
 
-Open a repository with **Open…** (⌘O), by dropping a folder on the window,
-from the recent list on the start screen, or by passing a path. Keyboard:
-`j`/`k` or arrows move through commits, `Enter` checks out, ⌘R refreshes.
-Appearance follows the system; pick Light or Dark in the repository menu.
+Open a repository with ⌘O, from the welcome window's recent list, by
+dropping a folder on the window, or by passing a path. Keyboard: `j`/`k` or
+arrows move through the current list, `Return` checks out the selected
+commit's branch, `Space` ticks the selected file, ⌘R refreshes.
 
-Pull and push run in the background. The app has no terminal, so
-credentials must come from a helper (macOS keychain, ssh-agent); a push that
-would need a password fails with the reason instead of hanging.
+Sync runs in the background. The app has no terminal, so credentials must
+come from a helper (macOS keychain, ssh-agent); a sync that would need a
+password fails with the reason instead of hanging.
 
 PR badges work the same as in the terminal (the app finds Homebrew's `gh` even
 when launched from Finder).
@@ -166,11 +169,12 @@ Terminal UI (`spor`):
 
 Mac app (`spor-app`, `--features gui`):
 
-- `src/gui/main.rs` — app state, git actions, background fetch/pull/push
-- `src/gui/views.rs` — welcome screen, workspace layout, commit list
-- `src/gui/graph_view.rs` — paints timeline rows (lanes, curves, ref pills)
-- `src/gui/toolbar.rs`, `sidebar.rs`, `inspector.rs`, `diff_view.rs`,
-  `modals.rs` — the panes and dialogs
+- `src/gui/main.rs` — app state, git actions, undo, background sync
+- `src/gui/views.rs` — welcome window and workspace layout
+- `src/gui/changes.rs`, `history.rs` — the two main views
+- `src/gui/graph_view.rs` — paints History rows (thin graph, ref tags)
+- `src/gui/titlebar.rs`, `sidebar.rs`, `diff_view.rs`, `modals.rs` — title
+  bar, source list, diff viewer, sheets
 - `src/gui/theme.rs` — light/dark palettes, fonts (Inter, JetBrains Mono,
   Phosphor icons)
 - `scripts/bundle-macos.sh` — wraps the binary into `Spor.app`
