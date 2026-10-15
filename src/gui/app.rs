@@ -48,6 +48,7 @@ actions!(
         CheckoutSelected,
         Sync,
         ToggleDiffMode,
+        EditTheme,
         Quit,
         NewWorkspace,
         Workspace1,
@@ -106,6 +107,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-shift-n", NewBranch, Some("Spor")),
         KeyBinding::new("secondary-shift-s", Sync, Some("Spor")),
         KeyBinding::new("secondary-q", Quit, Some("Spor")),
+        KeyBinding::new("secondary-,", EditTheme, Some("Spor")),
         KeyBinding::new("down", OlderCommit, Some("SporHistory")),
         KeyBinding::new("j", OlderCommit, Some("SporHistory")),
         KeyBinding::new("up", NewerCommit, Some("SporHistory")),
@@ -1511,6 +1513,24 @@ impl Spor {
         self.appearance = appearance;
         theme::set(appearance, window, cx);
         cx.notify();
+    }
+
+    /// Open the theme editor in a sheet. Its Dark / Light switch previews
+    /// that variant; closing it goes back to the chosen appearance.
+    pub(crate) fn open_theme_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = cx.new(|cx| super::theme_editor::ThemeEditor::new(window, cx));
+        let spor = cx.entity().downgrade();
+        window.open_sheet(cx, move |sheet, _, _| {
+            let spor = spor.clone();
+            sheet
+                .title("Theme")
+                .size(gpui_kit::px(380.))
+                .overlay(false)
+                .child(editor.clone())
+                .on_close(move |_, window, cx| {
+                    let _ = spor.update(cx, |this, cx| theme::apply(this.appearance, window, cx));
+                })
+        });
     }
 
     pub(crate) fn toggle_repositories(&mut self, cx: &mut Context<Self>) {

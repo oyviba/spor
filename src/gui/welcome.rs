@@ -39,6 +39,24 @@ impl Spor {
             .child(div().flex_1().text_sm().child("Open Repository…"))
             .when_some(open_key, |this, key| this.child(key))
             .on_click(cx.listener(|this, _, window, cx| this.pick_repo(window, cx)));
+        let theme_key = Kbd::binding_for_action(&EditTheme, Some("Spor"), window);
+        let theme_action = h_flex()
+            .id("welcome-theme")
+            .w_full()
+            .px_3()
+            .py_2()
+            .gap_3()
+            .rounded(theme.radius)
+            .hover(|this| this.bg(theme.list_hover))
+            .cursor_pointer()
+            .child(
+                Icon::new(IconName::Palette)
+                    .small()
+                    .text_color(theme.muted_foreground),
+            )
+            .child(div().flex_1().text_sm().child("Edit Theme…"))
+            .when_some(theme_key, |this, key| this.child(key))
+            .on_click(cx.listener(|this, _, window, cx| this.open_theme_editor(window, cx)));
 
         let workspace = self.workspaces.current();
         let workspace_name = workspace.name.clone();
@@ -112,6 +130,7 @@ impl Spor {
                             .gap_1()
                             .child(section_title("Get Started", &theme))
                             .child(action)
+                            .child(theme_action)
                             .child(
                                 div()
                                     .px_3()

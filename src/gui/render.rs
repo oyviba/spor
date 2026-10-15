@@ -92,6 +92,9 @@ impl Render for Spor {
             .on_action(cx.listener(|this, _: &CheckoutSelected, window, cx| {
                 this.checkout_selected(window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &EditTheme, window, cx| this.open_theme_editor(window, cx)),
+            )
             .on_action(|_: &Quit, _, cx| cx.quit())
             .on_action(
                 cx.listener(|this, _: &NewWorkspace, window, cx| this.new_workspace(window, cx)),
@@ -284,7 +287,15 @@ impl Spor {
                                         }),
                                 );
                             }
-                            menu
+                            let editor = theme_spor.clone();
+                            menu.separator()
+                                .item(PopupMenuItem::new("Edit Theme…").on_click(
+                                    move |_, window, cx| {
+                                        let _ = editor.update(cx, |this, cx| {
+                                            this.open_theme_editor(window, cx)
+                                        });
+                                    },
+                                ))
                         },
                     );
                     let close = spor.clone();

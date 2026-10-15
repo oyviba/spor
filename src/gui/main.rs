@@ -22,6 +22,7 @@ mod repo;
 mod repos_panel;
 mod support;
 mod theme;
+mod theme_editor;
 mod welcome;
 mod workspaces;
 

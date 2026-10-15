@@ -113,6 +113,13 @@ Open a repository with ⌘O, from the welcome page, by dropping a folder on
 the window, or by passing a path. Light and dark themes (based on One Light
 and One Dark) follow the system or can be set from the repository menu.
 
+The **theme editor** (⌘, or repository menu → Appearance → Edit Theme…)
+opens beside the window, which previews every change as you make it. Pick
+Dark or Light, start from a preset (Nord, Dracula, Midnight; Solarized,
+Paper) and adjust surfaces, text, accent, list, border and diff colors,
+corner radius and font size. Edits are saved as overrides on top of the
+Spor themes; Reset goes back to them, and Copy as JSON gives a theme file.
+
 Sync runs in the background. The app has no terminal, so credentials must
 come from a helper (macOS keychain, ssh-agent); a sync that would need a
 password fails with the reason instead of hanging.
@@ -195,7 +202,9 @@ Mac app (`spor-app`, `--features gui`):
 - `src/gui/graph.rs` — paints the commit graph
 - `src/gui/welcome.rs` — the page shown when no repository is open
 - `src/gui/repo.rs` — snapshot of a repository for the views
-- `src/gui/theme.rs`, `assets/themes/spor.json` — Spor Light / Spor Dark
+- `src/gui/theme.rs`, `assets/themes/spor.json` — Spor Light / Spor Dark,
+  and the user's overrides
+- `src/gui/theme_editor.rs` — the theme editor
 - `scripts/bundle-macos.sh` — wraps the binary into `Spor.app`
 
 ## License
