@@ -15,6 +15,7 @@ mod changes_view;
 mod git_panel;
 mod graph;
 mod history;
+mod history_options;
 mod rail;
 mod render;
 mod repo;

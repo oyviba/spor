@@ -81,9 +81,15 @@ The layout follows Zed's:
   repository adds it to the current workspace, or jumps to the workspace it
   already belongs to; the repository menu in the title bar switches between
   a workspace's repositories, moves one to another workspace or removes it
+- **Repositories** — the workspace's repositories in a sidebar beside the
+  rail (⌘⇧E hides it); the open one shows its branch and change count.
+  Click to switch, right-click to reveal or remove one
 - **Title bar** — repository and branch pickers, and the branch's PR
-- **Left dock** — the **git panel** (⌘⇧G): a staging checklist (tracked and
-  untracked), a commit message editor (⌘↩ commits), and one **Sync** button
+- **Dock** — on the right by default; the status bar button moves it to the
+  left. It holds the **git panel** (⌘⇧G): changed files split into Staged
+  and Unstaged — click a file to move it across (and see its diff), so a
+  commit takes exactly the files you pick — a commit message editor
+  (⌘↩ commits), and one **Sync** button
   that fetches, then pulls or pushes as needed (or publishes a new branch);
   or the **branch list** (⌘⇧B) with local and remote branches, tags and
   stashes — click to show a branch in History, double-click to check it out.
@@ -91,7 +97,12 @@ The layout follows Zed's:
 - **Center tabs** — **Uncommitted Changes** (⌘⇧C), every changed file in one
   scrolling, syntax-highlighted diff; **History** (⌘⇧H), the commit graph
   over the selected commit's message and diff (`j`/`k` or arrows move,
-  `Return` checks out)
+  `Return` checks out). Branches and tags get their own column: a laptop
+  marks a local branch, a cloud a branch on the remote (one label when it's
+  both), and the default branch is filled in, with a bold lane. The ⚙ menu
+  in the header picks columns, labels, row height and lane width. **Drag a
+  branch** onto another branch's row to merge it there (⌘Z undoes) or open
+  a pull request between the two
 - **Status bar** — dock toggles, the branch with ahead/behind counts,
   background jobs, and unified / split diffs
 - **Undo instead of confirmations** — discarding changes, staging and
@@ -177,8 +188,10 @@ Mac app (`spor-app`, `--features gui`):
 - `src/gui/workspaces.rs` — workspaces and their repositories, persisted
 - `src/gui/render.rs` — window frame: title bar, dock + center, status bar
 - `src/gui/rail.rs` — the workspace rail
+- `src/gui/repos_panel.rs` — the repository sidebar
 - `src/gui/git_panel.rs`, `branches.rs` — the two dock panels
 - `src/gui/changes_view.rs`, `history.rs` — the two center tabs
+- `src/gui/history_options.rs` — the History graph's saved options
 - `src/gui/graph.rs` — paints the commit graph
 - `src/gui/welcome.rs` — the page shown when no repository is open
 - `src/gui/repo.rs` — snapshot of a repository for the views

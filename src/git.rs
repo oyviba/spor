@@ -543,6 +543,37 @@ pub fn uncommit() -> Result<(), String> {
     run_ok(&["reset", "--soft", "HEAD~1"]).map(|_| ())
 }
 
+/// Merge `source` into the checked-out branch (fast-forward when possible).
+pub fn merge(source: &str) -> Result<(), String> {
+    let out = run(&["merge", "--no-edit", source])?;
+    if out.status.success() {
+        return Ok(());
+    }
+    // Conflicts are reported on stdout, refusals on stderr.
+    let mut msg = String::from_utf8_lossy(&out.stderr).into_owned();
+    if msg.trim().is_empty() {
+        msg = String::from_utf8_lossy(&out.stdout).into_owned();
+    }
+    Err(msg)
+}
+
+/// Is a merge stopped on conflicts?
+pub fn merge_in_progress() -> bool {
+    run(&["rev-parse", "--verify", "--quiet", "MERGE_HEAD"])
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+pub fn merge_abort() -> Result<(), String> {
+    run_ok(&["merge", "--abort"]).map(|_| ())
+}
+
+/// Move the current branch back to `sha`, keeping uncommitted changes
+/// (git refuses if they'd be overwritten).
+pub fn reset_keep(sha: &str) -> Result<(), String> {
+    run_ok(&["reset", "--keep", sha]).map(|_| ())
+}
+
 /// Number of stash entries.
 pub fn stash_count() -> usize {
     run_ok(&["stash", "list"])

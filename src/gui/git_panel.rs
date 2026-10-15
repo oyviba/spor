@@ -328,6 +328,7 @@ fn render_row(row: &Row, ix: usize, spor: gpui_kit::WeakEntity<Spor>, cx: &mut A
             let menu_spor = spor.clone();
             h_flex()
                 .id(SharedString::from(format!("git-entry-{}", change.path)))
+                .w_full()
                 .h(px(26.))
                 .px_3()
                 .gap_2()

@@ -120,6 +120,8 @@ pub struct Snapshot {
     pub branches: Vec<Branch>,
     /// Stash entries, newest first, as their messages.
     pub stashes: Vec<String>,
+    /// The branch PRs target: origin's HEAD, else main/master/trunk.
+    pub default_branch: Option<String>,
 }
 
 impl Snapshot {
@@ -169,6 +171,7 @@ impl Snapshot {
             remotes,
             branches,
             stashes: git::stash_list(),
+            default_branch: git::default_base_branch(),
         })
     }
 
@@ -187,6 +190,13 @@ impl Snapshot {
             .find(|r| *r == "origin")
             .or(self.remotes.first())
             .cloned()
+    }
+
+    /// Is there a remote-tracking branch for local branch `name`?
+    pub fn is_published(&self, name: &str) -> bool {
+        self.branches
+            .iter()
+            .any(|b| b.is_remote && self.without_remote(&b.name) == Some(name))
     }
 
     /// Strip a configured remote prefix: `origin/feat/x` → `feat/x`.
