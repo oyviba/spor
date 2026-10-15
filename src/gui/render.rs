@@ -98,7 +98,20 @@ impl Render for Spor {
             .on_action(|_: &Quit, _, cx| cx.quit())
             .on_action(
                 cx.listener(|this, _: &NewWorkspace, window, cx| this.new_workspace(window, cx)),
-            );
+            )
+            .on_action(
+                cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ShowShortcuts, window, cx| this.open_shortcuts(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &Fetch, window, cx| this.fetch(window, cx)))
+            .on_action(cx.listener(|this, _: &Pull, window, cx| this.pull(window, cx)))
+            .on_action(cx.listener(|this, _: &Push, window, cx| this.push(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenPullRequest, window, cx| {
+                this.open_pull_request(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &StashChanges, window, cx| this.stash(window, cx)));
         macro_rules! workspace_keys {
             ($root:expr, $($action:ident => $ix:expr),*) => {
                 $root$(.on_action(cx.listener(|this, _: &$action, window, cx| {
@@ -191,6 +204,14 @@ impl Spor {
             .map(|b| b.name.clone())
             .collect();
         let appearance = self.appearance;
+        let behind = repo.tracking.behind;
+        let upstream = repo
+            .tracking
+            .upstream
+            .clone()
+            .unwrap_or_else(|| "the remote".into());
+        let sync_label = self.sync_label();
+        let job = self.job;
         let pr = repo
             .tracking
             .branch
@@ -298,6 +319,22 @@ impl Spor {
                                 ))
                         },
                     );
+                    let palette = spor.clone();
+                    let shortcuts = spor.clone();
+                    menu = menu
+                        .separator()
+                        .item(PopupMenuItem::new("Search Pull Requests… (⌘P)").on_click(
+                            move |_, window, cx| {
+                                let _ =
+                                    palette.update(cx, |this, cx| this.open_palette(window, cx));
+                            },
+                        ))
+                        .item(PopupMenuItem::new("Keyboard Shortcuts (⌘/)").on_click(
+                            move |_, window, cx| {
+                                let _ = shortcuts
+                                    .update(cx, |this, cx| this.open_shortcuts(window, cx));
+                            },
+                        ));
                     let close = spor.clone();
                     menu.separator()
                         .item(PopupMenuItem::new("Close Repository").on_click(
@@ -382,6 +419,22 @@ impl Spor {
                     )
                     .child(branch_menu)
                     .child(div().flex_1())
+                    // Hard to miss: the branch is behind its upstream.
+                    .when(behind > 0, |this| {
+                        this.child(
+                            Button::new("title-pull")
+                                .info()
+                                .small()
+                                .icon(IconName::ArrowDown)
+                                .label(sync_label)
+                                .loading(job.is_some())
+                                .tooltip(format!(
+                                    "{upstream} has {} you don't have yet (⌘⇧S)",
+                                    plural(behind, "commit")
+                                ))
+                                .on_click(cx.listener(|this, _, window, cx| this.sync(window, cx))),
+                        )
+                    })
                     .when_some(pr, |this, pr| {
                         let spor = spor.clone();
                         this.child(
@@ -489,13 +542,9 @@ impl Spor {
         let muted = cx.theme().muted_foreground;
         let dock = self.dock;
         let t = &repo.tracking;
-        let mut sync = Vec::new();
-        if t.ahead > 0 {
-            sync.push(format!("↑{}", t.ahead));
-        }
-        if t.behind > 0 {
-            sync.push(format!("↓{}", t.behind));
-        }
+        let ahead = (t.ahead > 0).then(|| format!("↑{}", t.ahead));
+        let behind = (t.behind > 0).then(|| format!("↓{} to pull", t.behind));
+        let blue = cx.theme().blue;
         let branch = t.branch.clone().unwrap_or_else(|| "detached".into());
         let commits = plural(repo.rows.len(), "commit");
         let mode = self.diff_mode;
@@ -568,8 +617,19 @@ impl Spor {
                             .text_color(muted)
                             .child(Icon::empty().path(icon::GIT_BRANCH).xsmall())
                             .child(branch)
-                            .when(!sync.is_empty(), |this| this.child(sync.join(" "))),
-                    ),
+                            .children(ahead),
+                    )
+                    .when_some(behind, |this, behind| {
+                        this.child(
+                            Button::new("status-pull")
+                                .ghost()
+                                .xsmall()
+                                .label(behind)
+                                .text_color(blue)
+                                .tooltip("Pull the new commits (⌘⇧S)")
+                                .on_click(cx.listener(|this, _, window, cx| this.sync(window, cx))),
+                        )
+                    }),
             )
             .right(
                 h_flex()

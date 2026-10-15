@@ -5,7 +5,8 @@
 
 use super::assets::icon;
 use super::history_options::HistoryOptions;
-use super::repo::{self, Change, Snapshot};
+use super::palette::PrSearch;
+use super::repo::{self, Change, RepoHead, Snapshot};
 use super::support::{self, first_line, plural};
 use super::theme::{self, Appearance};
 use super::workspaces::Workspaces;
@@ -26,7 +27,11 @@ use spor::git::{self, CommitDetails, StatusEntry};
 use spor::remote::{self, PrInfo};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// How often the open repository is fetched in the background, so the app
+/// can tell when there's something to pull.
+const AUTO_FETCH_EVERY: Duration = Duration::from_secs(5 * 60);
 
 actions!(
     spor,
@@ -51,6 +56,13 @@ actions!(
         EditTheme,
         Quit,
         NewWorkspace,
+        OpenPalette,
+        ShowShortcuts,
+        Fetch,
+        Pull,
+        Push,
+        OpenPullRequest,
+        StashChanges,
         Workspace1,
         Workspace2,
         Workspace3,
@@ -81,13 +93,8 @@ pub(crate) fn workspace_action(ix: usize) -> Option<Box<dyn gpui_kit::Action>> {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("secondary-b", ToggleDock, Some("Spor")),
-        KeyBinding::new("secondary-shift-e", ToggleRepositories, Some("Spor")),
-        KeyBinding::new("secondary-shift-g", ShowGitPanel, Some("Spor")),
-        KeyBinding::new("secondary-shift-b", ShowBranches, Some("Spor")),
-        KeyBinding::new("secondary-shift-c", ShowChanges, Some("Spor")),
-        KeyBinding::new("secondary-shift-h", ShowHistory, Some("Spor")),
-        // Like Slack: ⌘1–⌘9 jump to a workspace.
+        // Like Slack: ⌘1–⌘9 jump to a workspace. Fixed; everything else is
+        // in `palette::SHORTCUTS` and can be reassigned (`keymap`).
         KeyBinding::new("secondary-1", Workspace1, Some("Spor")),
         KeyBinding::new("secondary-2", Workspace2, Some("Spor")),
         KeyBinding::new("secondary-3", Workspace3, Some("Spor")),
@@ -97,23 +104,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-7", Workspace7, Some("Spor")),
         KeyBinding::new("secondary-8", Workspace8, Some("Spor")),
         KeyBinding::new("secondary-9", Workspace9, Some("Spor")),
-        KeyBinding::new("secondary-shift-w", NewWorkspace, Some("Spor")),
-        KeyBinding::new("secondary-r", Refresh, Some("Spor")),
-        KeyBinding::new("secondary-z", UndoLast, Some("Spor")),
-        KeyBinding::new("secondary-enter", Commit, Some("Spor")),
-        // The text area binds ⌘↩ itself; this more specific binding wins.
-        KeyBinding::new("secondary-enter", Commit, Some("CommitEditor > Input")),
-        KeyBinding::new("secondary-o", OpenRepository, Some("Spor")),
-        KeyBinding::new("secondary-shift-n", NewBranch, Some("Spor")),
-        KeyBinding::new("secondary-shift-s", Sync, Some("Spor")),
-        KeyBinding::new("secondary-q", Quit, Some("Spor")),
-        KeyBinding::new("secondary-,", EditTheme, Some("Spor")),
-        KeyBinding::new("down", OlderCommit, Some("SporHistory")),
-        KeyBinding::new("j", OlderCommit, Some("SporHistory")),
-        KeyBinding::new("up", NewerCommit, Some("SporHistory")),
-        KeyBinding::new("k", NewerCommit, Some("SporHistory")),
-        KeyBinding::new("enter", CheckoutSelected, Some("SporHistory")),
     ]);
+    super::keymap::init(cx);
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -218,6 +210,9 @@ fn dialog_footer(id: &'static str, action: &'static str) -> impl gpui_kit::IntoE
 /// Marker type identifying the undo notification, so a newer one replaces it.
 struct UndoNote;
 
+/// Marker type for the "new commits to pull" notification.
+struct PullNote;
+
 pub struct Spor {
     pub(crate) repo: Option<Snapshot>,
     pub(crate) open_error: Option<String>,
@@ -240,11 +235,22 @@ pub struct Spor {
     pub(crate) diff_mode: DiffMode,
     pub(crate) job: Option<&'static str>,
     pub(crate) prs: HashMap<String, PrInfo>,
+    /// Every PR, for the ⌘P search, and the repository it belongs to.
+    pub(crate) pr_search: PrSearch,
+    pub(crate) pr_search_root: Option<PathBuf>,
+    /// Branch and upstream counts of the workspace's other repositories,
+    /// for the repository sidebar.
+    pub(crate) repo_heads: HashMap<PathBuf, RepoHead>,
+    /// The last background fetch: which repository, and when.
+    last_fetch: Option<(PathBuf, Instant)>,
     pub(crate) appearance: Appearance,
     undo: Vec<(String, Undo)>,
     fingerprint: Option<String>,
     _job_task: Task<()>,
     _pr_task: Task<()>,
+    pub(crate) _pr_search_task: Task<()>,
+    _heads_task: Task<()>,
+    _fetch_task: Task<()>,
     _commit_task: Task<()>,
     _poll_task: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -300,11 +306,18 @@ impl Spor {
             diff_mode,
             job: None,
             prs: HashMap::new(),
+            pr_search: PrSearch::Idle,
+            pr_search_root: None,
+            repo_heads: HashMap::new(),
+            last_fetch: None,
             appearance,
             undo: Vec::new(),
             fingerprint: None,
             _job_task: Task::ready(()),
             _pr_task: Task::ready(()),
+            _pr_search_task: Task::ready(()),
+            _heads_task: Task::ready(()),
+            _fetch_task: Task::ready(()),
             _commit_task: Task::ready(()),
             _poll_task: Task::ready(()),
             _subscriptions: subscriptions,
@@ -314,6 +327,8 @@ impl Spor {
             this.open_repo(&dir, window, cx);
         }
         this.start_polling(window, cx);
+        this.start_auto_fetch(window, cx);
+        this.refresh_repo_heads(cx);
         this
     }
 
@@ -386,6 +401,7 @@ impl Spor {
                     self.select_commit(head, cx);
                 }
                 self.fetch_prs(cx);
+                self.refresh_repo_heads(cx);
             }
             Err(e) => self.open_error = Some(e),
         }
@@ -399,6 +415,7 @@ impl Spor {
         self.undo.clear();
         self.fingerprint = None;
         window.set_window_title("Spor");
+        self.refresh_repo_heads(cx);
         cx.notify();
     }
 
@@ -614,6 +631,9 @@ impl Spor {
             Ok(snapshot) => {
                 let keep = self.commit.as_ref().map(|c| c.hash.clone());
                 self.fingerprint = repo::fingerprint(&root);
+                if let Some(old) = &self.repo {
+                    self.notice_new_commits(&old.tracking, &snapshot.tracking, window, cx);
+                }
                 let selected = keep
                     .and_then(|h| snapshot.rows.iter().position(|r| r.commit.hash == h))
                     .or_else(|| snapshot.head_row());
@@ -644,8 +664,18 @@ impl Spor {
     /// Watch the repository for changes made outside the app (an editor
     /// saving, a terminal commit) and reload when anything moves.
     fn start_polling(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut tick = 0u32;
         self._poll_task = cx.spawn_in(window, async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_secs(2)).await;
+            tick += 1;
+            // Other repositories change too (a terminal checkout, a pull).
+            if tick.is_multiple_of(15)
+                && this
+                    .update(cx, |this, cx| this.refresh_repo_heads(cx))
+                    .is_err()
+            {
+                break;
+            }
             let Ok(Some(root)) = this.read_with(cx, |this, _| {
                 (this.job.is_none()).then(|| this.repo.as_ref().map(|r| r.root.clone()))?
             }) else {
@@ -662,6 +692,107 @@ impl Spor {
             if alive.is_err() {
                 break;
             }
+        });
+    }
+
+    /// Fetch the open repository quietly now and then, so behind counts are
+    /// real and the app can say when there's something to pull. Failures
+    /// (offline, no credentials helper) stay silent; Sync reports them.
+    fn start_auto_fetch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._fetch_task = cx.spawn_in(window, async move |this, cx| loop {
+            let Ok(due) = this.read_with(cx, |this, _| {
+                let repo = this.repo.as_ref().filter(|r| !r.remotes.is_empty())?;
+                let fresh = this.last_fetch.as_ref().is_some_and(|(root, at)| {
+                    *root == repo.root && at.elapsed() < AUTO_FETCH_EVERY
+                });
+                (this.job.is_none() && !fresh).then(|| repo.root.clone())
+            }) else {
+                break;
+            };
+            if let Some(root) = due {
+                let fetched = root.clone();
+                let _ = this.update(cx, |this, _| {
+                    this.last_fetch = Some((fetched, Instant::now()))
+                });
+                let _ = cx
+                    .background_spawn(async move {
+                        support::git_network(&root, &["fetch", "--all", "--prune"])
+                    })
+                    .await;
+                // The poll loop sees the moved refs and reloads.
+            }
+            cx.background_executor()
+                .timer(Duration::from_secs(10))
+                .await;
+        });
+    }
+
+    /// Say so when the branch's upstream gained commits, with a Pull button.
+    fn notice_new_commits(
+        &self,
+        old: &git::TrackingInfo,
+        new: &git::TrackingInfo,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if new.branch.is_none() || old.branch != new.branch || new.behind <= old.behind {
+            return;
+        }
+        let upstream = new.upstream.clone().unwrap_or_else(|| "the remote".into());
+        let branch = new.branch.clone().unwrap_or_default();
+        let text = if new.ahead > 0 {
+            format!(
+                "{upstream} has {} you don't — {branch} has diverged, so merge or rebase",
+                plural(new.behind, "new commit")
+            )
+        } else {
+            format!(
+                "{upstream} has {} to pull",
+                plural(new.behind, "new commit")
+            )
+        };
+        let spor = cx.entity().downgrade();
+        let can_pull = new.ahead == 0;
+        window.remove_notification::<PullNote>(cx);
+        window.push_notification(
+            Notification::info(text)
+                .id::<PullNote>()
+                .when(can_pull, |note| {
+                    note.action(move |_, _, _| {
+                        let spor = spor.clone();
+                        Button::new("pull-now")
+                            .label("Pull")
+                            .small()
+                            .ghost()
+                            .on_click(move |_, window, cx| {
+                                window.remove_notification::<PullNote>(cx);
+                                let _ = spor.update(cx, |this, cx| this.pull(window, cx));
+                            })
+                    })
+                }),
+            cx,
+        );
+    }
+
+    /// Read the branch of every repository in the active workspace, in the
+    /// background, for the repository sidebar.
+    pub(crate) fn refresh_repo_heads(&mut self, cx: &mut Context<Self>) {
+        let roots = self.workspaces.current().repos.clone();
+        self._heads_task = cx.spawn(async move |this, cx| {
+            let heads = cx
+                .background_spawn(async move {
+                    roots
+                        .into_iter()
+                        .filter_map(|root| repo::head(&root).map(|h| (root, h)))
+                        .collect::<HashMap<_, _>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.repo_heads != heads {
+                    this.repo_heads = heads;
+                    cx.notify();
+                }
+            });
         });
     }
 

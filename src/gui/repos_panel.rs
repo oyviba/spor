@@ -4,7 +4,7 @@
 
 use super::app::*;
 use super::assets::icon;
-use super::support::tildify;
+use super::support::{plural, tildify};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
@@ -37,6 +37,8 @@ impl Spor {
                 .unwrap_or_else(|| "detached".into())
         });
         let changes = self.repo.as_ref().map_or(0, |r| r.changes.len());
+        let open_behind = self.repo.as_ref().map_or(0, |r| r.tracking.behind);
+        let heads = self.repo_heads.clone();
 
         let header = h_flex()
             .h(px(36.))
@@ -91,13 +93,23 @@ impl Spor {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.display().to_string());
-                // The open repository shows its branch; the others where
-                // they live, since several can share a name.
-                let detail = match (&branch, current) {
-                    (Some(branch), true) => branch.clone(),
-                    _ => tildify(path.parent().unwrap_or(&path)),
+                // Every repository shows its branch: the open one live, the
+                // others as last read. The tooltip says where it lives.
+                let head = heads.get(&path);
+                let detail = match (&branch, current, head) {
+                    (Some(branch), true, _) => Some(branch.clone()),
+                    (_, false, Some(head)) => Some(head.label()),
+                    _ => None,
                 };
-                let tip: SharedString = tildify(&path).into();
+                let behind = match (current, head) {
+                    (true, _) => open_behind,
+                    (false, head) => head.map_or(0, |h| h.behind),
+                };
+                let mut tip = tildify(&path);
+                if behind > 0 {
+                    tip = format!("{tip}\n{} to pull", plural(behind, "new commit"));
+                }
+                let tip: SharedString = tip.into();
                 let open_path = path.clone();
                 let menu_path = path.clone();
                 let menu_spor = spor.clone();
@@ -139,12 +151,22 @@ impl Spor {
                                     .gap_1()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .when(current && branch.is_some(), |this| {
+                                    .when_some(detail, |this, detail| {
                                         this.child(Icon::empty().path(icon::GIT_BRANCH).xsmall())
-                                    })
-                                    .child(div().min_w_0().truncate().child(detail)),
+                                            .child(div().min_w_0().truncate().child(detail))
+                                    }),
                             ),
                     )
+                    .when(behind > 0, |this| {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .font_medium()
+                                .text_color(theme.blue)
+                                .child(format!("↓{behind}")),
+                        )
+                    })
                     .when(current && changes > 0, |this| {
                         this.child(
                             div()

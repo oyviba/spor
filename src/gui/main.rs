@@ -16,6 +16,8 @@ mod git_panel;
 mod graph;
 mod history;
 mod history_options;
+mod keymap;
+mod palette;
 mod rail;
 mod render;
 mod repo;
