@@ -1,7 +1,3 @@
-mod color;
-mod git;
-mod graph;
-mod remote;
 mod ui;
 
 use crossterm::{
@@ -15,6 +11,8 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::sync::mpsc;
 use std::time::Duration;
+
+use spor::{git, graph, remote};
 
 use git::{Branch, FileStatus, StatusEntry, TrackingInfo};
 use graph::GraphRow;
@@ -153,7 +151,7 @@ impl App {
             Focus::Status => self
                 .status
                 .get(self.status_sel)
-                .and_then(|e| git::diff_file(&e.path, e.status.is_staged()).ok())
+                .and_then(|e| git::diff_entry(e).ok())
                 .unwrap_or_default(),
         };
     }

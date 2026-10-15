@@ -70,7 +70,18 @@ pub fn log_all(limit: usize) -> Result<Vec<Commit>, String> {
     let fmt = "%H%x1f%h%x1f%P%x1f%D%x1f%s%x1f%an%x1f%at%x1e";
     let n = format!("-n{limit}");
     let pretty = format!("--pretty=format:{fmt}");
-    let out = run_ok(&["log", "--all", "--date-order", &n, &pretty])?;
+    // Not `--all`: that would pull in refs/stash, whose internal "WIP on" /
+    // "index on" commits would show up as phantom branches.
+    let out = run_ok(&[
+        "log",
+        "--branches",
+        "--remotes",
+        "--tags",
+        "HEAD",
+        "--date-order",
+        &n,
+        &pretty,
+    ])?;
 
     let mut commits = Vec::new();
     for record in out.split('\x1e') {
@@ -291,6 +302,114 @@ pub fn diff_file(path: &str, staged: bool) -> Result<String, String> {
     }
 }
 
+/// Diff for one working-tree entry. Untracked files have nothing in the index
+/// to compare against, so they're shown as entirely new content.
+pub fn diff_entry(entry: &StatusEntry) -> Result<String, String> {
+    if entry.status != FileStatus::Untracked {
+        return diff_file(&entry.path, entry.status.is_staged());
+    }
+    let out = run(&["diff", "--no-index", "--", "/dev/null", &entry.path])?;
+    // --no-index exits 1 when the files differ — which, here, they always do.
+    match out.status.code() {
+        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        _ => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
+    }
+}
+
+/// Full message and authorship of one commit, for a details view.
+#[derive(Debug, Clone, Default)]
+pub struct CommitDetails {
+    pub author: String,
+    pub email: String,
+    pub author_time: i64,
+    pub committer: String,
+    pub commit_time: i64,
+    /// Author date in local time, formatted by git, e.g. "Oct 01, 2026 at 14:02".
+    pub date: String,
+    pub message: String,
+}
+
+pub fn commit_details(hash: &str) -> Result<CommitDetails, String> {
+    let out = run_ok(&[
+        "show",
+        "-s",
+        "--date=format-local:%b %d, %Y at %H:%M",
+        "--format=%an%x1f%ae%x1f%at%x1f%cn%x1f%ct%x1f%ad%x1f%B",
+        hash,
+    ])?;
+    Ok(parse_commit_details(&out))
+}
+
+fn parse_commit_details(out: &str) -> CommitDetails {
+    let mut f = out.splitn(7, '\x1f');
+    let mut next = || f.next().unwrap_or("").to_string();
+    CommitDetails {
+        author: next(),
+        email: next(),
+        author_time: next().trim().parse().unwrap_or(0),
+        committer: next(),
+        commit_time: next().trim().parse().unwrap_or(0),
+        date: next(),
+        message: next().trim_end().to_string(),
+    }
+}
+
+/// Flags that make patch output independent of the user's git config
+/// (`diff.noprefix`, `color.ui`, external diff tools, textconv filters).
+const PATCH_FLAGS: [&str; 6] = [
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "-M",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+];
+
+/// The patch a commit introduced, without the commit header. Merges are
+/// diffed against their first parent — what the merge brought into the
+/// branch — rather than git's combined-diff format.
+pub fn commit_patch(hash: &str, parents: &[String]) -> Result<String, String> {
+    let mut args: Vec<&str> = Vec::new();
+    match parents.first() {
+        Some(first) => {
+            args.push("diff");
+            args.extend(PATCH_FLAGS);
+            args.extend([first.as_str(), hash, "--"]);
+        }
+        None => {
+            args.extend(["show", "--format="]);
+            args.extend(PATCH_FLAGS);
+            args.extend([hash, "--"]);
+        }
+    }
+    run_ok(&args)
+}
+
+/// Everything not yet committed, as one patch: staged and unstaged changes
+/// to tracked files against HEAD, followed by each untracked file as new.
+pub fn uncommitted_patch(untracked: &[String]) -> Result<String, String> {
+    let mut args = vec!["diff"];
+    args.extend(PATCH_FLAGS);
+    // An unborn branch has no HEAD yet: then only the index has content.
+    let has_head = run(&["rev-parse", "--verify", "--quiet", "HEAD"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    args.push(if has_head { "HEAD" } else { "--cached" });
+    args.push("--");
+    let mut patch = run_ok(&args)?;
+    for path in untracked {
+        let mut args = vec!["diff", "--no-index"];
+        args.extend(PATCH_FLAGS);
+        args.extend(["--", "/dev/null", path.as_str()]);
+        let out = run(&args)?;
+        // --no-index exits 1 when the files differ — which, here, they do.
+        if matches!(out.status.code(), Some(0) | Some(1)) {
+            patch.push_str(&String::from_utf8_lossy(&out.stdout));
+        }
+    }
+    Ok(patch)
+}
+
 pub fn diff_commit(hash: &str) -> Result<String, String> {
     run_ok(&["show", "--stat", "--patch", hash])
 }
@@ -386,6 +505,51 @@ pub fn create_branch_at(name: &str, sha: &str) -> Result<(), String> {
     run_ok(&["switch", "-c", name, sha]).map(|_| ())
 }
 
+pub fn stash_pop() -> Result<(), String> {
+    run_ok(&["stash", "pop"]).map(|_| ())
+}
+
+/// Apply stash entry `index` and drop it.
+pub fn stash_pop_at(index: usize) -> Result<(), String> {
+    run_ok(&["stash", "pop", &format!("stash@{{{index}}}")]).map(|_| ())
+}
+
+/// Stash entries, newest first, as their messages ("WIP on main: …").
+pub fn stash_list() -> Vec<String> {
+    run_ok(&["stash", "list", "--format=%gs"])
+        .map(|s| s.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// Paths staged as brand-new files (git status reports these as plain
+/// "staged", same as modifications).
+pub fn staged_new_files() -> std::collections::HashSet<String> {
+    run_ok(&["diff", "--cached", "--name-only", "--diff-filter=A", "-z"])
+        .map(|s| {
+            s.split('\0')
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn head_sha() -> Result<String, String> {
+    run_ok(&["rev-parse", "HEAD"]).map(|s| s.trim().to_string())
+}
+
+/// Undo the last commit, keeping its changes staged.
+pub fn uncommit() -> Result<(), String> {
+    run_ok(&["reset", "--soft", "HEAD~1"]).map(|_| ())
+}
+
+/// Number of stash entries.
+pub fn stash_count() -> usize {
+    run_ok(&["stash", "list"])
+        .map(|s| s.lines().count())
+        .unwrap_or(0)
+}
+
 pub fn stash_push() -> Result<(), String> {
     run_ok(&["stash", "push", "-u", "-m", "spor-auto-stash"]).map(|_| ())
 }
@@ -410,6 +574,19 @@ pub fn default_base_branch() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn commit_details_parse() {
+        let d = super::parse_commit_details(
+            "Ada\x1fada@x.org\x1f100\x1fBob\x1f200\x1fJan 01, 1970 at 00:01\x1fSubject\n\nBody line\n\n",
+        );
+        assert_eq!(d.author, "Ada");
+        assert_eq!(d.email, "ada@x.org");
+        assert_eq!((d.author_time, d.commit_time), (100, 200));
+        assert_eq!(d.committer, "Bob");
+        assert_eq!(d.date, "Jan 01, 1970 at 00:01");
+        assert_eq!(d.message, "Subject\n\nBody line");
+    }
+
     use super::*;
 
     #[test]

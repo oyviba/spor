@@ -81,6 +81,21 @@ pub fn assign_lanes(
                 })
         };
 
+        // Any other lane still waiting for this commit converges here (a
+        // branch reaching its fork point). Close it, or its line would run on
+        // to the bottom of the graph waiting for a commit that already passed.
+        // Their family is kept for this row's snapshot so the joining
+        // connector keeps its color.
+        let mut closed_family: HashMap<usize, String> = HashMap::new();
+        for (l, slot) in lanes.iter_mut().enumerate() {
+            if l != lane && slot.as_deref() == Some(commit.hash.as_str()) {
+                *slot = None;
+                if let Some(fam) = lane_family.remove(&l) {
+                    closed_family.insert(l, fam);
+                }
+            }
+        }
+
         // Establish family for this lane if we don't have one.
         if let std::collections::hash_map::Entry::Vacant(slot) = lane_family.entry(lane) {
             if let Some(fam) = family_of(commit) {
@@ -132,9 +147,14 @@ pub fn assign_lanes(
 
         let lanes_after = lanes.clone();
 
-        let num_lanes = lanes_after.len().max(lane + 1);
+        let num_lanes = lanes_after.len().max(lanes_before.len()).max(lane + 1);
         let lane_families_snap: Vec<Option<String>> = (0..num_lanes)
-            .map(|i| lane_family.get(&i).cloned())
+            .map(|i| {
+                lane_family
+                    .get(&i)
+                    .or_else(|| closed_family.get(&i))
+                    .cloned()
+            })
             .collect();
 
         rows.push(GraphRow {
@@ -238,6 +258,24 @@ mod tests {
         assert!(waiting.contains(&"f"));
         // The feature commit lands in the lane that was waiting for it.
         assert_ne!(rows[2].lane, 0);
+    }
+
+    #[test]
+    fn branch_lane_closes_at_fork_point() {
+        // feature forked from b and merged back in m. Once the graph reaches b,
+        // the feature lane has nothing left to wait for and must close.
+        let commits = vec![
+            commit("m", &["c", "f"], &["main"]),
+            commit("f", &["b"], &[]),
+            commit("c", &["b"], &[]),
+            commit("b", &["a"], &[]),
+            commit("a", &[], &[]),
+        ];
+        let chain: HashSet<String> = ["a", "b", "c", "m"].iter().map(|s| s.to_string()).collect();
+        let rows = assign_lanes(&commits, &chain, &no_remotes());
+        assert_ne!(rows[1].lane, 0);
+        let open_after_b = rows[3].lanes_after.iter().flatten().count();
+        assert_eq!(open_after_b, 1, "only main's lane should stay open below b");
     }
 
     #[test]

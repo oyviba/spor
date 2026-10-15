@@ -1,6 +1,8 @@
 # spor
 
-A minimal git TUI inspired by GitKraken's timeline. Single dependency (`crossterm`).
+A minimal git client inspired by GitKraken's timeline — as a terminal UI and as
+a native Mac app, both built on the same core. The terminal build has a single
+dependency (`crossterm`); the app is opt-in behind the `gui` feature.
 
 "Spor" means *track* or *trace* in Norwegian — what you follow to see where a branch has been.
 
@@ -46,6 +48,66 @@ cargo install --path /path/to/spor
 cd your-repo
 spor
 ```
+
+## Mac app
+
+The same timeline, working tree and diff in a native window, built on
+[GPUI](https://gpui.rs) (Zed's UI framework) via GPUI Kit. Build the
+app bundle on a Mac with the Xcode command line tools installed:
+
+```sh
+scripts/bundle-macos.sh              # this Mac's architecture
+scripts/bundle-macos.sh --universal  # Apple Silicon + Intel
+open target/macos/Spor.app
+```
+
+CI also builds a universal `Spor.app` on every push — grab the `Spor-macos`
+artifact from the workflow run. It's ad-hoc signed, not notarized, so the first
+launch of a downloaded copy needs right-click → Open (or
+`xattr -dr com.apple.quarantine Spor.app`).
+
+To run it without bundling (works on Linux and Windows too):
+
+```sh
+cargo run --release --features gui --bin spor-app -- /path/to/repo
+```
+
+The layout follows Zed's:
+
+- **Workspace rail** — like Slack, the strip on the far left switches
+  between workspaces such as *Work* and *Side projects* (⌘1–⌘9, ⌘⇧W for a
+  new one; right-click to rename or delete). Each workspace has its own
+  repositories and reopens the one you last had open in it. Opening a
+  repository adds it to the current workspace, or jumps to the workspace it
+  already belongs to; the repository menu in the title bar switches between
+  a workspace's repositories, moves one to another workspace or removes it
+- **Title bar** — repository and branch pickers, and the branch's PR
+- **Left dock** — the **git panel** (⌘⇧G): a staging checklist (tracked and
+  untracked), a commit message editor (⌘↩ commits), and one **Sync** button
+  that fetches, then pulls or pushes as needed (or publishes a new branch);
+  or the **branch list** (⌘⇧B) with local and remote branches, tags and
+  stashes — click to show a branch in History, double-click to check it out.
+  ⌘B hides the dock
+- **Center tabs** — **Uncommitted Changes** (⌘⇧C), every changed file in one
+  scrolling, syntax-highlighted diff; **History** (⌘⇧H), the commit graph
+  over the selected commit's message and diff (`j`/`k` or arrows move,
+  `Return` checks out)
+- **Status bar** — dock toggles, the branch with ahead/behind counts,
+  background jobs, and unified / split diffs
+- **Undo instead of confirmations** — discarding changes, staging and
+  committing happen immediately and can be taken back with ⌘Z or the Undo
+  button in the notification (a commit stops being undoable once pushed)
+
+Open a repository with ⌘O, from the welcome page, by dropping a folder on
+the window, or by passing a path. Light and dark themes (based on One Light
+and One Dark) follow the system or can be set from the repository menu.
+
+Sync runs in the background. The app has no terminal, so credentials must
+come from a helper (macOS keychain, ssh-agent); a sync that would need a
+password fails with the reason instead of hanging.
+
+PR badges work the same as in the terminal (the app finds Homebrew's `gh` even
+when launched from Finder).
 
 ## Keys
 
@@ -97,11 +159,31 @@ spor
 
 ## Design notes
 
+The core is a library (`src/lib.rs`) that knows nothing about how it's drawn:
+
 - `src/git.rs` — shells out to `git`, parses porcelain output
 - `src/graph.rs` — lane assignment, with main pinned to lane 0
 - `src/color.rs` — HSL color families by branch prefix
+- `src/remote.rs` — remote host detection, compare URLs, PR badges via `gh`
+
+Terminal UI (`spor`):
+
 - `src/ui.rs` — ANSI rendering (no ratatui)
 - `src/main.rs` — event loop, state, modal key handling
+
+Mac app (`spor-app`, `--features gui`):
+
+- `src/gui/app.rs` — the `Spor` view: state, git actions, undo, sync
+- `src/gui/workspaces.rs` — workspaces and their repositories, persisted
+- `src/gui/render.rs` — window frame: title bar, dock + center, status bar
+- `src/gui/rail.rs` — the workspace rail
+- `src/gui/git_panel.rs`, `branches.rs` — the two dock panels
+- `src/gui/changes_view.rs`, `history.rs` — the two center tabs
+- `src/gui/graph.rs` — paints the commit graph
+- `src/gui/welcome.rs` — the page shown when no repository is open
+- `src/gui/repo.rs` — snapshot of a repository for the views
+- `src/gui/theme.rs`, `assets/themes/spor.json` — Spor Light / Spor Dark
+- `scripts/bundle-macos.sh` — wraps the binary into `Spor.app`
 
 ## License
 

@@ -1,7 +1,7 @@
-use crate::color::{branch_family, color_for, Rgb};
-use crate::git::{Branch, FileStatus, StatusEntry};
-use crate::graph::GraphRow;
-use crate::remote::{ChecksState, PrInfo, ReviewState};
+use spor::color::{branch_family, color_for, Rgb};
+use spor::git::{Branch, FileStatus, StatusEntry};
+use spor::graph::GraphRow;
+use spor::remote::{ChecksState, PrInfo, ReviewState};
 use std::collections::HashMap;
 use std::io::{self, Write};
 
@@ -449,7 +449,7 @@ pub fn draw_diff_pane(diff: &str, layout: &Layout, scroll: usize) -> io::Result<
 
 pub fn draw_statusbar(
     layout: &Layout,
-    tracking: &crate::git::TrackingInfo,
+    tracking: &spor::git::TrackingInfo,
     msg: &str,
     hint: &str,
 ) -> io::Result<()> {
