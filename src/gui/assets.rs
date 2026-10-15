@@ -20,20 +20,28 @@ static EXTRA_ICONS: &[(&str, &[u8])] = icons![
     "arrow-up-down",
     "clipboard-copy",
     "clock",
+    "cloud",
     "ellipsis",
     "file-diff",
     "folder-git-2",
     "git-branch",
     "git-commit-horizontal",
     "git-compare",
+    "git-merge",
     "git-pull-request",
+    "laptop",
     "list-checks",
+    "settings-2",
     "tag",
 ];
 
 /// Icon paths for `Icon::empty().path(…)`.
 pub mod icon {
     pub const ARCHIVE: &str = "icons/archive.svg";
+    pub const CLOUD: &str = "icons/cloud.svg";
+    pub const LAPTOP: &str = "icons/laptop.svg";
+    pub const SETTINGS: &str = "icons/settings-2.svg";
+    pub const GIT_MERGE: &str = "icons/git-merge.svg";
     pub const CLOCK: &str = "icons/clock.svg";
     pub const COPY: &str = "icons/clipboard-copy.svg";
     pub const ELLIPSIS: &str = "icons/ellipsis.svg";

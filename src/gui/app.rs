@@ -3,6 +3,8 @@
 //! the status bar), a center pane with Changes and History tabs, and a
 //! status bar. Everything git-related the views trigger lives here.
 
+use super::assets::icon;
+use super::history_options::HistoryOptions;
 use super::repo::{self, Change, Snapshot};
 use super::support::{self, first_line, plural};
 use super::theme::{self, Appearance};
@@ -15,8 +17,9 @@ use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, WindowExt as _,
 };
 use gpui_kit::{
-    actions, App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable as _,
-    KeyBinding, ParentElement as _, PathPromptOptions, ScrollStrategy, SharedString, Styled as _,
+    actions, prelude::FluentBuilder as _, App, AppContext as _, ClipboardItem, Context, Entity,
+    FocusHandle, Focusable as _, InteractiveElement as _, KeyBinding, ParentElement as _,
+    PathPromptOptions, ScrollStrategy, SharedString, StatefulInteractiveElement as _, Styled as _,
     Subscription, Task, UniformListScrollHandle, WeakEntity, Window,
 };
 use spor::git::{self, CommitDetails, StatusEntry};
@@ -29,6 +32,8 @@ actions!(
     spor,
     [
         ToggleDock,
+        ToggleDockSide,
+        ToggleRepositories,
         ShowGitPanel,
         ShowBranches,
         ShowChanges,
@@ -43,6 +48,7 @@ actions!(
         CheckoutSelected,
         Sync,
         ToggleDiffMode,
+        EditTheme,
         Quit,
         NewWorkspace,
         Workspace1,
@@ -76,6 +82,7 @@ pub(crate) fn workspace_action(ix: usize) -> Option<Box<dyn gpui_kit::Action>> {
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("secondary-b", ToggleDock, Some("Spor")),
+        KeyBinding::new("secondary-shift-e", ToggleRepositories, Some("Spor")),
         KeyBinding::new("secondary-shift-g", ShowGitPanel, Some("Spor")),
         KeyBinding::new("secondary-shift-b", ShowBranches, Some("Spor")),
         KeyBinding::new("secondary-shift-c", ShowChanges, Some("Spor")),
@@ -100,6 +107,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-shift-n", NewBranch, Some("Spor")),
         KeyBinding::new("secondary-shift-s", Sync, Some("Spor")),
         KeyBinding::new("secondary-q", Quit, Some("Spor")),
+        KeyBinding::new("secondary-,", EditTheme, Some("Spor")),
         KeyBinding::new("down", OlderCommit, Some("SporHistory")),
         KeyBinding::new("j", OlderCommit, Some("SporHistory")),
         KeyBinding::new("up", NewerCommit, Some("SporHistory")),
@@ -120,6 +128,58 @@ pub enum DockPanel {
     Branches,
 }
 
+/// Which side of the center pane the dock sits on.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum DockSide {
+    Left,
+    Right,
+}
+
+/// Panel layout that survives restarts: whether the repository list is
+/// shown, and the dock's side. Stored as `repos<TAB>1` / `dock<TAB>right`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Layout {
+    pub show_repos: bool,
+    pub dock_side: DockSide,
+}
+
+impl Layout {
+    const SETTING: &'static str = "layout";
+
+    fn saved() -> Self {
+        let mut layout = Self {
+            show_repos: true,
+            dock_side: DockSide::Right,
+        };
+        for line in support::read_setting(Self::SETTING)
+            .unwrap_or_default()
+            .lines()
+        {
+            match line.split_once('\t') {
+                Some(("repos", v)) => layout.show_repos = v != "0",
+                Some(("dock", v)) => {
+                    layout.dock_side = if v == "left" {
+                        DockSide::Left
+                    } else {
+                        DockSide::Right
+                    }
+                }
+                _ => {}
+            }
+        }
+        layout
+    }
+
+    pub(crate) fn save(self) {
+        let dock = match self.dock_side {
+            DockSide::Left => "left",
+            DockSide::Right => "right",
+        };
+        let repos = if self.show_repos { "1" } else { "0" };
+        support::write_setting(Self::SETTING, &format!("repos\t{repos}\ndock\t{dock}\n"));
+    }
+}
+
 /// Something ⌘Z can take back.
 pub enum Undo {
     /// Put files' working-tree contents back (None: they didn't exist).
@@ -129,6 +189,11 @@ pub enum Undo {
     Uncommit {
         hash: String,
         message: String,
+    },
+    /// Move `branch` back to where it was before a merge.
+    Merge {
+        branch: String,
+        before: String,
     },
 }
 
@@ -159,6 +224,8 @@ pub struct Spor {
     pub(crate) workspaces: Workspaces,
     pub(crate) tab: Tab,
     pub(crate) dock: Option<DockPanel>,
+    pub(crate) layout: Layout,
+    pub(crate) history_options: HistoryOptions,
     pub(crate) selected: Option<usize>,
     pub(crate) commit: Option<CommitInfo>,
     pub(crate) commit_diff: Entity<DiffState>,
@@ -218,6 +285,8 @@ impl Spor {
             workspaces: Workspaces::load(),
             tab: Tab::Changes,
             dock: Some(DockPanel::Git),
+            layout: Layout::saved(),
+            history_options: HistoryOptions::saved(),
             selected: None,
             commit: None,
             commit_diff,
@@ -718,6 +787,14 @@ impl Spor {
         self.reload(window, cx);
     }
 
+    /// Scroll Uncommitted Changes to a file's diff.
+    pub(crate) fn show_change(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.tab = Tab::Changes;
+        self.changes_diff
+            .update(cx, |state, cx| state.scroll_to_file(path, cx));
+        cx.notify();
+    }
+
     /// Stage or unstage every changed file.
     pub(crate) fn set_all_staged(
         &mut self,
@@ -837,6 +914,7 @@ impl Spor {
             }
             Undo::Restore(files) => format!("Restored {}", plural(files.len(), "file")),
             Undo::Uncommit { .. } => "Commit undone — its changes are staged again".into(),
+            Undo::Merge { branch, .. } => format!("Merge into {branch} undone"),
             _ => format!("Undid {label}"),
         };
         let result = match action {
@@ -865,6 +943,14 @@ impl Spor {
                         self.tab = Tab::Changes;
                         self.dock = Some(DockPanel::Git);
                     })
+                }
+            }
+            Undo::Merge { branch, before } => {
+                let current = self.repo.as_ref().and_then(|r| r.tracking.branch.clone());
+                if current.as_deref() != Some(branch.as_str()) {
+                    Err(format!("switch back to {branch} first"))
+                } else {
+                    git::reset_keep(&before)
                 }
             }
         };
@@ -1171,8 +1257,9 @@ impl Spor {
                         // Once commits are pushed, taking one back would
                         // rewrite published history.
                         if matches!(label, "Sync" | "Push") {
-                            this.undo
-                                .retain(|(_, u)| !matches!(u, Undo::Uncommit { .. }));
+                            this.undo.retain(|(_, u)| {
+                                !matches!(u, Undo::Uncommit { .. } | Undo::Merge { .. })
+                            });
                             window.remove_notification::<UndoNote>(cx);
                         }
                         this.ok(msg, window, cx);
@@ -1183,6 +1270,183 @@ impl Spor {
                 this.fetch_prs(cx);
             });
         });
+    }
+
+    // ── Drag and drop ────────────────────────────────────────────────────────
+
+    /// A branch label was dropped on another branch's row: offer to merge
+    /// it there or open a pull request between the two.
+    pub(crate) fn branch_dropped(
+        &mut self,
+        source: &str,
+        target: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo) = &self.repo else { return };
+        let local = |name: &str| repo.without_remote(name).unwrap_or(name).to_string();
+        let (source_name, target_name) = (local(source), local(target));
+        if source_name == target_name {
+            return;
+        }
+        let current = repo.tracking.branch.as_deref() == Some(target_name.as_str());
+        let can_pr = !repo.remotes.is_empty();
+        let source = source.to_string();
+        let spor = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let muted = cx.theme().muted_foreground;
+            let option = |id: &'static str,
+                          path: &'static str,
+                          title: String,
+                          hint: String,
+                          run: SporAction| {
+                let spor = spor.clone();
+                gpui_kit::component::h_flex()
+                    .id(id)
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .gap_3()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .cursor_pointer()
+                    .hover(|this| this.bg(cx.theme().list_hover))
+                    .child(gpui_kit::component::Icon::empty().path(path).small())
+                    .child(
+                        gpui_kit::component::v_flex()
+                            .child(gpui_kit::div().text_sm().child(title))
+                            .child(gpui_kit::div().text_xs().text_color(muted).child(hint)),
+                    )
+                    .on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        let run = run.clone();
+                        let _ = spor.update(cx, |this, cx| run(this, window, cx));
+                    })
+            };
+            let (merge_src, merge_dst) = (source.clone(), target_name.clone());
+            let (pr_src, pr_dst) = (source_name.clone(), target_name.clone());
+            dialog
+                .title(format!("{source_name} → {target_name}"))
+                .w(gpui_kit::px(440.))
+                .child(
+                    gpui_kit::component::v_flex()
+                        .gap_2()
+                        .child(option(
+                            "drop-merge",
+                            icon::GIT_MERGE,
+                            format!("Merge {source_name} into {target_name}"),
+                            if current {
+                                "Into the checked-out branch".into()
+                            } else {
+                                format!("Checks out {target_name} first")
+                            },
+                            std::rc::Rc::new(move |this, w, cx| {
+                                this.merge_branch(&merge_src, &merge_dst, w, cx)
+                            }),
+                        ))
+                        .when(can_pr, |this| {
+                            this.child(option(
+                                "drop-pr",
+                                icon::GIT_PULL_REQUEST,
+                                "Open Pull Request".into(),
+                                format!("Propose merging {pr_src} into {pr_dst}"),
+                                std::rc::Rc::new(move |this, w, cx| {
+                                    this.open_pull_request_between(&pr_src, &pr_dst, w, cx)
+                                }),
+                            ))
+                        }),
+                )
+        });
+    }
+
+    /// Merge `source` into `target`, checking `target` out first if needed.
+    pub(crate) fn merge_branch(
+        &mut self,
+        source: &str,
+        target: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo) = &self.repo else { return };
+        if repo.tracking.branch.as_deref() != Some(target) {
+            if !repo.changes.is_empty() {
+                return self.info(
+                    format!("Commit or stash your changes before merging into {target}"),
+                    window,
+                    cx,
+                );
+            }
+            if let Err(e) = git::checkout_branch(target) {
+                self.reload(window, cx);
+                return self.error(format!("Couldn't switch: {}", first_line(&e)), window, cx);
+            }
+        }
+        let before = git::head_sha().unwrap_or_default();
+        let shown = repo.without_remote(source).unwrap_or(source).to_string();
+        match git::merge(source) {
+            Ok(()) => {
+                let undo = Undo::Merge {
+                    branch: target.to_string(),
+                    before,
+                };
+                self.did(format!("Merged {shown} into {target}"), undo, window, cx);
+                self.tab = Tab::History;
+            }
+            Err(_) if git::merge_in_progress() => {
+                self.tab = Tab::Changes;
+                let spor = cx.entity().downgrade();
+                window.push_notification(
+                    Notification::warning(format!(
+                        "Merging {shown} into {target} hit conflicts — resolve them and commit, or abort"
+                    ))
+                    .autohide(false)
+                    .action(move |_, _, _| {
+                        let spor = spor.clone();
+                        Button::new("abort-merge").label("Abort Merge").small().ghost().on_click(
+                            move |_, window, cx| {
+                                let _ = spor.update(cx, |this, cx| {
+                                    match git::merge_abort() {
+                                        Ok(()) => this.info("Merge aborted", window, cx),
+                                        Err(e) => this.error(
+                                            format!("Couldn't abort: {}", first_line(&e)),
+                                            window,
+                                            cx,
+                                        ),
+                                    }
+                                    this.reload(window, cx);
+                                });
+                            },
+                        )
+                    }),
+                    cx,
+                );
+            }
+            Err(e) => self.error(format!("Couldn't merge: {}", first_line(&e)), window, cx),
+        }
+        self.reload(window, cx);
+    }
+
+    /// Open the host's page for a pull request from `head` into `base`.
+    pub(crate) fn open_pull_request_between(
+        &mut self,
+        head: &str,
+        base: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo) = &self.repo else { return };
+        if !repo.is_published(head) {
+            return self.info(
+                format!("Publish {head} first — check it out and Sync"),
+                window,
+                cx,
+            );
+        }
+        let Some(info) = remote::detect() else {
+            return self.error("Couldn't detect the remote host", window, cx);
+        };
+        cx.open_url(&remote::compare_url(&info, base, head));
     }
 
     pub(crate) fn open_pull_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1248,6 +1512,42 @@ impl Spor {
     ) {
         self.appearance = appearance;
         theme::set(appearance, window, cx);
+        cx.notify();
+    }
+
+    /// Open the theme editor in a sheet. Its Dark / Light switch previews
+    /// that variant; closing it goes back to the chosen appearance.
+    pub(crate) fn open_theme_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = cx.new(|cx| super::theme_editor::ThemeEditor::new(window, cx));
+        let spor = cx.entity().downgrade();
+        window.open_sheet(cx, move |sheet, _, _| {
+            let spor = spor.clone();
+            sheet
+                .title("Theme")
+                .size(gpui_kit::px(380.))
+                .overlay(false)
+                .child(editor.clone())
+                .on_close(move |_, window, cx| {
+                    let _ = spor.update(cx, |this, cx| theme::apply(this.appearance, window, cx));
+                })
+        });
+    }
+
+    pub(crate) fn toggle_repositories(&mut self, cx: &mut Context<Self>) {
+        self.layout.show_repos = !self.layout.show_repos;
+        self.layout.save();
+        cx.notify();
+    }
+
+    /// Move the dock to the other side of the center pane, showing it if
+    /// it was hidden.
+    pub(crate) fn toggle_dock_side(&mut self, cx: &mut Context<Self>) {
+        self.layout.dock_side = match self.layout.dock_side {
+            DockSide::Left => DockSide::Right,
+            DockSide::Right => DockSide::Left,
+        };
+        self.layout.save();
+        self.dock.get_or_insert(DockPanel::Git);
         cx.notify();
     }
 

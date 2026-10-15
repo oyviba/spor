@@ -3,9 +3,10 @@
 //! `spor::graph`, …). Built with `--features gui`; on macOS
 //! `scripts/bundle-macos.sh` wraps it into `Spor.app`.
 //!
-//! The layout follows Zed: title bar (repository / branch), a left dock with
-//! the git panel or the branch list, a center pane with Uncommitted Changes
-//! and History tabs, and a status bar that toggles the dock.
+//! The layout follows Zed: title bar (repository / branch), the workspace's
+//! repositories on the left, a dock with the git panel or the branch list
+//! (on either side), a center pane with Uncommitted Changes and History tabs,
+//! and a status bar that toggles the panels.
 
 mod app;
 mod assets;
@@ -14,11 +15,14 @@ mod changes_view;
 mod git_panel;
 mod graph;
 mod history;
+mod history_options;
 mod rail;
 mod render;
 mod repo;
+mod repos_panel;
 mod support;
 mod theme;
+mod theme_editor;
 mod welcome;
 mod workspaces;
 
@@ -37,7 +41,7 @@ fn main() {
             app::init(cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1360.), px(860.)), cx)),
-                window_min_size: Some(size(px(860.), px(520.))),
+                window_min_size: Some(size(px(960.), px(520.))),
                 app_id: Some("io.github.oyviba.spor".into()),
                 ..TitleBar::window_options()
             };

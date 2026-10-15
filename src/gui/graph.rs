@@ -6,26 +6,37 @@ use gpui_kit::{fill, point, px, size, Bounds, Hsla, PathBuilder, Pixels, Point, 
 use spor::color::color_for;
 use spor::graph::GraphRow;
 
-pub const LANE_WIDTH: f32 = 12.0;
 const LEFT_PAD: f32 = 12.0;
 const NODE_RADIUS: f32 = 3.5;
+const STROKE: f32 = 1.5;
+/// The default branch's lane, when drawn bold.
+const BOLD_STROKE: f32 = 3.0;
 pub const MAX_LANES: usize = 12;
 
-pub fn width(lanes: usize) -> Pixels {
-    px(LEFT_PAD + lanes.clamp(1, MAX_LANES) as f32 * LANE_WIDTH)
+pub fn width(lanes: usize, lane_width: f32) -> Pixels {
+    px(LEFT_PAD + lanes.clamp(1, MAX_LANES) as f32 * lane_width)
 }
 
-/// Colors the painter needs from the theme.
+/// What the painter needs from the theme and the History options.
 #[derive(Clone, Copy)]
-pub struct GraphColors {
+pub struct GraphStyle {
     /// Row background, for the halo that separates a node from lines
     /// passing behind it.
     pub background: Hsla,
     pub head: Hsla,
     pub dark: bool,
+    pub lane_width: f32,
 }
 
-fn lane_color(family: &str, name_hint: &str, colors: &GraphColors) -> Hsla {
+/// Which halves of lane 0 carry the default branch in this row, to draw
+/// them bold: the branch's tip row only has the bottom half.
+#[derive(Clone, Copy, Default)]
+pub struct MainLane {
+    pub top: bool,
+    pub bottom: bool,
+}
+
+fn lane_color(family: &str, name_hint: &str, colors: &GraphStyle) -> Hsla {
     let (r, g, b) = color_for(family, name_hint);
     let mut c: Hsla = Rgba {
         r: r as f32 / 255.0,
@@ -44,13 +55,14 @@ fn lane_color(family: &str, name_hint: &str, colors: &GraphColors) -> Hsla {
 pub fn paint_row(
     bounds: Bounds<Pixels>,
     row: &GraphRow,
-    colors: &GraphColors,
+    colors: &GraphStyle,
+    main: MainLane,
     window: &mut Window,
 ) {
     let top = bounds.top();
     let bottom = bounds.bottom();
     let mid = bounds.center().y;
-    let x = |lane: usize| bounds.left() + px(LEFT_PAD + lane as f32 * LANE_WIDTH);
+    let x = |lane: usize| bounds.left() + px(LEFT_PAD + lane as f32 * colors.lane_width);
     let hash = row.commit.hash.as_str();
     let name_hint = row
         .commit
@@ -84,12 +96,20 @@ pub fn paint_row(
         let after = row.lanes_after.get(lane).and_then(|s| s.as_deref());
         let c = color(lane);
 
+        let (top_w, bottom_w) = match lane {
+            0 => (
+                if main.top { BOLD_STROKE } else { STROKE },
+                if main.bottom { BOLD_STROKE } else { STROKE },
+            ),
+            _ => (STROKE, STROKE),
+        };
+
         if lane == row.lane {
             if before == Some(hash) {
-                line(window, point(lx, top), node, c);
+                line(window, point(lx, top), node, c, top_w);
             }
             if after.is_some() {
-                line(window, node, point(lx, bottom), c);
+                line(window, node, point(lx, bottom), c, bottom_w);
             }
             continue;
         }
@@ -100,9 +120,10 @@ pub fn paint_row(
         if before == Some(hash) {
             curve(window, point(lx, top), node, c);
         } else if passing {
-            line(window, point(lx, top), point(lx, bottom), c);
+            line(window, point(lx, top), point(lx, mid), c, top_w);
+            line(window, point(lx, mid), point(lx, bottom), c, bottom_w);
         } else if before.is_some() {
-            line(window, point(lx, top), point(lx, mid), c);
+            line(window, point(lx, top), point(lx, mid), c, top_w);
         }
 
         // Bottom half: a merge parent this commit pulls in curves out of the
@@ -111,7 +132,7 @@ pub fn paint_row(
             if row.commit.parents.iter().skip(1).any(|p| p == a) {
                 curve(window, node, point(lx, bottom), c);
             } else {
-                line(window, point(lx, mid), point(lx, bottom), c);
+                line(window, point(lx, mid), point(lx, bottom), c, bottom_w);
             }
         }
     }
@@ -130,8 +151,8 @@ pub fn paint_row(
     }
 }
 
-fn line(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla) {
-    let mut path = PathBuilder::stroke(px(1.5));
+fn line(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla, width: f32) {
+    let mut path = PathBuilder::stroke(px(width));
     path.move_to(from);
     path.line_to(to);
     if let Ok(path) = path.build() {
@@ -141,7 +162,7 @@ fn line(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla
 
 fn curve(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla) {
     let dy = (to.y - from.y) * 0.6;
-    let mut path = PathBuilder::stroke(px(1.5));
+    let mut path = PathBuilder::stroke(px(STROKE));
     path.move_to(from);
     path.cubic_bezier_to(to, point(from.x, from.y + dy), point(to.x, to.y - dy));
     if let Ok(path) = path.build() {

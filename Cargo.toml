@@ -22,7 +22,7 @@ path = "src/gui/main.rs"
 required-features = ["gui"]
 
 [features]
-gui = ["dep:gpui-kit"]
+gui = ["dep:gpui-kit", "dep:serde_json"]
 
 [dependencies]
 crossterm = "0.27"
@@ -39,6 +39,8 @@ gpui-kit = { version = "0.7.3", optional = true, features = [
     "tree-sitter-css",
     "tree-sitter-html",
 ] }
+# Already in the app's dependency tree via GPUI; used to patch theme files.
+serde_json = { version = "1", optional = true }
 
 [profile.release]
 lto = true

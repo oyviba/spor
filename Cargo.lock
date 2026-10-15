@@ -6007,6 +6007,7 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "gpui-kit",
+ "serde_json",
 ]
 
 [[package]]
