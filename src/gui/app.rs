@@ -93,13 +93,8 @@ pub(crate) fn workspace_action(ix: usize) -> Option<Box<dyn gpui_kit::Action>> {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("secondary-b", ToggleDock, Some("Spor")),
-        KeyBinding::new("secondary-shift-e", ToggleRepositories, Some("Spor")),
-        KeyBinding::new("secondary-shift-g", ShowGitPanel, Some("Spor")),
-        KeyBinding::new("secondary-shift-b", ShowBranches, Some("Spor")),
-        KeyBinding::new("secondary-shift-c", ShowChanges, Some("Spor")),
-        KeyBinding::new("secondary-shift-h", ShowHistory, Some("Spor")),
-        // Like Slack: ⌘1–⌘9 jump to a workspace.
+        // Like Slack: ⌘1–⌘9 jump to a workspace. Fixed; everything else is
+        // in `palette::SHORTCUTS` and can be reassigned (`keymap`).
         KeyBinding::new("secondary-1", Workspace1, Some("Spor")),
         KeyBinding::new("secondary-2", Workspace2, Some("Spor")),
         KeyBinding::new("secondary-3", Workspace3, Some("Spor")),
@@ -109,25 +104,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-7", Workspace7, Some("Spor")),
         KeyBinding::new("secondary-8", Workspace8, Some("Spor")),
         KeyBinding::new("secondary-9", Workspace9, Some("Spor")),
-        KeyBinding::new("secondary-shift-w", NewWorkspace, Some("Spor")),
-        KeyBinding::new("secondary-r", Refresh, Some("Spor")),
-        KeyBinding::new("secondary-z", UndoLast, Some("Spor")),
-        KeyBinding::new("secondary-enter", Commit, Some("Spor")),
-        // The text area binds ⌘↩ itself; this more specific binding wins.
-        KeyBinding::new("secondary-enter", Commit, Some("CommitEditor > Input")),
-        KeyBinding::new("secondary-o", OpenRepository, Some("Spor")),
-        KeyBinding::new("secondary-shift-n", NewBranch, Some("Spor")),
-        KeyBinding::new("secondary-shift-s", Sync, Some("Spor")),
-        KeyBinding::new("secondary-q", Quit, Some("Spor")),
-        KeyBinding::new("secondary-,", EditTheme, Some("Spor")),
-        KeyBinding::new("secondary-p", OpenPalette, Some("Spor")),
-        KeyBinding::new("secondary-/", ShowShortcuts, Some("Spor")),
-        KeyBinding::new("down", OlderCommit, Some("SporHistory")),
-        KeyBinding::new("j", OlderCommit, Some("SporHistory")),
-        KeyBinding::new("up", NewerCommit, Some("SporHistory")),
-        KeyBinding::new("k", NewerCommit, Some("SporHistory")),
-        KeyBinding::new("enter", CheckoutSelected, Some("SporHistory")),
     ]);
+    super::keymap::init(cx);
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]

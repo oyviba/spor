@@ -129,6 +129,15 @@ on GitHub (needs `gh`). The same palette runs any command and shows its
 shortcut. **⌘/** lists every keyboard shortcut; both are also in the
 repository menu.
 
+**Shortcuts are yours to change.** In the ⌘/ list, click a command and press
+the keys you want (Esc cancels, ⌫ removes the shortcut); right-click for
+Remove or Reset to Default, and Reset All puts everything back. Commands
+without a default — Fetch, Pull, Push, Stash — can get one too. A key
+already in use moves to the new command, and the list says which one lost
+it. Outside History a shortcut needs ⌘, ⌃ or ⌥ so it can't swallow typing;
+⌘1–⌘9 stay reserved for workspaces. Changes apply at once and are saved
+in `keymap` in the config directory.
+
 **Knowing when to pull** — the open repository is fetched quietly in the
 background every few minutes. When its upstream has new commits, a
 notification says so (with a Pull button), a *Pull 3* button appears in the
@@ -214,8 +223,10 @@ Mac app (`spor-app`, `--features gui`):
 - `src/gui/git_panel.rs`, `branches.rs` — the two dock panels
 - `src/gui/changes_view.rs`, `history.rs` — the two center tabs
 - `src/gui/history_options.rs` — the History graph's saved options
-- `src/gui/palette.rs` — the ⌘P palette (PR search, commands) and the ⌘/
-  shortcut list, both from one table of shortcuts
+- `src/gui/palette.rs` — the ⌘P palette (PR search, commands) and the
+  table of commands with their default shortcuts
+- `src/gui/keymap.rs` — the user's shortcut changes, and the ⌘/ list
+  where they're made
 - `src/gui/graph.rs` — paints the commit graph
 - `src/gui/welcome.rs` — the page shown when no repository is open
 - `src/gui/repo.rs` — snapshot of a repository for the views

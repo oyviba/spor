@@ -1,8 +1,9 @@
 //! ⌘P: one search field over the repository's pull requests and the app's
-//! commands (with their shortcuts), and ⌘/: every keyboard shortcut.
+//! commands (with their shortcuts), and the table of those commands.
 //!
 //! Both are driven by [`SHORTCUTS`], so a new action shows up in the palette
-//! and the shortcut list from one entry, with whatever key `app::init` binds.
+//! and the shortcut list from one entry. Its keys are its defaults unless
+//! the user assigned others (`keymap`).
 
 use super::app::*;
 use super::assets::icon;
@@ -10,14 +11,12 @@ use gpui_kit::component::{
     command::{Command, CommandGroup, CommandItem, CommandState},
     h_flex,
     kbd::Kbd,
-    v_flex, ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _,
-    StyledExt as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IndexPath, Sizable as _, WindowExt as _,
 };
 use gpui_kit::{
     div, px, Action, AnyElement, App, AppContext as _, AsKeystroke, Context, Entity, FocusHandle,
-    Focusable as _, Hsla, InteractiveElement as _, IntoElement, KeyContext, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity,
-    Window,
+    Focusable as _, Hsla, IntoElement, KeyContext, ParentElement as _, Render, Styled as _,
+    Subscription, WeakEntity, Window,
 };
 use spor::remote::{PrState, PrSummary};
 use std::rc::Rc;
@@ -27,17 +26,35 @@ pub struct Shortcut {
     pub group: &'static str,
     pub label: &'static str,
     pub action: fn() -> Box<dyn Action>,
-    /// Where the binding applies, as `app::init` registers it.
+    /// Where the binding applies.
     pub context: &'static str,
-    /// Shown as "first – last", for a numbered run like ⌘1–⌘9.
+    /// The keys it has until the user assigns others (see `keymap`).
+    pub default_keys: &'static [&'static str],
+    /// A second context the same keys apply in.
+    pub also_in: Option<&'static str>,
+    /// Shown as "first – last", for a numbered run like ⌘1–⌘9. Such a run
+    /// is bound in `app::init` and can't be reassigned.
     pub through: Option<fn() -> Box<dyn Action>>,
     /// Offered in the palette. Movement keys only mean something in place.
     pub in_palette: bool,
 }
 
+impl Shortcut {
+    /// Can the user give it other keys?
+    pub fn assignable(&self) -> bool {
+        self.through.is_none()
+    }
+
+    /// The action's registered name, which the saved keymap is keyed by.
+    pub fn name(&self) -> &'static str {
+        (self.action)().name()
+    }
+}
+
 const fn cmd(
     group: &'static str,
     label: &'static str,
+    default_keys: &'static [&'static str],
     action: fn() -> Box<dyn Action>,
 ) -> Shortcut {
     Shortcut {
@@ -45,17 +62,25 @@ const fn cmd(
         label,
         action,
         context: "Spor",
+        default_keys,
+        also_in: None,
         through: None,
         in_palette: true,
     }
 }
 
-const fn in_history(label: &'static str, action: fn() -> Box<dyn Action>) -> Shortcut {
+const fn in_history(
+    label: &'static str,
+    default_keys: &'static [&'static str],
+    action: fn() -> Box<dyn Action>,
+) -> Shortcut {
     Shortcut {
         group: "History",
         label,
         action,
         context: "SporHistory",
+        default_keys,
+        also_in: None,
         through: None,
         in_palette: false,
     }
@@ -64,57 +89,102 @@ const fn in_history(label: &'static str, action: fn() -> Box<dyn Action>) -> Sho
 pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut {
         in_palette: false,
-        ..cmd("General", "Search Pull Requests and Commands", || {
-            Box::new(OpenPalette)
-        })
+        ..cmd(
+            "General",
+            "Search Pull Requests and Commands",
+            &["secondary-p"],
+            || Box::new(OpenPalette),
+        )
     },
-    cmd("General", "Keyboard Shortcuts", || Box::new(ShowShortcuts)),
-    cmd("General", "Open Repository…", || Box::new(OpenRepository)),
-    cmd("General", "New Workspace…", || Box::new(NewWorkspace)),
+    cmd("General", "Keyboard Shortcuts", &["secondary-/"], || {
+        Box::new(ShowShortcuts)
+    }),
+    cmd("General", "Open Repository…", &["secondary-o"], || {
+        Box::new(OpenRepository)
+    }),
+    cmd(
+        "General",
+        "New Workspace…",
+        &["secondary-shift-w"],
+        || Box::new(NewWorkspace),
+    ),
     Shortcut {
         through: Some(|| Box::new(Workspace9)),
         in_palette: false,
-        ..cmd("General", "Switch to Workspace 1–9", || {
+        ..cmd("General", "Switch to Workspace 1–9", &[], || {
             Box::new(Workspace1)
         })
     },
-    cmd("General", "Edit Theme…", || Box::new(EditTheme)),
-    cmd("General", "Quit Spor", || Box::new(Quit)),
-    cmd("Git", "Commit", || Box::new(Commit)),
-    cmd("Git", "Undo", || Box::new(UndoLast)),
-    cmd("Git", "Sync (Fetch, then Pull or Push)", || Box::new(Sync)),
-    cmd("Git", "Fetch", || Box::new(Fetch)),
-    cmd("Git", "Pull", || Box::new(Pull)),
-    cmd("Git", "Push", || Box::new(Push)),
-    cmd("Git", "New Branch…", || Box::new(NewBranch)),
-    cmd("Git", "Open Pull Request for This Branch", || {
+    cmd("General", "Edit Theme…", &["secondary-,"], || {
+        Box::new(EditTheme)
+    }),
+    cmd("General", "Quit Spor", &["secondary-q"], || Box::new(Quit)),
+    Shortcut {
+        // The commit message editor binds ⌘↩ itself; this wins there.
+        also_in: Some("CommitEditor > Input"),
+        ..cmd("Git", "Commit", &["secondary-enter"], || Box::new(Commit))
+    },
+    cmd("Git", "Undo", &["secondary-z"], || Box::new(UndoLast)),
+    cmd(
+        "Git",
+        "Sync (Fetch, then Pull or Push)",
+        &["secondary-shift-s"],
+        || Box::new(Sync),
+    ),
+    cmd("Git", "Fetch", &[], || Box::new(Fetch)),
+    cmd("Git", "Pull", &[], || Box::new(Pull)),
+    cmd("Git", "Push", &[], || Box::new(Push)),
+    cmd("Git", "New Branch…", &["secondary-shift-n"], || {
+        Box::new(NewBranch)
+    }),
+    cmd("Git", "Open Pull Request for This Branch", &[], || {
         Box::new(OpenPullRequest)
     }),
-    cmd("Git", "Stash All Changes", || Box::new(StashChanges)),
-    cmd("Git", "Refresh", || Box::new(Refresh)),
-    cmd("View", "Show Uncommitted Changes", || Box::new(ShowChanges)),
-    cmd("View", "Show History", || Box::new(ShowHistory)),
-    cmd("View", "Show Git Panel", || Box::new(ShowGitPanel)),
-    cmd("View", "Show Branches", || Box::new(ShowBranches)),
-    cmd("View", "Toggle Dock", || Box::new(ToggleDock)),
-    cmd("View", "Move Dock to the Other Side", || {
+    cmd("Git", "Stash All Changes", &[], || Box::new(StashChanges)),
+    cmd("Git", "Refresh", &["secondary-r"], || Box::new(Refresh)),
+    cmd(
+        "View",
+        "Show Uncommitted Changes",
+        &["secondary-shift-c"],
+        || Box::new(ShowChanges),
+    ),
+    cmd("View", "Show History", &["secondary-shift-h"], || {
+        Box::new(ShowHistory)
+    }),
+    cmd("View", "Show Git Panel", &["secondary-shift-g"], || {
+        Box::new(ShowGitPanel)
+    }),
+    cmd("View", "Show Branches", &["secondary-shift-b"], || {
+        Box::new(ShowBranches)
+    }),
+    cmd("View", "Toggle Dock", &["secondary-b"], || {
+        Box::new(ToggleDock)
+    }),
+    cmd("View", "Move Dock to the Other Side", &[], || {
         Box::new(ToggleDockSide)
     }),
-    cmd("View", "Toggle Repositories", || {
-        Box::new(ToggleRepositories)
-    }),
-    cmd("View", "Toggle Unified / Split Diff", || {
+    cmd(
+        "View",
+        "Toggle Repositories",
+        &["secondary-shift-e"],
+        || Box::new(ToggleRepositories),
+    ),
+    cmd("View", "Toggle Unified / Split Diff", &[], || {
         Box::new(ToggleDiffMode)
     }),
-    in_history("Select Older Commit", || Box::new(OlderCommit)),
-    in_history("Select Newer Commit", || Box::new(NewerCommit)),
-    in_history("Check Out Selected Commit's Branch", || {
+    in_history("Select Older Commit", &["down", "j"], || {
+        Box::new(OlderCommit)
+    }),
+    in_history("Select Newer Commit", &["up", "k"], || {
+        Box::new(NewerCommit)
+    }),
+    in_history("Check Out Selected Commit's Branch", &["enter"], || {
         Box::new(CheckoutSelected)
     }),
 ];
 
 /// Every key bound to `action` where `context` applies, deduplicated.
-fn keys(action: &dyn Action, context: &str, window: &Window) -> Vec<Kbd> {
+pub(crate) fn keys(action: &dyn Action, context: &str, window: &Window) -> Vec<Kbd> {
     let Ok(context) = KeyContext::parse(context) else {
         return Vec::new();
     };
@@ -133,7 +203,7 @@ fn keys(action: &dyn Action, context: &str, window: &Window) -> Vec<Kbd> {
 }
 
 /// The keys for a shortcut row: one or more alternatives, or a range.
-fn render_keys(shortcut: &Shortcut, window: &Window, cx: &App) -> AnyElement {
+pub(crate) fn render_keys(shortcut: &Shortcut, window: &Window, cx: &App) -> AnyElement {
     let muted = cx.theme().muted_foreground;
     let first = keys(&*(shortcut.action)(), shortcut.context, window);
     let row = h_flex().flex_none().gap_1().text_xs().text_color(muted);
@@ -472,73 +542,6 @@ impl Spor {
                 };
                 cx.notify();
             });
-        });
-    }
-
-    /// ⌘/: every keyboard shortcut, grouped, in a sheet beside the window.
-    pub(crate) fn open_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.open_sheet(cx, move |sheet, window, cx| {
-            let theme = cx.theme().clone();
-            let mut list = v_flex().gap_4().pb_4();
-            let mut groups: Vec<&'static str> = Vec::new();
-            for s in SHORTCUTS {
-                if !groups.contains(&s.group) {
-                    groups.push(s.group);
-                }
-            }
-            for group in groups {
-                let rows = SHORTCUTS
-                    .iter()
-                    .filter(|s| s.group == group)
-                    .filter_map(|s| {
-                        // Commands without a key live in the palette only.
-                        let bound = !keys(&*(s.action)(), s.context, window).is_empty();
-                        bound.then(|| {
-                            h_flex()
-                                .h(px(28.))
-                                .gap_3()
-                                .text_sm()
-                                .child(div().flex_1().min_w_0().truncate().child(s.label))
-                                .child(render_keys(s, window, cx))
-                        })
-                    });
-                list = list.child(
-                    v_flex()
-                        .child(
-                            div()
-                                .pb_1()
-                                .mb_1()
-                                .border_b_1()
-                                .border_color(theme.border)
-                                .text_xs()
-                                .font_medium()
-                                .text_color(theme.muted_foreground)
-                                .child(group),
-                        )
-                        .children(rows),
-                );
-            }
-            let hint: SharedString = "Commands without a shortcut are in the palette (⌘P).".into();
-            sheet
-                .title("Keyboard Shortcuts")
-                .size(px(380.))
-                .overlay(false)
-                .child(
-                    div()
-                        .id("shortcut-list")
-                        .size_full()
-                        .overflow_y_scroll()
-                        .child(
-                            list.child(
-                                h_flex()
-                                    .gap_1()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(Icon::new(IconName::Info).xsmall())
-                                    .child(hint),
-                            ),
-                        ),
-                )
         });
     }
 }
