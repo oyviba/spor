@@ -354,14 +354,60 @@ fn parse_commit_details(out: &str) -> CommitDetails {
     }
 }
 
+/// Flags that make patch output independent of the user's git config
+/// (`diff.noprefix`, `color.ui`, external diff tools, textconv filters).
+const PATCH_FLAGS: [&str; 6] = [
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "-M",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+];
+
 /// The patch a commit introduced, without the commit header. Merges are
 /// diffed against their first parent — what the merge brought into the
 /// branch — rather than git's combined-diff format.
 pub fn commit_patch(hash: &str, parents: &[String]) -> Result<String, String> {
+    let mut args: Vec<&str> = Vec::new();
     match parents.first() {
-        Some(first) => run_ok(&["diff", "-M", first, hash]),
-        None => run_ok(&["show", "--format=", "-M", hash]),
+        Some(first) => {
+            args.push("diff");
+            args.extend(PATCH_FLAGS);
+            args.extend([first.as_str(), hash, "--"]);
+        }
+        None => {
+            args.extend(["show", "--format="]);
+            args.extend(PATCH_FLAGS);
+            args.extend([hash, "--"]);
+        }
     }
+    run_ok(&args)
+}
+
+/// Everything not yet committed, as one patch: staged and unstaged changes
+/// to tracked files against HEAD, followed by each untracked file as new.
+pub fn uncommitted_patch(untracked: &[String]) -> Result<String, String> {
+    let mut args = vec!["diff"];
+    args.extend(PATCH_FLAGS);
+    // An unborn branch has no HEAD yet: then only the index has content.
+    let has_head = run(&["rev-parse", "--verify", "--quiet", "HEAD"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    args.push(if has_head { "HEAD" } else { "--cached" });
+    args.push("--");
+    let mut patch = run_ok(&args)?;
+    for path in untracked {
+        let mut args = vec!["diff", "--no-index"];
+        args.extend(PATCH_FLAGS);
+        args.extend(["--", "/dev/null", path.as_str()]);
+        let out = run(&args)?;
+        // --no-index exits 1 when the files differ — which, here, they do.
+        if matches!(out.status.code(), Some(0) | Some(1)) {
+            patch.push_str(&String::from_utf8_lossy(&out.stdout));
+        }
+    }
+    Ok(patch)
 }
 
 pub fn diff_commit(hash: &str) -> Result<String, String> {
@@ -495,23 +541,6 @@ pub fn head_sha() -> Result<String, String> {
 /// Undo the last commit, keeping its changes staged.
 pub fn uncommit() -> Result<(), String> {
     run_ok(&["reset", "--soft", "HEAD~1"]).map(|_| ())
-}
-
-/// Everything that changed in `path` since the last commit — staged and
-/// unstaged together. Untracked files show as entirely new.
-pub fn diff_since_head(path: &str, untracked: bool) -> Result<String, String> {
-    if untracked {
-        return diff_entry(&StatusEntry {
-            status: FileStatus::Untracked,
-            path: path.to_string(),
-            orig_path: None,
-        });
-    }
-    // An unborn branch has no HEAD yet: compare against the empty tree.
-    match run_ok(&["diff", "-M", "HEAD", "--", path]) {
-        Ok(out) => Ok(out),
-        Err(_) => run_ok(&["diff", "--cached", "--", path]),
-    }
 }
 
 /// Number of stash entries.

@@ -17,6 +17,12 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Install GPUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libvulkan-dev libfontconfig-dev libfreetype-dev \
+            libxcb1-dev libx11-xcb-dev
       - name: Format
         run: cargo fmt --check
       - name: Clippy (terminal)

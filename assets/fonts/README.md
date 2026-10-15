@@ -7,8 +7,8 @@ Used by the native app (`spor-app`), embedded at compile time.
 - **JetBrains Mono** 2.304 (Regular) — <https://www.jetbrains.com/lp/mono/>,
   SIL Open Font License 1.1 (`JetBrainsMono-OFL.txt`).
 
-Both are subset to drop their Private Use Area glyphs (U+E000–F8FF), where
-the Phosphor icon font lives; otherwise those glyphs would shadow icons:
+Both are subset to drop their Private Use Area glyphs (U+E000–F8FF), which
+the app doesn't need:
 
 ```sh
 pyftsubset Inter-Regular.ttf --unicodes="U+0000-DFFF,U+F900-FFFF,U+10000-1FFFF" \
@@ -16,4 +16,4 @@ pyftsubset Inter-Regular.ttf --unicodes="U+0000-DFFF,U+F900-FFFF,U+10000-1FFFF" 
   --name-IDs='*' --name-languages='*' --output-file=Inter-Regular.ttf
 ```
 
-Icons come from the `egui-phosphor` crate (Phosphor Icons, MIT).
+Icons are Lucide SVGs (ISC) in `../icons`, alongside the ones GPUI Kit ships.

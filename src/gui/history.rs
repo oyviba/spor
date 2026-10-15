@@ -1,387 +1,477 @@
-//! The History view: the timeline on the left, and the selected commit on
-//! the right — a Mail-style header (author, date, message), its changed
-//! files, and the diff of the chosen file.
+//! The History tab: a dense graph table on top (graph, subject with ref
+//! tags, author, date, SHA) and the selected commit underneath — its header
+//! and every changed file in one diff.
 
-use super::diff_view::{self, change_badge, paint_badge};
-use super::graph_view::{self, RepoMeta, ROW_HEIGHT};
-use super::theme::{self, icon};
-use super::widgets::{avatar, split_path, text_until};
-use super::SporApp;
-use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, RichText, Sense, Ui, Vec2,
+use super::app::*;
+use super::assets::icon;
+use super::changes_view::empty_state;
+use super::graph::{self, GraphColors};
+use super::support::{plural, relative_time};
+use gpui_kit::component::{
+    button::{Button, ButtonVariants as _},
+    diff::Diff,
+    h_flex,
+    menu::{ContextMenuExt as _, PopupMenuItem},
+    resizable::{resizable_panel, v_resizable},
+    scroll::Scrollbar,
+    v_flex, ActiveTheme as _, Icon, Sizable as _, StyledExt as _,
 };
+use gpui_kit::{
+    canvas, div, prelude::FluentBuilder as _, px, uniform_list, AnyElement, App, ClickEvent,
+    Context, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window,
+};
+use spor::graph::GraphRow;
+use spor::remote::{ChecksState, PrInfo};
+use std::collections::HashMap;
+use std::rc::Rc;
 
-enum RowAction {
-    Checkout(String),
-    NewBranch(String, String),
-    Copy(String),
+const ROW_HEIGHT: f32 = 26.0;
+const AUTHOR_W: f32 = 150.0;
+const DATE_W: f32 = 110.0;
+const SHA_W: f32 = 70.0;
+
+/// One ref label on a commit row.
+struct RefTag {
+    text: String,
+    head: bool,
+    remote_only: bool,
 }
 
-impl SporApp {
-    pub(super) fn history_view(&mut self, ui: &mut Ui) {
-        let p = theme::palette(ui.ctx());
-        egui::Panel::left("history_list")
-            .resizable(true)
-            .default_size(470.0)
-            .min_size(320.0)
-            .max_size(760.0)
-            .frame(Frame::new().fill(p.bg))
-            .show(ui, |ui| self.commit_list(ui));
-
-        egui::CentralPanel::default()
-            .frame(Frame::new().fill(p.bg))
-            .show(ui, |ui| self.commit_detail(ui));
-    }
-
-    fn commit_list(&mut self, ui: &mut Ui) {
-        let p = theme::palette(ui.ctx());
-        let Some(repo) = &self.repo else { return };
-        let meta = RepoMeta {
-            remotes: &repo.remotes,
-            prs: &repo.prs,
+/// A local branch and its remote twin on the same commit share one tag.
+fn ref_tags(row: &GraphRow, remotes: &[String], prs: &HashMap<String, PrInfo>) -> Vec<RefTag> {
+    let refs = &row.commit.refs;
+    let remote_rest = |r: &str| -> Option<String> {
+        let (remote, rest) = r.split_once('/')?;
+        remotes
+            .iter()
+            .any(|x| x == remote)
+            .then(|| rest.to_string())
+    };
+    let mut tags = Vec::new();
+    for r in refs {
+        if let Some(t) = r.strip_prefix("tag:") {
+            tags.push(RefTag {
+                text: t.trim().to_string(),
+                head: false,
+                remote_only: false,
+            });
+            continue;
+        }
+        let rest = remote_rest(r);
+        if let Some(rest) = &rest {
+            if rest == "HEAD" || refs.iter().any(|o| o == rest) {
+                continue;
+            }
+        }
+        let mut text = r.clone();
+        if let Some(pr) = prs.get(rest.as_deref().unwrap_or(r)) {
+            let mark = match pr.checks {
+                ChecksState::Passing => " ✓",
+                ChecksState::Failing => " ✗",
+                ChecksState::Pending => " ●",
+                ChecksState::None => "",
+            };
+            text.push_str(&format!(" #{}{mark}", pr.number));
+        }
+        let head = row.commit.head_ref.as_deref() == Some(r.as_str());
+        let tag = RefTag {
+            text,
+            head,
+            remote_only: rest.is_some(),
         };
-        let graph_w = graph_view::graph_width(repo.max_lanes);
-        let total = repo.rows.len();
-
-        let mut area = egui::ScrollArea::vertical()
-            .id_salt("commits")
-            .auto_shrink(false);
-        if std::mem::take(&mut self.scroll_to_sel) {
-            // Keep the selection in view with a row of margin.
-            let viewport = ui.available_height();
-            let y = self.commit_sel as f32 * ROW_HEIGHT;
-            let offset = ui
-                .ctx()
-                .data(|d| d.get_temp::<f32>(egui::Id::new("commits_offset")))
-                .unwrap_or(0.0);
-            if y < offset + ROW_HEIGHT {
-                area = area.vertical_scroll_offset((y - ROW_HEIGHT).max(0.0));
-            } else if y + ROW_HEIGHT * 2.0 > offset + viewport {
-                area = area.vertical_scroll_offset(y + ROW_HEIGHT * 2.0 - viewport);
-            }
-        }
-
-        let mut clicked = None;
-        let mut double = false;
-        let mut action = None;
-        let output = area.show_rows(ui, ROW_HEIGHT, total, |ui, range| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for i in range {
-                let (rect, resp) = ui.allocate_exact_size(
-                    Vec2::new(ui.available_width(), ROW_HEIGHT),
-                    Sense::click(),
-                );
-                let painter = ui.painter_at(rect);
-                let selected = i == self.commit_sel;
-                let inset = rect.shrink2(Vec2::new(6.0, 1.0));
-                if selected {
-                    painter.rect_filled(inset, CornerRadius::same(7), p.selection);
-                } else {
-                    if resp.hovered() {
-                        painter.rect_filled(inset, CornerRadius::same(7), p.hover);
-                    }
-                    // Hairline between rows, indented past the graph.
-                    painter.hline(
-                        (rect.left() + graph_w + 4.0)..=rect.right(),
-                        rect.bottom() - 0.5,
-                        egui::Stroke::new(1.0, p.border.gamma_multiply(0.6)),
-                    );
-                }
-                let row = &repo.rows[i];
-                graph_view::paint_row(&painter, rect, row, &meta, graph_w, &p, selected);
-
-                if resp.clicked() || resp.secondary_clicked() {
-                    clicked = Some(i);
-                }
-                if resp.double_clicked() {
-                    double = true;
-                }
-                resp.context_menu(|ui| {
-                    ui.set_min_width(220.0);
-                    for r in row
-                        .commit
-                        .refs
-                        .iter()
-                        .filter(|r| !r.starts_with("tag:") && !r.ends_with("/HEAD"))
-                    {
-                        if row.commit.head_ref.as_deref() == Some(r.as_str()) {
-                            continue;
-                        }
-                        if ui.button(format!("Check Out “{r}”")).clicked() {
-                            action = Some(RowAction::Checkout(r.clone()));
-                        }
-                    }
-                    if ui.button("New Branch from Here…").clicked() {
-                        action = Some(RowAction::NewBranch(
-                            row.commit.hash.clone(),
-                            format!("{} — {}", row.commit.short, row.commit.subject),
-                        ));
-                    }
-                    ui.separator();
-                    if ui.button("Copy Commit ID").clicked() {
-                        action = Some(RowAction::Copy(row.commit.hash.clone()));
-                    }
-                    if ui.button("Copy Message").clicked() {
-                        action = Some(RowAction::Copy(row.commit.subject.clone()));
-                    }
-                });
-            }
-        });
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(egui::Id::new("commits_offset"), output.state.offset.y));
-
-        if let Some(i) = clicked {
-            if i != self.commit_sel {
-                self.select_commit(i);
-            }
-        }
-        if double {
-            self.checkout_selected();
-        }
-        match action {
-            Some(RowAction::Checkout(name)) => self.checkout(&name),
-            Some(RowAction::NewBranch(sha, label)) => self.new_branch_dialog(sha, label),
-            Some(RowAction::Copy(text)) => ui.ctx().copy_text(text),
-            None => {}
+        if head {
+            tags.insert(0, tag);
+        } else {
+            tags.push(tag);
         }
     }
+    tags
+}
 
-    fn commit_detail(&mut self, ui: &mut Ui) {
-        let p = theme::palette(ui.ctx());
-        if self.inspected.is_none() {
-            return diff_view::empty_state(ui, icon::GIT_COMMIT, "No Commit Selected", "");
+impl Spor {
+    pub(crate) fn render_history(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(repo) = &self.repo else {
+            return div().into_any_element();
+        };
+        if repo.rows.is_empty() {
+            return empty_state(
+                icon::GIT_COMMIT,
+                "No commits yet",
+                "Make the first commit from the git panel",
+                cx,
+            );
         }
-        let mut select_file = None;
-        let mut jump_to = None;
-        let mut copy = None;
+        let list = self.render_commit_list(window, cx);
+        let detail = self.render_commit_detail(window, cx);
+        v_resizable("history-split")
+            .child(
+                resizable_panel()
+                    .size(px(320.))
+                    .size_range(px(120.)..px(4000.))
+                    .child(list),
+            )
+            .child(
+                resizable_panel()
+                    .size_range(px(160.)..px(4000.))
+                    .child(detail),
+            )
+            .into_any_element()
+    }
 
-        egui::Panel::top("commit_header")
-            .resizable(true)
-            .default_size(260.0)
-            .min_size(120.0)
-            .frame(Frame::new().fill(p.bg).inner_margin(Margin {
-                left: 20,
-                right: 20,
-                top: 16,
-                bottom: 0,
-            }))
-            .show(ui, |ui| {
-                ui.set_min_height(ui.available_height());
-                let Some(ins) = &self.inspected else { return };
-                let Some(repo) = &self.repo else { return };
-                let Some(row) = repo.rows.get(self.commit_sel) else {
-                    return;
-                };
+    fn render_commit_list(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let Some(repo) = &self.repo else {
+            return div().into_any_element();
+        };
+        let rows = Rc::new(repo.rows.clone());
+        let remotes = Rc::new(repo.remotes.clone());
+        let prs = Rc::new(self.prs.clone());
+        let graph_w = graph::width(repo.max_lanes);
+        let selected = self.selected;
+        let spor = Self::weak(cx);
+        let colors = GraphColors {
+            background: theme.background,
+            head: theme.primary,
+            dark: theme.is_dark(),
+        };
+        let selected_colors = GraphColors {
+            background: theme.list_active,
+            ..colors
+        };
 
-                // Sender line, as in a Mail message header.
-                ui.horizontal(|ui| {
-                    avatar(ui, &ins.details.author, 38.0);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.add_space(1.0);
-                        ui.label(RichText::new(&ins.details.author).font(theme::semibold(13.5)));
-                        ui.label(RichText::new(&ins.details.date).size(11.5).color(p.muted));
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        let short = &ins.hash[..ins.hash.len().min(8)];
-                        if ui
-                            .add(
-                                egui::Label::new(
-                                    RichText::new(format!("{short} {}", icon::COPY))
-                                        .monospace()
-                                        .size(11.5)
-                                        .color(p.muted),
-                                )
-                                .sense(Sense::click()),
-                            )
-                            .on_hover_text("Copy commit ID")
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .clicked()
-                        {
-                            copy = Some(ins.hash.clone());
-                        }
-                    });
-                });
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(6.0);
+        let header = h_flex()
+            .h(px(26.))
+            .flex_none()
+            .pr_3()
+            .border_b_1()
+            .border_color(theme.border)
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(div().w(graph_w).flex_none())
+            .child(div().flex_1().child("Description"))
+            .child(div().w(px(AUTHOR_W)).flex_none().child("Author"))
+            .child(div().w(px(DATE_W)).flex_none().child("Date"))
+            .child(div().w(px(SHA_W)).flex_none().child("Commit"));
 
-                egui::ScrollArea::vertical()
-                    .id_salt("commit_detail")
-                    .auto_shrink(false)
-                    .show(ui, |ui| {
-                        let mut lines = ins.details.message.lines();
-                        let subject = lines.next().unwrap_or(&row.commit.subject).to_string();
-                        let body = lines.collect::<Vec<_>>().join("\n");
-                        ui.add(
-                            egui::Label::new(RichText::new(subject).font(theme::semibold(16.0)))
-                                .wrap(),
-                        );
-                        if !body.trim().is_empty() {
-                            ui.add_space(2.0);
-                            ui.add(
-                                egui::Label::new(RichText::new(body.trim()).color(p.muted)).wrap(),
-                            );
-                        }
-                        if !ins.details.committer.is_empty()
-                            && ins.details.committer != ins.details.author
-                        {
-                            ui.label(
-                                RichText::new(format!("Committed by {}", ins.details.committer))
-                                    .size(11.5)
-                                    .color(p.faint),
-                            );
-                        }
-                        if !row.commit.parents.is_empty() {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 6.0;
-                                let label = if row.commit.parents.len() > 1 {
-                                    "Parents"
-                                } else {
-                                    "Parent"
-                                };
-                                ui.label(RichText::new(label).size(11.5).color(p.faint));
-                                for parent in &row.commit.parents {
-                                    let short = &parent[..parent.len().min(7)];
-                                    if ui
-                                        .add(
-                                            egui::Label::new(
-                                                RichText::new(short)
-                                                    .monospace()
-                                                    .size(11.5)
-                                                    .color(p.accent),
-                                            )
-                                            .sense(Sense::click()),
-                                        )
-                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                        .clicked()
-                                    {
-                                        jump_to =
-                                            repo.rows.iter().position(|r| &r.commit.hash == parent);
+        let list = uniform_list("commit-rows", rows.len(), move |range, _, cx| {
+            let theme = cx.theme().clone();
+            range
+                .map(|ix| {
+                    let row = rows[ix].clone();
+                    let is_selected = selected == Some(ix);
+                    let tags = ref_tags(&row, &remotes, &prs);
+                    let graph_colors = if is_selected { selected_colors } else { colors };
+                    let graph_row = row.clone();
+                    let click_spor = spor.clone();
+                    let menu_spor = spor.clone();
+                    let menu_row = row.clone();
+                    h_flex()
+                        .id(SharedString::from(row.commit.hash.clone()))
+                        .h(px(ROW_HEIGHT))
+                        .w_full()
+                        .pr_3()
+                        .text_sm()
+                        .when(is_selected, |this| this.bg(theme.list_active))
+                        .when(!is_selected, |this| {
+                            this.hover(|this| this.bg(theme.list_hover))
+                        })
+                        .on_click(
+                            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                let double = event.click_count() >= 2;
+                                let _ = click_spor.update(cx, |this, cx| {
+                                    this.select_commit(ix, cx);
+                                    this.history_focus.focus(window, cx);
+                                    if double {
+                                        this.checkout_selected(window, cx);
                                     }
-                                }
-                            });
-                        }
+                                });
+                            },
+                        )
+                        .child(
+                            canvas(
+                                |_, _, _| (),
+                                move |bounds, (), window, _| {
+                                    graph::paint_row(bounds, &graph_row, &graph_colors, window)
+                                },
+                            )
+                            .w(graph_w)
+                            .h_full()
+                            .flex_none(),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .children(tags.into_iter().map(|tag| render_tag(tag, &theme)))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .ml_1()
+                                        .child(row.commit.subject.clone()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .w(px(AUTHOR_W))
+                                .flex_none()
+                                .truncate()
+                                .pr_2()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(row.commit.author.clone()),
+                        )
+                        .child(
+                            div()
+                                .w(px(DATE_W))
+                                .flex_none()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(relative_time(row.commit.timestamp)),
+                        )
+                        .child(
+                            div()
+                                .w(px(SHA_W))
+                                .flex_none()
+                                .text_xs()
+                                .font_family(theme.mono_font_family.clone())
+                                .text_color(theme.muted_foreground)
+                                .child(row.commit.short.clone()),
+                        )
+                        .context_menu(move |menu, _, _| {
+                            commit_menu(menu, &menu_row, menu_spor.clone())
+                        })
+                        .into_any_element()
+                })
+                .collect()
+        })
+        .size_full()
+        .track_scroll(&self.history_scroll);
 
-                        ui.add_space(14.0);
-                        let (adds, dels) = ins
-                            .files
-                            .iter()
-                            .fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions));
-                        ui.horizontal(|ui| {
-                            let n = ins.files.len();
-                            ui.label(
-                                RichText::new(format!(
-                                    "{n} File{} Changed",
-                                    if n == 1 { "" } else { "s" }
-                                ))
-                                .font(theme::semibold(11.5))
-                                .color(p.muted),
-                            );
-                            ui.label(RichText::new(format!("+{adds}")).size(11.5).color(p.green));
-                            ui.label(RichText::new(format!("−{dels}")).size(11.5).color(p.red));
-                        });
-                        ui.add_space(2.0);
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        for (i, f) in ins.files.iter().enumerate() {
-                            let selected = self.commit_file == Some(i);
-                            let (rect, resp) = ui.allocate_exact_size(
-                                Vec2::new(ui.available_width(), 26.0),
-                                Sense::click(),
-                            );
-                            let painter = ui.painter_at(rect);
-                            let (text, muted) = if selected {
-                                painter.rect_filled(rect, CornerRadius::same(6), p.selection);
-                                (Color32::WHITE, Color32::from_white_alpha(190))
-                            } else {
-                                if resp.hovered() {
-                                    painter.rect_filled(rect, CornerRadius::same(6), p.hover);
-                                }
-                                (p.text, p.muted)
-                            };
-                            let mid = rect.center().y;
-                            let (letter, color) = change_badge(f.change, &p);
-                            let bc = Pos2::new(rect.left() + 14.0, mid);
-                            if selected {
-                                painter.text(
-                                    bc,
-                                    Align2::CENTER_CENTER,
-                                    letter,
-                                    theme::semibold(10.5),
-                                    text,
-                                );
-                            } else {
-                                paint_badge(&painter, bc, letter, color);
-                            }
-                            let counts = if f.binary {
-                                "binary".to_string()
-                            } else {
-                                format!("+{}  −{}", f.additions, f.deletions)
-                            };
-                            let cr = painter.text(
-                                Pos2::new(rect.right() - 10.0, mid),
-                                Align2::RIGHT_CENTER,
-                                counts,
-                                FontId::proportional(11.0),
-                                muted,
-                            );
-                            let (name, dir) = split_path(f.path());
-                            let end = text_until(
-                                &painter,
-                                rect.left() + 30.0,
-                                mid,
-                                cr.left() - 10.0,
-                                name,
-                                FontId::proportional(13.0),
-                                text,
-                            );
-                            if !dir.is_empty() {
-                                text_until(
-                                    &painter,
-                                    end + 6.0,
-                                    mid,
-                                    cr.left() - 10.0,
-                                    dir.trim_end_matches('/'),
-                                    FontId::proportional(11.5),
-                                    muted,
-                                );
-                            }
-                            if resp.clicked() {
-                                select_file = Some(i);
-                            }
-                        }
-                        ui.add_space(10.0);
-                    });
-            });
-
-        egui::CentralPanel::default()
-            .frame(Frame::new().fill(p.bg))
-            .show(ui, |ui| {
-                let Some(doc) = &self.diff else {
-                    return diff_view::empty_state(ui, icon::FILE_TEXT, "No File Selected", "");
-                };
-                Frame::new()
-                    .inner_margin(Margin::symmetric(16, 0))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        diff_view::header(ui, &doc.file, &mut self.diff_mode, |_| {});
-                    });
-                let r = ui.cursor();
-                ui.painter()
-                    .hline(r.x_range(), r.top(), egui::Stroke::new(1.0, p.border));
-                diff_view::body(ui, doc, self.diff_mode);
-            });
-
-        if let Some(h) = copy {
-            ui.ctx().copy_text(h);
-            self.info("Commit ID copied");
-        }
-        if let Some(i) = select_file {
-            self.select_commit_file(i);
-        }
-        if let Some(i) = jump_to {
-            self.select_commit(i);
-            self.scroll_to_sel = true;
-        }
+        v_flex()
+            .size_full()
+            .child(header)
+            .child(
+                div()
+                    .id("commit-list")
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .track_focus(&self.history_focus)
+                    .key_context("SporHistory")
+                    .child(list)
+                    .child(Scrollbar::vertical(&self.history_scroll)),
+            )
+            .into_any_element()
     }
+
+    fn render_commit_detail(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let (Some(repo), Some(info)) = (&self.repo, &self.commit) else {
+            return empty_state(icon::GIT_COMMIT, "No commit selected", "", cx);
+        };
+        let Some(row) = repo.rows.iter().find(|r| r.commit.hash == info.hash) else {
+            return div().into_any_element();
+        };
+        let details = &info.details;
+        let mut lines = details.message.lines();
+        let subject = lines.next().unwrap_or(&row.commit.subject).to_string();
+        let body = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+        let files = self.commit_diff.read(cx).files();
+        let (adds, dels) = files
+            .iter()
+            .fold((0, 0), |(a, d), f| (a + f.additions(), d + f.deletions()));
+        let file_count = files.len();
+        let hash = info.hash.clone();
+        let short: SharedString = hash[..hash.len().min(10)].to_string().into();
+        let parents: Vec<(usize, String)> = row
+            .commit
+            .parents
+            .iter()
+            .filter_map(|p| {
+                repo.rows
+                    .iter()
+                    .position(|r| &r.commit.hash == p)
+                    .map(|i| (i, p[..p.len().min(7)].to_string()))
+            })
+            .collect();
+        let author = details.author.clone();
+        let initials: String = author
+            .split_whitespace()
+            .filter_map(|w| w.chars().next())
+            .take(2)
+            .flat_map(char::to_uppercase)
+            .collect();
+
+        let header = v_flex()
+            .flex_none()
+            .px_4()
+            .py_3()
+            .gap_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(div().text_base().font_medium().child(subject))
+            .when(!body.is_empty(), |this| {
+                this.child(
+                    div()
+                        .id("commit-body")
+                        .max_h(px(120.))
+                        .overflow_y_scroll()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .whitespace_normal()
+                        .child(body),
+                )
+            })
+            .child(
+                h_flex()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        div()
+                            .size(px(18.))
+                            .rounded_full()
+                            .bg(avatar_color(&author))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(gpui_kit::white())
+                            .text_size(px(9.))
+                            .font_medium()
+                            .child(initials),
+                    )
+                    .child(div().text_color(theme.foreground).child(author))
+                    .child("·")
+                    .child(details.date.clone())
+                    .child("·")
+                    .child(
+                        Button::new("copy-sha")
+                            .ghost()
+                            .xsmall()
+                            .label(short)
+                            .icon(Icon::empty().path(icon::COPY))
+                            .tooltip("Copy commit SHA")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.copy(hash.clone(), "Commit SHA", window, cx)
+                            })),
+                    )
+                    .children(parents.into_iter().map(|(ix, short)| {
+                        Button::new(SharedString::from(format!("parent-{short}")))
+                            .ghost()
+                            .xsmall()
+                            .label(format!("parent {short}"))
+                            .on_click(cx.listener(move |this, _, _, cx| this.select_commit(ix, cx)))
+                    }))
+                    .child(div().flex_1())
+                    .child(plural(file_count, "file"))
+                    .child(div().text_color(theme.green).child(format!("+{adds}")))
+                    .child(div().text_color(theme.red).child(format!("−{dels}"))),
+            );
+
+        v_flex()
+            .size_full()
+            .child(header)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(Diff::new(&self.commit_diff).line_number(true)),
+            )
+            .into_any_element()
+    }
+}
+
+fn render_tag(tag: RefTag, theme: &gpui_kit::component::Theme) -> AnyElement {
+    let (fg, bg, border): (Hsla, Hsla, Hsla) = if tag.head {
+        (
+            theme.primary,
+            theme.primary.opacity(0.15),
+            theme.primary.opacity(0.5),
+        )
+    } else if tag.remote_only {
+        (
+            theme.muted_foreground,
+            gpui_kit::transparent_black(),
+            theme.border,
+        )
+    } else {
+        (theme.foreground, theme.muted, theme.border)
+    };
+    div()
+        .flex_none()
+        .px_1p5()
+        .rounded(px(3.))
+        .border_1()
+        .border_color(border)
+        .bg(bg)
+        .text_xs()
+        .text_color(fg)
+        .child(tag.text)
+        .into_any_element()
+}
+
+/// A stable, pleasant color per author name.
+fn avatar_color(name: &str) -> Hsla {
+    let mut h: u32 = 2166136261;
+    for b in name.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(16777619);
+    }
+    gpui_kit::hsla((h % 360) as f32 / 360.0, 0.45, 0.5, 1.0)
+}
+
+fn commit_menu(
+    menu: gpui_kit::component::menu::PopupMenu,
+    row: &GraphRow,
+    spor: gpui_kit::WeakEntity<Spor>,
+) -> gpui_kit::component::menu::PopupMenu {
+    type Act = Rc<dyn Fn(&mut Spor, &mut Window, &mut Context<Spor>)>;
+    let act = |label: String, f: Act| {
+        let spor = spor.clone();
+        PopupMenuItem::new(label).on_click(move |_, window, cx| {
+            let f = f.clone();
+            let _ = spor.update(cx, |this, cx| f(this, window, cx));
+        })
+    };
+    let mut menu = menu;
+    for r in row
+        .commit
+        .refs
+        .iter()
+        .filter(|r| !r.starts_with("tag:") && !r.ends_with("/HEAD"))
+    {
+        if row.commit.head_ref.as_deref() == Some(r.as_str()) {
+            continue;
+        }
+        let name = r.clone();
+        menu = menu.item(act(
+            format!("Check Out {r}"),
+            Rc::new(move |this, w, cx| this.checkout(&name, w, cx)),
+        ));
+    }
+    let (hash, sha, subject) = (
+        row.commit.hash.clone(),
+        row.commit.hash.clone(),
+        row.commit.subject.clone(),
+    );
+    menu.item(act(
+        "New Branch from Here…".into(),
+        Rc::new(move |this, w, cx| this.new_branch(Some(hash.clone()), w, cx)),
+    ))
+    .separator()
+    .item(act(
+        "Copy Commit SHA".into(),
+        Rc::new(move |this, w, cx| this.copy(sha.clone(), "Commit SHA", w, cx)),
+    ))
+    .item(act(
+        "Copy Message".into(),
+        Rc::new(move |this, w, cx| this.copy(subject.clone(), "Message", w, cx)),
+    ))
 }
