@@ -4,6 +4,7 @@
 //! we're talking to, then either shell out to that host's CLI tool (`gh`,
 //! `glab`) or construct a compare URL the user can open.
 
+use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,7 +31,13 @@ pub struct RemoteInfo {
 /// Inspect `origin` and figure out where it lives.
 /// Handles both SSH (`git@github.com:owner/repo.git`) and HTTPS forms.
 pub fn detect() -> Option<RemoteInfo> {
+    detect_in(Path::new("."))
+}
+
+/// [`detect`] for the repository at `dir`.
+pub fn detect_in(dir: &Path) -> Option<RemoteInfo> {
     let url = Command::new("git")
+        .current_dir(dir)
         .args(["remote", "get-url", "origin"])
         .output()
         .ok()
@@ -244,6 +251,105 @@ fn rollup_checks(list: &str) -> ChecksState {
     }
 }
 
+/// Where a PR stands, for the PR search.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PrState {
+    Open,
+    Draft,
+    Merged,
+    Closed,
+}
+
+/// A PR as the search lists it: open, merged and closed alike.
+#[derive(Debug, Clone)]
+pub struct PrSummary {
+    pub number: u64,
+    pub title: String,
+    pub head_branch: String,
+    pub author: String,
+    pub state: PrState,
+    pub url: String,
+}
+
+impl PrSummary {
+    /// Does every word of `query` appear in the number, title, branch or
+    /// author? `#42` and `42` both match PR 42. Case-insensitive.
+    pub fn matches(&self, query: &str) -> bool {
+        let haystack = format!(
+            "#{} {} {} {}",
+            self.number, self.title, self.head_branch, self.author
+        )
+        .to_lowercase();
+        query
+            .split_whitespace()
+            .all(|word| haystack.contains(&word.to_lowercase()))
+    }
+}
+
+/// number \t title \t head branch \t author \t OPEN|DRAFT|MERGED|CLOSED \t url
+const PR_SEARCH_JQ: &str = r#".[] | [(.number|tostring), .title, .headRefName, (.author.login // ""), (if .isDraft and .state == "OPEN" then "DRAFT" else .state end), .url] | @tsv"#;
+
+/// The repo's most recent PRs in every state, newest first, for searching.
+/// Slow (network) — call off the UI thread. The error says why there's
+/// nothing to search.
+pub fn list_prs_for_search(dir: &Path) -> Result<Vec<PrSummary>, String> {
+    let info = detect_in(dir).ok_or("This repository has no origin remote")?;
+    if info.host != Host::GitHub {
+        return Err("Pull request search works with GitHub repositories".into());
+    }
+    cli_tool(&info.host).ok_or("Install the GitHub CLI (gh) to search pull requests")?;
+    let out = Command::new("gh")
+        .current_dir(dir)
+        .args([
+            "pr",
+            "list",
+            "--state",
+            "all",
+            "--limit",
+            "500",
+            "--json",
+            "number,title,headRefName,author,state,isDraft,url",
+            "--jq",
+            PR_SEARCH_JQ,
+        ])
+        .output()
+        .map_err(|e| format!("Couldn't run gh: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(err
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("gh failed")
+            .to_string());
+    }
+    Ok(parse_pr_summaries(&String::from_utf8_lossy(&out.stdout)))
+}
+
+fn parse_pr_summaries(out: &str) -> Vec<PrSummary> {
+    out.lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split('\t').collect();
+            if f.len() < 6 {
+                return None;
+            }
+            Some(PrSummary {
+                number: f[0].parse().ok()?,
+                // @tsv escapes tabs and backslashes in the title.
+                title: f[1].replace("\\t", " ").replace("\\\\", "\\"),
+                head_branch: f[2].to_string(),
+                author: f[3].to_string(),
+                state: match f[4] {
+                    "DRAFT" => PrState::Draft,
+                    "MERGED" => PrState::Merged,
+                    "CLOSED" => PrState::Closed,
+                    _ => PrState::Open,
+                },
+                url: f[5].to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Build the argv for the PR-create command. Caller invokes this either
 /// directly (auto mode with --fill) or after suspending the TUI (interactive).
 pub fn pr_create_args(host: &Host, base: &str) -> Vec<String> {
@@ -342,6 +448,39 @@ mod tests {
         let pr = parse_pr_line("3\tfix/y\topen\tCHANGES_REQUESTED\tFAILURE").unwrap();
         assert_eq!(pr.review, ReviewState::ChangesRequested);
         assert_eq!(pr.checks, ChecksState::Failing);
+    }
+
+    #[test]
+    fn parse_pr_summaries_states() {
+        let prs = parse_pr_summaries(
+            "12\tAdd login\tfeat/login\toyviba\tOPEN\thttps://github.com/o/r/pull/12\n\
+             11\tWIP\\tthing\twip\tsomeone\tDRAFT\thttps://github.com/o/r/pull/11\n\
+             10\tFix\tfix/x\toyviba\tMERGED\thttps://github.com/o/r/pull/10\n\
+             garbage\n",
+        );
+        assert_eq!(prs.len(), 3);
+        assert_eq!(prs[0].state, PrState::Open);
+        assert_eq!(prs[1].state, PrState::Draft);
+        assert_eq!(prs[1].title, "WIP thing");
+        assert_eq!(prs[2].state, PrState::Merged);
+        assert_eq!(prs[2].url, "https://github.com/o/r/pull/10");
+    }
+
+    #[test]
+    fn pr_summary_matches_every_word() {
+        let pr = PrSummary {
+            number: 42,
+            title: "Add a theme editor".into(),
+            head_branch: "claude/theme".into(),
+            author: "oyviba".into(),
+            state: PrState::Open,
+            url: String::new(),
+        };
+        assert!(pr.matches("#42"));
+        assert!(pr.matches("42"));
+        assert!(pr.matches("THEME oyviba"));
+        assert!(pr.matches(""));
+        assert!(!pr.matches("theme login"));
     }
 
     #[test]

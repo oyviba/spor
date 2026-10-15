@@ -249,3 +249,62 @@ pub fn fingerprint(root: &Path) -> Option<String> {
     let numstat = run(&["diff", "--no-ext-diff", "--numstat", "HEAD"]).unwrap_or_default();
     Some(format!("{head}\n{branch}\n{refs}\n{status}\n{numstat}"))
 }
+
+/// What the repository sidebar shows for a repository that isn't open: its
+/// branch and how far it is from its upstream (as of its last fetch).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RepoHead {
+    /// The branch, or `None` when HEAD is detached.
+    pub branch: Option<String>,
+    /// The short commit HEAD is on, for a detached HEAD.
+    pub short: String,
+    pub ahead: usize,
+    pub behind: usize,
+}
+
+impl RepoHead {
+    /// The branch name, or what a detached HEAD points at.
+    pub fn label(&self) -> String {
+        match &self.branch {
+            Some(branch) => branch.clone(),
+            None if self.short.is_empty() => "detached".into(),
+            None => format!("detached at {}", self.short),
+        }
+    }
+}
+
+/// Read a repository's branch and upstream counts without touching its
+/// working tree, so it stays cheap for every repository in a workspace.
+pub fn head(root: &Path) -> Option<RepoHead> {
+    let run = |args: &[&str]| -> Option<String> {
+        let out = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    let short = run(&["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+    let branch = run(&["symbolic-ref", "--short", "-q", "HEAD"]);
+    if branch.is_none() && short.is_empty() && !root.join(".git").exists() {
+        return None;
+    }
+    let (ahead, behind) = branch
+        .as_ref()
+        .and_then(|_| run(&["rev-list", "--left-right", "--count", "HEAD...@{u}"]))
+        .map(|counts| {
+            let mut it = counts
+                .split_whitespace()
+                .map(|n| n.parse::<usize>().unwrap_or(0));
+            (it.next().unwrap_or(0), it.next().unwrap_or(0))
+        })
+        .unwrap_or((0, 0));
+    Some(RepoHead {
+        branch,
+        short,
+        ahead,
+        behind,
+    })
+}

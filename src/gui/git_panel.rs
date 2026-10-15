@@ -106,6 +106,7 @@ impl Spor {
         let message_empty = self.message.read(cx).value().trim().is_empty();
         let job = self.job;
         let sync_label = self.sync_label();
+        let behind = repo.tracking.behind;
 
         let header = h_flex()
             .h(px(36.))
@@ -237,10 +238,15 @@ impl Spor {
                 h_flex()
                     .gap_1()
                     .when(has_remote, |this| {
+                        let sync = Button::new("sync");
+                        // Stands out while there are commits waiting to be pulled.
+                        let sync = if behind > 0 {
+                            sync.info()
+                        } else {
+                            sync.ghost()
+                        };
                         this.child(
-                            Button::new("sync")
-                                .ghost()
-                                .small()
+                            sync.small()
                                 .icon(Icon::empty().path(icon::SYNC))
                                 .label(sync_label)
                                 .loading(job.is_some())

@@ -82,8 +82,9 @@ The layout follows Zed's:
   already belongs to; the repository menu in the title bar switches between
   a workspace's repositories, moves one to another workspace or removes it
 - **Repositories** — the workspace's repositories in a sidebar beside the
-  rail (⌘⇧E hides it); the open one shows its branch and change count.
-  Click to switch, right-click to reveal or remove one
+  rail (⌘⇧E hides it); each shows its current branch, and a blue `↓3`
+  when it has commits to pull (the open one also its change count). Hover
+  for where it lives; click to switch, right-click to reveal or remove one
 - **Title bar** — repository and branch pickers, and the branch's PR
 - **Dock** — on the right by default; the status bar button moves it to the
   left. It holds the **git panel** (⌘⇧G): changed files split into Staged
@@ -103,7 +104,8 @@ The layout follows Zed's:
   in the header picks columns, labels, row height and lane width. **Drag a
   branch** onto another branch's row to merge it there (⌘Z undoes) or open
   a pull request between the two
-- **Status bar** — dock toggles, the branch with ahead/behind counts,
+- **Status bar** — dock toggles, the branch with ahead counts and a
+  clickable *↓3 to pull*,
   background jobs, and unified / split diffs
 - **Undo instead of confirmations** — discarding changes, staging and
   committing happen immediately and can be taken back with ⌘Z or the Undo
@@ -119,6 +121,19 @@ Dark or Light, start from a preset (Nord, Dracula, Midnight; Solarized,
 Paper) and adjust surfaces, text, accent, list, border and diff colors,
 corner radius and font size. Edits are saved as overrides on top of the
 Spor themes; Reset goes back to them, and Copy as JSON gives a theme file.
+
+**⌘P** opens a palette that searches the repository's pull requests — by
+number, title, branch or author; with an empty query it lists the open
+ones, typing also finds merged and closed ones — and opens the one you pick
+on GitHub (needs `gh`). The same palette runs any command and shows its
+shortcut. **⌘/** lists every keyboard shortcut; both are also in the
+repository menu.
+
+**Knowing when to pull** — the open repository is fetched quietly in the
+background every few minutes. When its upstream has new commits, a
+notification says so (with a Pull button), a *Pull 3* button appears in the
+title bar, and the Sync button, status bar and sidebar light up until you
+pull.
 
 Sync runs in the background. The app has no terminal, so credentials must
 come from a helper (macOS keychain, ssh-agent); a sync that would need a
@@ -199,6 +214,8 @@ Mac app (`spor-app`, `--features gui`):
 - `src/gui/git_panel.rs`, `branches.rs` — the two dock panels
 - `src/gui/changes_view.rs`, `history.rs` — the two center tabs
 - `src/gui/history_options.rs` — the History graph's saved options
+- `src/gui/palette.rs` — the ⌘P palette (PR search, commands) and the ⌘/
+  shortcut list, both from one table of shortcuts
 - `src/gui/graph.rs` — paints the commit graph
 - `src/gui/welcome.rs` — the page shown when no repository is open
 - `src/gui/repo.rs` — snapshot of a repository for the views
