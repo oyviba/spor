@@ -1,6 +1,7 @@
-//! The git panel, after Zed's: changed files grouped Tracked / Untracked with
-//! a checkbox each (ticked = staged), and the commit message editor with the
-//! remote and Commit buttons underneath.
+//! The git panel: changed files split into Staged and Unstaged, and the
+//! commit message editor with the remote and Commit buttons underneath.
+//! Clicking a file moves it to the other list (and shows its diff), so a
+//! commit takes exactly the files picked; the eye button only shows the diff.
 
 use super::app::*;
 use super::assets::icon;
@@ -87,16 +88,18 @@ impl Spor {
         let all_staged = !changes.is_empty() && changes.iter().all(|c| c.included());
         let staged = repo.staged_count();
         let has_remote = !repo.remotes.is_empty();
-        let tracked: Vec<Change> = changes.iter().filter(|c| !c.untracked).cloned().collect();
-        let untracked: Vec<Change> = changes.iter().filter(|c| c.untracked).cloned().collect();
+        // A partly staged file stays under Unstaged, with a mixed checkbox:
+        // clicking it stages the rest.
+        let (staged_rows, unstaged_rows): (Vec<Change>, Vec<Change>) =
+            changes.iter().cloned().partition(|c| c.included());
         let mut rows = Vec::new();
-        if !tracked.is_empty() {
-            rows.push(Row::Header("Tracked", tracked.len()));
-            rows.extend(tracked.into_iter().map(Row::Entry));
+        if !staged_rows.is_empty() {
+            rows.push(Row::Header("Staged", staged_rows.len()));
+            rows.extend(staged_rows.into_iter().map(Row::Entry));
         }
-        if !untracked.is_empty() {
-            rows.push(Row::Header("Untracked", untracked.len()));
-            rows.extend(untracked.into_iter().map(Row::Entry));
+        if !unstaged_rows.is_empty() {
+            rows.push(Row::Header("Unstaged", unstaged_rows.len()));
+            rows.extend(unstaged_rows.into_iter().map(Row::Entry));
         }
         let rows = Rc::new(rows);
         let spor = Self::weak(cx);
@@ -254,7 +257,7 @@ impl Spor {
                             .label(commit_label)
                             .disabled(!can_commit)
                             .tooltip(if staged == 0 {
-                                "Tick files to include them in the commit"
+                                "Click files to stage them for the commit"
                             } else if message_empty {
                                 "Write a commit message first"
                             } else {
@@ -302,26 +305,25 @@ fn render_row(row: &Row, ix: usize, spor: gpui_kit::WeakEntity<Spor>, cx: &mut A
             };
             let color = status_color(change, cx);
             let path: SharedString = change.path.clone().into();
-            let toggle = {
-                let spor = spor.clone();
-                let change = change.clone();
-                move |_: &gpui_kit::ClickEvent, window: &mut Window, cx: &mut App| {
-                    let _ = spor.update(cx, |this, cx| this.toggle_change(&change, window, cx));
-                }
-            };
-            let open = {
+            let show = {
                 let spor = spor.clone();
                 let path = path.clone();
                 move |_: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut App| {
-                    let path = path.clone();
+                    cx.stop_propagation();
+                    let _ = spor.update(cx, |this, cx| this.show_change(&path, cx));
+                }
+            };
+            let stage_and_show = {
+                let spor = spor.clone();
+                let change = change.clone();
+                move |_: &gpui_kit::ClickEvent, window: &mut Window, cx: &mut App| {
                     let _ = spor.update(cx, |this, cx| {
-                        this.tab = Tab::Changes;
-                        this.changes_diff
-                            .update(cx, |state, cx| state.scroll_to_file(&path, cx));
-                        cx.notify();
+                        this.toggle_change(&change, window, cx);
+                        this.show_change(&change.path, cx);
                     });
                 }
             };
+            let group: SharedString = format!("git-row-{}", change.path).into();
             let menu_change = change.clone();
             let menu_spor = spor.clone();
             h_flex()
@@ -330,17 +332,11 @@ fn render_row(row: &Row, ix: usize, spor: gpui_kit::WeakEntity<Spor>, cx: &mut A
                 .px_3()
                 .gap_2()
                 .text_sm()
+                .group(group.clone())
+                .cursor_pointer()
                 .hover(|this| this.bg(theme.list_hover))
-                .on_click(open)
-                .child(
-                    div()
-                        .id(SharedString::from(format!("git-check-{}", change.path)))
-                        .child(checkbox(state, cx))
-                        .on_click(move |event, window, cx| {
-                            cx.stop_propagation();
-                            toggle(event, window, cx)
-                        }),
-                )
+                .on_click(stage_and_show)
+                .child(checkbox(state, cx))
                 .child(
                     h_flex()
                         .flex_1()
@@ -365,6 +361,20 @@ fn render_row(row: &Row, ix: usize, spor: gpui_kit::WeakEntity<Spor>, cx: &mut A
                 .child(
                     div()
                         .flex_none()
+                        .opacity(0.)
+                        .group_hover(group, |this| this.opacity(1.))
+                        .child(
+                            Button::new(SharedString::from(format!("git-show-{}", change.path)))
+                                .ghost()
+                                .xsmall()
+                                .icon(Icon::empty().path(icon::FILE_DIFF))
+                                .tooltip("Show changes")
+                                .on_click(show),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
                         .text_xs()
                         .font_family(theme.mono_font_family.clone())
                         .text_color(color)
@@ -382,14 +392,20 @@ fn render_row(row: &Row, ix: usize, spor: gpui_kit::WeakEntity<Spor>, cx: &mut A
                     };
                     let (c1, c2, c3) = (change.clone(), change.clone(), change.clone());
                     let path = change.path.clone();
-                    let mut menu = menu.item(act(
-                        if change.included() {
-                            "Unstage".into()
-                        } else {
-                            "Stage".into()
-                        },
-                        Rc::new(move |this, w, cx| this.toggle_change(&c1, w, cx)),
-                    ));
+                    let show_path = path.clone();
+                    let mut menu = menu
+                        .item(act(
+                            if change.included() {
+                                "Unstage".into()
+                            } else {
+                                "Stage".into()
+                            },
+                            Rc::new(move |this, w, cx| this.toggle_change(&c1, w, cx)),
+                        ))
+                        .item(act(
+                            "Show Changes".into(),
+                            Rc::new(move |this, _, cx| this.show_change(&show_path, cx)),
+                        ));
                     if change.unstaged {
                         menu = menu.item(act(
                             "Discard Changes".into(),

@@ -29,6 +29,8 @@ actions!(
     spor,
     [
         ToggleDock,
+        ToggleDockSide,
+        ToggleRepositories,
         ShowGitPanel,
         ShowBranches,
         ShowChanges,
@@ -76,6 +78,7 @@ pub(crate) fn workspace_action(ix: usize) -> Option<Box<dyn gpui_kit::Action>> {
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("secondary-b", ToggleDock, Some("Spor")),
+        KeyBinding::new("secondary-shift-e", ToggleRepositories, Some("Spor")),
         KeyBinding::new("secondary-shift-g", ShowGitPanel, Some("Spor")),
         KeyBinding::new("secondary-shift-b", ShowBranches, Some("Spor")),
         KeyBinding::new("secondary-shift-c", ShowChanges, Some("Spor")),
@@ -120,6 +123,58 @@ pub enum DockPanel {
     Branches,
 }
 
+/// Which side of the center pane the dock sits on.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum DockSide {
+    Left,
+    Right,
+}
+
+/// Panel layout that survives restarts: whether the repository list is
+/// shown, and the dock's side. Stored as `repos<TAB>1` / `dock<TAB>right`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Layout {
+    pub show_repos: bool,
+    pub dock_side: DockSide,
+}
+
+impl Layout {
+    const SETTING: &'static str = "layout";
+
+    fn saved() -> Self {
+        let mut layout = Self {
+            show_repos: true,
+            dock_side: DockSide::Right,
+        };
+        for line in support::read_setting(Self::SETTING)
+            .unwrap_or_default()
+            .lines()
+        {
+            match line.split_once('\t') {
+                Some(("repos", v)) => layout.show_repos = v != "0",
+                Some(("dock", v)) => {
+                    layout.dock_side = if v == "left" {
+                        DockSide::Left
+                    } else {
+                        DockSide::Right
+                    }
+                }
+                _ => {}
+            }
+        }
+        layout
+    }
+
+    pub(crate) fn save(self) {
+        let dock = match self.dock_side {
+            DockSide::Left => "left",
+            DockSide::Right => "right",
+        };
+        let repos = if self.show_repos { "1" } else { "0" };
+        support::write_setting(Self::SETTING, &format!("repos\t{repos}\ndock\t{dock}\n"));
+    }
+}
+
 /// Something ⌘Z can take back.
 pub enum Undo {
     /// Put files' working-tree contents back (None: they didn't exist).
@@ -159,6 +214,7 @@ pub struct Spor {
     pub(crate) workspaces: Workspaces,
     pub(crate) tab: Tab,
     pub(crate) dock: Option<DockPanel>,
+    pub(crate) layout: Layout,
     pub(crate) selected: Option<usize>,
     pub(crate) commit: Option<CommitInfo>,
     pub(crate) commit_diff: Entity<DiffState>,
@@ -218,6 +274,7 @@ impl Spor {
             workspaces: Workspaces::load(),
             tab: Tab::Changes,
             dock: Some(DockPanel::Git),
+            layout: Layout::saved(),
             selected: None,
             commit: None,
             commit_diff,
@@ -716,6 +773,14 @@ impl Spor {
             ));
         }
         self.reload(window, cx);
+    }
+
+    /// Scroll Uncommitted Changes to a file's diff.
+    pub(crate) fn show_change(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.tab = Tab::Changes;
+        self.changes_diff
+            .update(cx, |state, cx| state.scroll_to_file(path, cx));
+        cx.notify();
     }
 
     /// Stage or unstage every changed file.
@@ -1248,6 +1313,24 @@ impl Spor {
     ) {
         self.appearance = appearance;
         theme::set(appearance, window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_repositories(&mut self, cx: &mut Context<Self>) {
+        self.layout.show_repos = !self.layout.show_repos;
+        self.layout.save();
+        cx.notify();
+    }
+
+    /// Move the dock to the other side of the center pane, showing it if
+    /// it was hidden.
+    pub(crate) fn toggle_dock_side(&mut self, cx: &mut Context<Self>) {
+        self.layout.dock_side = match self.layout.dock_side {
+            DockSide::Left => DockSide::Right,
+            DockSide::Right => DockSide::Left,
+        };
+        self.layout.save();
+        self.dock.get_or_insert(DockPanel::Git);
         cx.notify();
     }
 

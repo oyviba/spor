@@ -1,5 +1,5 @@
-//! The window frame: title bar, the workspace rail, the dock + center split,
-//! and the status bar.
+//! The window frame: title bar, the workspace rail and repository list, the
+//! dock + center split (the dock on either side), and the status bar.
 
 use super::app::*;
 use super::assets::icon;
@@ -14,7 +14,7 @@ use gpui_kit::component::{
     spinner::Spinner,
     status_bar::StatusBar,
     tab::{Tab as TabItem, TabBar},
-    v_flex, ActiveTheme as _, Icon, Selectable as _, Sizable as _, TitleBar,
+    v_flex, ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, TitleBar,
 };
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, AnyElement, Context, ExternalPaths,
@@ -42,6 +42,10 @@ impl Render for Spor {
                 };
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &ToggleDockSide, _, cx| this.toggle_dock_side(cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleRepositories, _, cx| this.toggle_repositories(cx)),
+            )
             .on_action(cx.listener(|this, _: &ShowGitPanel, _, cx| {
                 this.dock = Some(DockPanel::Git);
                 cx.notify();
@@ -109,6 +113,10 @@ impl Render for Spor {
         }));
 
         let rail = self.render_rail(window, cx);
+        let repos = self
+            .layout
+            .show_repos
+            .then(|| self.render_repos_panel(window, cx));
         let main = if self.repo.is_some() {
             self.render_workspace(window, cx)
         } else {
@@ -121,6 +129,7 @@ impl Render for Spor {
                     .min_h_0()
                     .items_start()
                     .child(rail)
+                    .children(repos)
                     .child(div().flex_1().min_w_0().h_full().child(main)),
             )
             .when(self.repo.is_some(), |this| {
@@ -388,21 +397,29 @@ impl Spor {
             DockPanel::Git => self.render_git_panel(window, cx),
             DockPanel::Branches => self.render_branches(window, cx),
         });
-        h_resizable("spor-workspace")
-            .when_some(dock_content, |this, content| {
-                this.child(
-                    resizable_panel()
-                        .size(px(320.))
-                        .size_range(px(240.)..px(560.))
-                        .child(content),
-                )
-            })
-            .child(
-                resizable_panel()
-                    .size_range(px(420.)..px(4000.))
-                    .child(center),
-            )
-            .into_any_element()
+        let dock_panel = |content| {
+            resizable_panel()
+                .size(px(320.))
+                .size_range(px(240.)..px(560.))
+                .child(content)
+        };
+        let center = resizable_panel()
+            .size_range(px(420.)..px(4000.))
+            .child(center);
+        // Separate ids so each side remembers its own dock width.
+        match self.layout.dock_side {
+            DockSide::Left => h_resizable("spor-workspace")
+                .when_some(dock_content, |this, content| {
+                    this.child(dock_panel(content))
+                })
+                .child(center),
+            DockSide::Right => h_resizable("spor-workspace-right")
+                .child(center)
+                .when_some(dock_content, |this, content| {
+                    this.child(dock_panel(content))
+                }),
+        }
+        .into_any_element()
     }
 
     fn render_center(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -472,6 +489,8 @@ impl Spor {
         let commits = plural(repo.rows.len(), "commit");
         let mode = self.diff_mode;
         let job = self.job;
+        let show_repos = self.layout.show_repos;
+        let dock_side = self.layout.dock_side;
 
         let dock_button =
             |id: &'static str, path: &'static str, panel: DockPanel, tip: &'static str| {
@@ -495,6 +514,15 @@ impl Spor {
             .left(
                 h_flex()
                     .gap_1()
+                    .child(
+                        Button::new("toggle-repositories")
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::empty().path(icon::FOLDER_GIT))
+                            .selected(show_repos)
+                            .tooltip("Repositories (⌘⇧E)")
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_repositories(cx))),
+                    )
                     .child(dock_button(
                         "dock-git",
                         icon::GIT_COMPARE,
@@ -507,6 +535,20 @@ impl Spor {
                         DockPanel::Branches,
                         "Branches",
                     ))
+                    .child(
+                        Button::new("dock-side")
+                            .ghost()
+                            .xsmall()
+                            .icon(match dock_side {
+                                DockSide::Left => IconName::PanelLeft,
+                                DockSide::Right => IconName::PanelRight,
+                            })
+                            .tooltip(match dock_side {
+                                DockSide::Left => "Move Panel to the Right",
+                                DockSide::Right => "Move Panel to the Left",
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_dock_side(cx))),
+                    )
                     .child(
                         h_flex()
                             .ml_2()
