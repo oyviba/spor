@@ -6,6 +6,7 @@
 use super::repo::{self, Change, Snapshot};
 use super::support::{self, first_line, plural};
 use super::theme::{self, Appearance};
+use super::workspaces::Workspaces;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     diff::{DiffMode, DiffState},
@@ -43,16 +44,53 @@ actions!(
         Sync,
         ToggleDiffMode,
         Quit,
+        NewWorkspace,
+        Workspace1,
+        Workspace2,
+        Workspace3,
+        Workspace4,
+        Workspace5,
+        Workspace6,
+        Workspace7,
+        Workspace8,
+        Workspace9,
     ]
 );
+
+/// The ⌘1–⌘9 action for the workspace at `ix`.
+pub(crate) fn workspace_action(ix: usize) -> Option<Box<dyn gpui_kit::Action>> {
+    Some(match ix {
+        0 => Box::new(Workspace1),
+        1 => Box::new(Workspace2),
+        2 => Box::new(Workspace3),
+        3 => Box::new(Workspace4),
+        4 => Box::new(Workspace5),
+        5 => Box::new(Workspace6),
+        6 => Box::new(Workspace7),
+        7 => Box::new(Workspace8),
+        8 => Box::new(Workspace9),
+        _ => return None,
+    })
+}
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("secondary-b", ToggleDock, Some("Spor")),
         KeyBinding::new("secondary-shift-g", ShowGitPanel, Some("Spor")),
         KeyBinding::new("secondary-shift-b", ShowBranches, Some("Spor")),
-        KeyBinding::new("secondary-1", ShowChanges, Some("Spor")),
-        KeyBinding::new("secondary-2", ShowHistory, Some("Spor")),
+        KeyBinding::new("secondary-shift-c", ShowChanges, Some("Spor")),
+        KeyBinding::new("secondary-shift-h", ShowHistory, Some("Spor")),
+        // Like Slack: ⌘1–⌘9 jump to a workspace.
+        KeyBinding::new("secondary-1", Workspace1, Some("Spor")),
+        KeyBinding::new("secondary-2", Workspace2, Some("Spor")),
+        KeyBinding::new("secondary-3", Workspace3, Some("Spor")),
+        KeyBinding::new("secondary-4", Workspace4, Some("Spor")),
+        KeyBinding::new("secondary-5", Workspace5, Some("Spor")),
+        KeyBinding::new("secondary-6", Workspace6, Some("Spor")),
+        KeyBinding::new("secondary-7", Workspace7, Some("Spor")),
+        KeyBinding::new("secondary-8", Workspace8, Some("Spor")),
+        KeyBinding::new("secondary-9", Workspace9, Some("Spor")),
+        KeyBinding::new("secondary-shift-w", NewWorkspace, Some("Spor")),
         KeyBinding::new("secondary-r", Refresh, Some("Spor")),
         KeyBinding::new("secondary-z", UndoLast, Some("Spor")),
         KeyBinding::new("secondary-enter", Commit, Some("Spor")),
@@ -100,10 +138,10 @@ pub struct CommitInfo {
     pub details: CommitDetails,
 }
 
-/// Cancel + primary action buttons for a dialog; the action runs `on_ok`.
 /// A deferred call on the view, for menu items built outside it.
 pub(crate) type SporAction = std::rc::Rc<dyn Fn(&mut Spor, &mut Window, &mut Context<Spor>)>;
 
+/// Cancel + primary action buttons for a dialog; the action runs `on_ok`.
 fn dialog_footer(id: &'static str, action: &'static str) -> impl gpui_kit::IntoElement {
     use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
     DialogFooter::new()
@@ -118,7 +156,7 @@ struct UndoNote;
 pub struct Spor {
     pub(crate) repo: Option<Snapshot>,
     pub(crate) open_error: Option<String>,
-    pub(crate) recent: Vec<PathBuf>,
+    pub(crate) workspaces: Workspaces,
     pub(crate) tab: Tab,
     pub(crate) dock: Option<DockPanel>,
     pub(crate) selected: Option<usize>,
@@ -127,6 +165,7 @@ pub struct Spor {
     pub(crate) changes_diff: Entity<DiffState>,
     pub(crate) message: Entity<TextareaState>,
     pub(crate) branch_name: Entity<InputState>,
+    workspace_name: Entity<InputState>,
     pub(crate) history_scroll: UniformListScrollHandle,
     pub(crate) history_focus: FocusHandle,
     /// Holds focus when nothing else does, so app shortcuts always fire.
@@ -158,6 +197,8 @@ impl Spor {
                 .auto_grow(3, 10)
         });
         let branch_name = cx.new(|cx| InputState::new(window, cx).placeholder("Branch name"));
+        let workspace_name =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Work, Side projects, …"));
         let history_focus = cx.focus_handle().tab_stop(true);
         let root_focus = cx.focus_handle();
         root_focus.focus(window, cx);
@@ -174,7 +215,7 @@ impl Spor {
         let mut this = Self {
             repo: None,
             open_error: None,
-            recent: support::recent_repos(),
+            workspaces: Workspaces::load(),
             tab: Tab::Changes,
             dock: Some(DockPanel::Git),
             selected: None,
@@ -183,6 +224,7 @@ impl Spor {
             changes_diff,
             message,
             branch_name,
+            workspace_name,
             history_scroll: UniformListScrollHandle::new(),
             history_focus,
             root_focus,
@@ -198,6 +240,7 @@ impl Spor {
             _poll_task: Task::ready(()),
             _subscriptions: subscriptions,
         };
+        let initial = initial.or_else(|| this.workspaces.current().landing().cloned());
         if let Some(dir) = initial {
             this.open_repo(&dir, window, cx);
         }
@@ -254,7 +297,8 @@ impl Spor {
         match opened {
             Ok(snapshot) => {
                 support::remember_repo(&snapshot.root);
-                self.recent = support::recent_repos();
+                self.workspaces.opened(&snapshot.root);
+                self.workspaces.save();
                 window.set_window_title(&format!("{} — Spor", snapshot.name));
                 let dirty = !snapshot.changes.is_empty();
                 let head = snapshot.head_row();
@@ -283,7 +327,8 @@ impl Spor {
         self.repo = None;
         self.commit = None;
         self.selected = None;
-        self.recent = support::recent_repos();
+        self.undo.clear();
+        self.fingerprint = None;
         window.set_window_title("Spor");
         cx.notify();
     }
@@ -304,6 +349,189 @@ impl Spor {
             }
         })
         .detach();
+    }
+
+    // ── Workspaces ───────────────────────────────────────────────────────────
+
+    /// Switch to workspace `ix` and reopen the repository it was last on.
+    pub(crate) fn switch_workspace(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if ix >= self.workspaces.list.len() {
+            return;
+        }
+        if ix == self.workspaces.active && self.repo.is_some() {
+            return;
+        }
+        self.workspaces.active = ix;
+        self.workspaces.save();
+        self.open_error = None;
+        self.land(window, cx);
+    }
+
+    /// Open the active workspace's landing repository, or its empty page.
+    fn land(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.workspaces.current().landing().cloned() {
+            Some(path) => self.open_repo(&path, window, cx),
+            None => self.close_repo(window, cx),
+        }
+    }
+
+    /// Ask for a name, then create a workspace and switch to it.
+    pub(crate) fn new_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.name_workspace_dialog(None, window, cx);
+    }
+
+    pub(crate) fn rename_workspace(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.name_workspace_dialog(Some(ix), window, cx);
+    }
+
+    fn name_workspace_dialog(
+        &mut self,
+        rename: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = rename
+            .and_then(|ix| self.workspaces.list.get(ix))
+            .map(|ws| ws.name.clone())
+            .unwrap_or_default();
+        let input = self.workspace_name.clone();
+        input.update(cx, |state, cx| state.set_value(current, window, cx));
+        let spor = cx.entity().downgrade();
+        let (title, action) = match rename {
+            Some(_) => ("Rename Workspace", "Rename"),
+            None => ("New Workspace", "Create Workspace"),
+        };
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let spor = spor.clone();
+            let input_for_ok = input.clone();
+            input.read(cx).focus_handle(cx).focus(window, cx);
+            dialog
+                .title(title)
+                .w(gpui_kit::px(400.))
+                .child(
+                    gpui_kit::component::v_flex()
+                        .gap_2()
+                        .child(
+                            gpui_kit::div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Group repositories you work on together, like work and side projects."),
+                        )
+                        .child(gpui_kit::component::input::Input::new(&input)),
+                )
+                .footer(dialog_footer("name-workspace", action))
+                .on_ok(move |_, window, cx| {
+                    let name = input_for_ok.read(cx).value().trim().replace('\t', " ");
+                    if name.is_empty() {
+                        return false;
+                    }
+                    let _ = spor.update(cx, |this, cx| match rename {
+                        Some(ix) => {
+                            if let Some(ws) = this.workspaces.list.get_mut(ix) {
+                                ws.name = name;
+                            }
+                            this.workspaces.save();
+                            cx.notify();
+                        }
+                        None => {
+                            let ix = this.workspaces.create(&name);
+                            this.switch_workspace(ix, window, cx);
+                            this.info(
+                                format!("Created “{name}” — open a repository to add it"),
+                                window,
+                                cx,
+                            );
+                        }
+                    });
+                    true
+                })
+        });
+    }
+
+    /// Delete a workspace after confirming. Its repositories stay on disk.
+    pub(crate) fn delete_workspace(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ws) = self.workspaces.list.get(ix) else {
+            return;
+        };
+        if self.workspaces.list.len() <= 1 {
+            self.info("Spor needs at least one workspace", window, cx);
+            return;
+        }
+        let name = ws.name.clone();
+        let count = ws.repos.len();
+        let spor = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let spor = spor.clone();
+            dialog
+                .title(format!("Delete “{name}”?"))
+                .w(gpui_kit::px(400.))
+                .child(
+                    gpui_kit::div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(match count {
+                            0 => "It has no repositories.".to_string(),
+                            1 => "Its repository will be removed from Spor but stays on disk."
+                                .to_string(),
+                            n => format!(
+                                "Its {n} repositories will be removed from Spor but stay on disk."
+                            ),
+                        }),
+                )
+                .footer(dialog_footer("delete-workspace", "Delete Workspace"))
+                .on_ok(move |_, window, cx| {
+                    let _ = spor.update(cx, |this, cx| {
+                        let was_active = this.workspaces.active == ix;
+                        if this.workspaces.delete(ix) {
+                            this.workspaces.save();
+                            if was_active {
+                                this.land(window, cx);
+                            }
+                            cx.notify();
+                        }
+                    });
+                    true
+                })
+        });
+    }
+
+    /// Move the open repository to another workspace, and follow it there.
+    pub(crate) fn move_repo_to(&mut self, to: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.repo.as_ref().map(|r| r.root.clone()) else {
+            return;
+        };
+        self.workspaces.move_repo(&root, to);
+        self.workspaces.opened(&root);
+        self.workspaces.save();
+        let name = self.workspaces.current().name.clone();
+        self.ok(format!("Moved to {name}"), window, cx);
+        cx.notify();
+    }
+
+    /// Take a repository out of the current workspace (it stays on disk).
+    pub(crate) fn remove_repo(&mut self, root: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.workspaces.remove_repo(root);
+        self.workspaces.save();
+        let was_open = self.repo.as_ref().is_some_and(|r| r.root == root);
+        if was_open {
+            self.land(window, cx);
+        }
+        cx.notify();
     }
 
     // ── Loading ──────────────────────────────────────────────────────────────

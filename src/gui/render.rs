@@ -1,4 +1,5 @@
-//! The window frame: title bar, the dock + center split, and the status bar.
+//! The window frame: title bar, the workspace rail, the dock + center split,
+//! and the status bar.
 
 use super::app::*;
 use super::assets::icon;
@@ -21,6 +22,7 @@ use gpui_kit::{
     Window,
 };
 use remote_badge::pr_label;
+use std::path::PathBuf;
 
 impl Render for Spor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -87,18 +89,40 @@ impl Render for Spor {
                 this.checkout_selected(window, cx)
             }))
             .on_action(|_: &Quit, _, cx| cx.quit())
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                if let Some(path) = paths.paths().first() {
-                    this.open_repo(&path.clone(), window, cx);
-                }
-            }));
+            .on_action(
+                cx.listener(|this, _: &NewWorkspace, window, cx| this.new_workspace(window, cx)),
+            );
+        macro_rules! workspace_keys {
+            ($root:expr, $($action:ident => $ix:expr),*) => {
+                $root$(.on_action(cx.listener(|this, _: &$action, window, cx| {
+                    this.switch_workspace($ix, window, cx)
+                })))*
+            };
+        }
+        let root = workspace_keys!(root,
+            Workspace1 => 0, Workspace2 => 1, Workspace3 => 2, Workspace4 => 3, Workspace5 => 4,
+            Workspace6 => 5, Workspace7 => 6, Workspace8 => 7, Workspace9 => 8)
+        .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+            if let Some(path) = paths.paths().first() {
+                this.open_repo(&path.clone(), window, cx);
+            }
+        }));
 
+        let rail = self.render_rail(window, cx);
+        let main = if self.repo.is_some() {
+            self.render_workspace(window, cx)
+        } else {
+            self.render_welcome(window, cx)
+        };
         root.child(self.render_title_bar(window, cx))
-            .child(div().flex_1().min_h_0().child(if self.repo.is_some() {
-                self.render_workspace(window, cx)
-            } else {
-                self.render_welcome(window, cx)
-            }))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .items_start()
+                    .child(rail)
+                    .child(div().flex_1().min_w_0().h_full().child(main)),
+            )
             .when(self.repo.is_some(), |this| {
                 this.child(self.render_status_bar(window, cx))
             })
@@ -109,7 +133,15 @@ impl Spor {
     fn render_title_bar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let spor = Self::weak(cx);
         let Some(repo) = &self.repo else {
-            return TitleBar::new().into_any_element();
+            return TitleBar::new()
+                .child(
+                    div()
+                        .px_2()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(self.workspaces.current().name.clone()),
+                )
+                .into_any_element();
         };
         let name: SharedString = repo.name.clone().into();
         let branch: SharedString = repo
@@ -118,12 +150,22 @@ impl Spor {
             .clone()
             .unwrap_or_else(|| "detached HEAD".into())
             .into();
-        let recent: Vec<_> = self
-            .recent
+        let workspace = self.workspaces.current();
+        let workspace_name = workspace.name.clone();
+        let repos: Vec<(PathBuf, bool)> = workspace
+            .repos
             .iter()
-            .filter(|p| **p != repo.root)
-            .cloned()
+            .map(|p| (p.clone(), *p == repo.root))
             .collect();
+        let others: Vec<(usize, String)> = self
+            .workspaces
+            .list
+            .iter()
+            .enumerate()
+            .filter(|(ix, _)| *ix != self.workspaces.active)
+            .map(|(ix, ws)| (ix, ws.name.clone()))
+            .collect();
+        let root = repo.root.clone();
         let locals: Vec<(String, bool)> = repo
             .branches
             .iter()
@@ -152,26 +194,65 @@ impl Spor {
                 .label(name)
                 .dropdown_caret(true)
                 .dropdown_menu(move |mut menu, window, cx| {
-                    let open = spor.clone();
-                    menu = menu.item(PopupMenuItem::new("Open Repository…").on_click(
-                        move |_, window, cx| {
-                            let _ = open.update(cx, |this, cx| this.pick_repo(window, cx));
-                        },
-                    ));
-                    if !recent.is_empty() {
-                        menu = menu.separator().label("Recent");
-                        for path in &recent {
-                            let spor = spor.clone();
-                            let path = path.clone();
-                            let label = super::support::tildify(&path);
-                            menu = menu.item(PopupMenuItem::new(label).on_click(
-                                move |_, window, cx| {
-                                    let _ = spor
-                                        .update(cx, |this, cx| this.open_repo(&path, window, cx));
-                                },
-                            ));
-                        }
+                    menu = menu
+                        .scrollable(true)
+                        .max_h(px(520.))
+                        .min_w(px(240.))
+                        .label(workspace_name.clone());
+                    for (path, current) in &repos {
+                        let spor = spor.clone();
+                        let target = path.clone();
+                        let label = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string());
+                        menu = menu.item(PopupMenuItem::new(label).checked(*current).on_click(
+                            move |_, window, cx| {
+                                let _ =
+                                    spor.update(cx, |this, cx| this.open_repo(&target, window, cx));
+                            },
+                        ));
                     }
+                    let open = spor.clone();
+                    menu = menu.separator().item(
+                        PopupMenuItem::new(format!("Add Repository to {workspace_name}…"))
+                            .on_click(move |_, window, cx| {
+                                let _ = open.update(cx, |this, cx| this.pick_repo(window, cx));
+                            }),
+                    );
+                    if !others.is_empty() {
+                        let move_spor = spor.clone();
+                        let others = others.clone();
+                        menu = menu.submenu(
+                            "Move Repository To",
+                            window,
+                            cx,
+                            move |mut menu, _, _| {
+                                for (ix, name) in &others {
+                                    let spor = move_spor.clone();
+                                    let ix = *ix;
+                                    menu = menu.item(PopupMenuItem::new(name.clone()).on_click(
+                                        move |_, window, cx| {
+                                            let _ = spor.update(cx, |this, cx| {
+                                                this.move_repo_to(ix, window, cx)
+                                            });
+                                        },
+                                    ));
+                                }
+                                menu
+                            },
+                        );
+                    }
+                    let remove = spor.clone();
+                    let root = root.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(format!("Remove from {workspace_name}")).on_click(
+                            move |_, window, cx| {
+                                let _ = remove
+                                    .update(cx, |this, cx| this.remove_repo(&root, window, cx));
+                            },
+                        ),
+                    );
                     let theme_spor = spor.clone();
                     menu = menu.separator().submenu(
                         "Appearance",

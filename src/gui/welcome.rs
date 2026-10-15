@@ -1,5 +1,5 @@
 //! The start page, like Zed's welcome screen: the app's name, an action list
-//! with shortcuts, and recently opened repositories.
+//! with shortcuts, and the active workspace's repositories.
 
 use super::app::*;
 use super::assets::icon;
@@ -40,7 +40,10 @@ impl Spor {
             .when_some(open_key, |this, key| this.child(key))
             .on_click(cx.listener(|this, _, window, cx| this.pick_repo(window, cx)));
 
-        let recent: Vec<_> = self.recent.clone();
+        let workspace = self.workspaces.current();
+        let workspace_name = workspace.name.clone();
+        let recent: Vec<_> = workspace.repos.clone();
+        let empty = recent.is_empty();
         let recent_list = v_flex()
             .gap_0p5()
             .children(recent.into_iter().enumerate().map(|(i, path)| {
@@ -128,25 +131,37 @@ impl Spor {
                                 .child(error),
                         )
                     })
-                    .when(!self.recent.is_empty(), |this| {
-                        this.child(
-                            v_flex()
-                                .gap_1()
-                                .child(section_title("Recent", &theme))
-                                .child(recent_list),
-                        )
-                    }),
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(section_title(workspace_name.clone(), &theme))
+                            .when(empty, |this| {
+                                this.child(
+                                    div()
+                                        .px_3()
+                                        .text_sm()
+                                        .text_color(theme.muted_foreground)
+                                        .child(format!(
+                                            "No repositories in {workspace_name} yet. Open one to add it."
+                                        )),
+                                )
+                            })
+                            .child(recent_list),
+                    ),
             )
             .into_any_element()
     }
 }
 
-fn section_title(title: &'static str, theme: &gpui_kit::component::Theme) -> impl IntoElement {
+fn section_title(
+    title: impl Into<SharedString>,
+    theme: &gpui_kit::component::Theme,
+) -> impl IntoElement {
     div()
         .px_3()
         .pb_1()
         .text_xs()
         .font_medium()
         .text_color(theme.muted_foreground)
-        .child(title)
+        .child(title.into())
 }

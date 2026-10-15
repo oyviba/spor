@@ -32,7 +32,7 @@ jobs:
       - name: Build
         run: cargo build --all-targets --features gui --locked
       - name: Test
-        run: cargo test --locked
+        run: cargo test --features gui --locked
 
   macos-app:
     runs-on: macos-latest

@@ -14,11 +14,13 @@ mod changes_view;
 mod git_panel;
 mod graph;
 mod history;
+mod rail;
 mod render;
 mod repo;
 mod support;
 mod theme;
 mod welcome;
+mod workspaces;
 
 use gpui_kit::component::TitleBar;
 use gpui_kit::{px, size, AppContext as _, WindowBounds, WindowOptions};

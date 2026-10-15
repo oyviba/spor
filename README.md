@@ -51,7 +51,8 @@ spor
 
 ## Mac app
 
-The same timeline, working tree and diff in a native window (egui). Build the
+The same timeline, working tree and diff in a native window, built on
+[GPUI](https://gpui.rs) (Zed's UI framework) via GPUI Kit. Build the
 app bundle on a Mac with the Xcode command line tools installed:
 
 ```sh
@@ -71,31 +72,35 @@ To run it without bundling (works on Linux and Windows too):
 cargo run --release --features gui --bin spor-app -- /path/to/repo
 ```
 
-The app follows macOS conventions rather than a classic git GUI:
+The layout follows Zed's:
 
-- **Two views, picked in the sidebar** — **Changes** (⌘1) is what you're
-  working on: tick files to include them, write a summary and description,
-  ⌘↩ to commit. **History** (⌘2) is a quiet, Mail-style timeline with a
-  thin graph; select a commit to see its message, files and diffs
-- **Sidebar** — the two views, then Branches, Remotes, Tags and Stashes.
-  Click a branch to show it in History, double-click to check it out
-- **Unified title bar** — the repository and branch as title and subtitle
-  (click either to switch), New Branch, and one **Sync** button that
-  fetches, then pulls or pushes as needed (or publishes a new branch). The
-  menu next to it has Fetch, Pull and Push on their own
+- **Workspace rail** — like Slack, the strip on the far left switches
+  between workspaces such as *Work* and *Side projects* (⌘1–⌘9, ⌘⇧W for a
+  new one; right-click to rename or delete). Each workspace has its own
+  repositories and reopens the one you last had open in it. Opening a
+  repository adds it to the current workspace, or jumps to the workspace it
+  already belongs to; the repository menu in the title bar switches between
+  a workspace's repositories, moves one to another workspace or removes it
+- **Title bar** — repository and branch pickers, and the branch's PR
+- **Left dock** — the **git panel** (⌘⇧G): a staging checklist (tracked and
+  untracked), a commit message editor (⌘↩ commits), and one **Sync** button
+  that fetches, then pulls or pushes as needed (or publishes a new branch);
+  or the **branch list** (⌘⇧B) with local and remote branches, tags and
+  stashes — click to show a branch in History, double-click to check it out.
+  ⌘B hides the dock
+- **Center tabs** — **Uncommitted Changes** (⌘⇧C), every changed file in one
+  scrolling, syntax-highlighted diff; **History** (⌘⇧H), the commit graph
+  over the selected commit's message and diff (`j`/`k` or arrows move,
+  `Return` checks out)
+- **Status bar** — dock toggles, the branch with ahead/behind counts,
+  background jobs, and unified / split diffs
 - **Undo instead of confirmations** — discarding changes, staging and
-  committing all happen immediately and can be taken back with ⌘Z or the
-  Undo button in the notification (a commit stops being undoable once it's
-  pushed)
-- **Diffs** — unified or side by side
-- **Sheets** for the few decisions that need input (new branch name,
-  stashing before a switch); light and dark appearance follows the system
-  or can be set from the repository menu
+  committing happen immediately and can be taken back with ⌘Z or the Undo
+  button in the notification (a commit stops being undoable once pushed)
 
-Open a repository with ⌘O, from the welcome window's recent list, by
-dropping a folder on the window, or by passing a path. Keyboard: `j`/`k` or
-arrows move through the current list, `Return` checks out the selected
-commit's branch, `Space` ticks the selected file, ⌘R refreshes.
+Open a repository with ⌘O, from the welcome page, by dropping a folder on
+the window, or by passing a path. Light and dark themes (based on One Light
+and One Dark) follow the system or can be set from the repository menu.
 
 Sync runs in the background. The app has no terminal, so credentials must
 come from a helper (macOS keychain, ssh-agent); a sync that would need a
@@ -160,7 +165,6 @@ The core is a library (`src/lib.rs`) that knows nothing about how it's drawn:
 - `src/graph.rs` — lane assignment, with main pinned to lane 0
 - `src/color.rs` — HSL color families by branch prefix
 - `src/remote.rs` — remote host detection, compare URLs, PR badges via `gh`
-- `src/diff.rs` — unified-diff parser (files, hunks, numbered lines)
 
 Terminal UI (`spor`):
 
@@ -169,14 +173,16 @@ Terminal UI (`spor`):
 
 Mac app (`spor-app`, `--features gui`):
 
-- `src/gui/main.rs` — app state, git actions, undo, background sync
-- `src/gui/views.rs` — welcome window and workspace layout
-- `src/gui/changes.rs`, `history.rs` — the two main views
-- `src/gui/graph_view.rs` — paints History rows (thin graph, ref tags)
-- `src/gui/titlebar.rs`, `sidebar.rs`, `diff_view.rs`, `modals.rs` — title
-  bar, source list, diff viewer, sheets
-- `src/gui/theme.rs` — light/dark palettes, fonts (Inter, JetBrains Mono,
-  Phosphor icons)
+- `src/gui/app.rs` — the `Spor` view: state, git actions, undo, sync
+- `src/gui/workspaces.rs` — workspaces and their repositories, persisted
+- `src/gui/render.rs` — window frame: title bar, dock + center, status bar
+- `src/gui/rail.rs` — the workspace rail
+- `src/gui/git_panel.rs`, `branches.rs` — the two dock panels
+- `src/gui/changes_view.rs`, `history.rs` — the two center tabs
+- `src/gui/graph.rs` — paints the commit graph
+- `src/gui/welcome.rs` — the page shown when no repository is open
+- `src/gui/repo.rs` — snapshot of a repository for the views
+- `src/gui/theme.rs`, `assets/themes/spor.json` — Spor Light / Spor Dark
 - `scripts/bundle-macos.sh` — wraps the binary into `Spor.app`
 
 ## License

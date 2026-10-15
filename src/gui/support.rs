@@ -26,15 +26,14 @@ pub fn fix_path_for_gui_launch() {
 
 /// Where to start: a path passed on the command line, else the working
 /// directory if it's inside a repo (Finder launches apps in `/`, which never
-/// is), else the most recently opened repository.
+/// is). Without either, the app reopens the active workspace's repository.
 pub fn initial_repo() -> Option<PathBuf> {
-    if let Some(arg) = std::env::args_os().nth(1) {
+    if let Some(arg) = std::env::args_os().nth(1).filter(|a| !a.is_empty()) {
         return Some(PathBuf::from(arg));
     }
     std::env::current_dir()
         .ok()
         .filter(|cwd| cwd != Path::new("/") && repo_root(cwd).is_ok())
-        .or_else(|| recent_repos().into_iter().next())
 }
 
 /// `~/Library/Application Support/spor/` on macOS,
