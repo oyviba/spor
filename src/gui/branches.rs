@@ -1,11 +1,13 @@
 //! The branch list: local branches, each remote's branches, tags and
-//! stashes. Click shows a branch's tip in History; double-click checks out.
+//! stashes, with a search field on top. Click shows a branch's tip in
+//! History; double-click checks out.
 
 use super::app::*;
 use super::assets::icon;
 use gpui_kit::component::{
     button::ButtonVariants as _,
     h_flex,
+    input::Input,
     menu::{ContextMenuExt as _, PopupMenuItem},
     v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
 };
@@ -156,8 +158,28 @@ impl Spor {
             ));
         }
 
+        let query = self.branch_filter.read(cx).value().trim().to_lowercase();
+        let filtering = !query.is_empty();
+        if filtering {
+            for (_, items) in &mut sections {
+                items.retain(|item| matches(item, &query));
+            }
+            sections.retain(|(_, items)| !items.is_empty());
+        }
+
         let spor = Self::weak(cx);
+        let remote_names: Rc<[String]> = repo.remotes.iter().cloned().collect();
         let mut list = v_flex().py_1();
+        if filtering && sections.is_empty() {
+            list = list.child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("No matching branches or tags"),
+            );
+        }
         for (title, items) in sections {
             list = list.child(
                 h_flex()
@@ -173,7 +195,13 @@ impl Spor {
             );
             for item in items {
                 let selected = tip_selected(&item.key);
-                list = list.child(render_item(item, selected, spor.clone(), cx));
+                list = list.child(render_item(
+                    item,
+                    selected,
+                    remote_names.clone(),
+                    spor.clone(),
+                    cx,
+                ));
             }
         }
 
@@ -204,6 +232,24 @@ impl Spor {
             )
             .child(
                 div()
+                    .flex_none()
+                    .px_2()
+                    .py_1p5()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        Input::new(&self.branch_filter)
+                            .small()
+                            .cleanable(true)
+                            .prefix(
+                                Icon::new(IconName::Search)
+                                    .small()
+                                    .text_color(theme.muted_foreground),
+                            ),
+                    ),
+            )
+            .child(
+                div()
                     .id("branch-list")
                     .flex_1()
                     .min_h_0()
@@ -214,9 +260,17 @@ impl Spor {
     }
 }
 
+/// Every word of the search appears in the item's name — `origin/fix`
+/// finds `fix-login` on origin, `login fix` finds `fix/login`.
+fn matches(item: &Item, query: &str) -> bool {
+    let haystack = format!("{} {}", item.key, item.label).to_lowercase();
+    query.split_whitespace().all(|word| haystack.contains(word))
+}
+
 fn render_item(
     item: Item,
     selected: bool,
+    remotes: Rc<[String]>,
     spor: gpui_kit::WeakEntity<Spor>,
     cx: &mut App,
 ) -> AnyElement {
@@ -328,6 +382,26 @@ fn render_item(
                         "Copy Name".into(),
                         Rc::new(move |this, w, cx| this.copy(label.clone(), "Name", w, cx)),
                     ))
+                    .when(kind == Kind::Tag, |menu| {
+                        let name = item.label.clone();
+                        let mut menu = menu.separator().item(act(
+                            "Delete Tag".into(),
+                            Rc::new({
+                                let name = name.clone();
+                                move |this, w, cx| this.delete_tag(&name, w, cx)
+                            }),
+                        ));
+                        for remote in remotes.iter() {
+                            let (name, remote) = (name.clone(), remote.clone());
+                            menu = menu.item(act(
+                                format!("Delete Tag from {remote}…"),
+                                Rc::new(move |this, w, cx| {
+                                    this.delete_remote_tag(&name, &remote, w, cx)
+                                }),
+                            ));
+                        }
+                        menu
+                    })
                 }
             }
         })

@@ -17,7 +17,7 @@ use gpui_kit::component::{
     v_flex, ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, TitleBar,
 };
 use gpui_kit::{
-    div, prelude::FluentBuilder as _, px, AnyElement, Context, ExternalPaths,
+    div, prelude::FluentBuilder as _, px, AnyElement, Context, ExternalPaths, Focusable as _,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
     Window,
 };
@@ -52,6 +52,14 @@ impl Render for Spor {
             }))
             .on_action(cx.listener(|this, _: &ShowBranches, _, cx| {
                 this.dock = Some(DockPanel::Branches);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SearchBranches, window, cx| {
+                this.dock = Some(DockPanel::Branches);
+                this.branch_filter
+                    .read(cx)
+                    .focus_handle(cx)
+                    .focus(window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ShowChanges, _, cx| {

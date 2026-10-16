@@ -157,6 +157,9 @@ pub const SHORTCUTS: &[Shortcut] = &[
     cmd("View", "Show Branches", &["secondary-shift-b"], || {
         Box::new(ShowBranches)
     }),
+    cmd("View", "Search Branches", &["secondary-shift-f"], || {
+        Box::new(SearchBranches)
+    }),
     cmd("View", "Toggle Dock", &["secondary-b"], || {
         Box::new(ToggleDock)
     }),

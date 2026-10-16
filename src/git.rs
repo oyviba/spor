@@ -274,6 +274,24 @@ pub fn remove_untracked(path: &str) -> Result<(), String> {
     run_ok(&["clean", "-f", "--", path]).map(|_| ())
 }
 
+/// What a tag points at — the tag object itself for an annotated tag — so a
+/// deleted tag can be put back exactly, message and all.
+pub fn tag_target(name: &str) -> Result<String, String> {
+    let r = format!("refs/tags/{name}");
+    run_ok(&["rev-parse", "--verify", "--quiet", &r]).map(|s| s.trim().to_string())
+}
+
+pub fn delete_tag(name: &str) -> Result<(), String> {
+    run_ok(&["tag", "-d", name]).map(|_| ())
+}
+
+/// Recreate a deleted tag from [`tag_target`]. Refuses if a tag by that name
+/// exists again.
+pub fn restore_tag(name: &str, target: &str) -> Result<(), String> {
+    let r = format!("refs/tags/{name}");
+    run_ok(&["update-ref", &r, target, ""]).map(|_| ())
+}
+
 pub fn commit(message: &str) -> Result<(), String> {
     run_ok(&["commit", "-m", message]).map(|_| ())
 }

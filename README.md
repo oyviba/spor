@@ -94,6 +94,8 @@ The layout follows Zed's:
   that fetches, then pulls or pushes as needed (or publishes a new branch);
   or the **branch list** (⌘⇧B) with local and remote branches, tags and
   stashes — click to show a branch in History, double-click to check it out.
+  The search field on top (⌘⇧F) narrows it as you type. Right-click a tag
+  to delete it (⌘Z brings it back) or delete it from a remote too
   ⌘B hides the dock
 - **Center tabs** — **Uncommitted Changes** (⌘⇧C), every changed file in one
   scrolling, syntax-highlighted diff; **History** (⌘⇧H), the commit graph

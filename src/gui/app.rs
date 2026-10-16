@@ -41,6 +41,7 @@ actions!(
         ToggleRepositories,
         ShowGitPanel,
         ShowBranches,
+        SearchBranches,
         ShowChanges,
         ShowHistory,
         Refresh,
@@ -187,6 +188,11 @@ pub enum Undo {
         branch: String,
         before: String,
     },
+    /// Put a deleted tag back where it pointed.
+    Tag {
+        name: String,
+        target: String,
+    },
 }
 
 /// The selected commit, loaded for the History detail pane.
@@ -227,6 +233,8 @@ pub struct Spor {
     pub(crate) changes_diff: Entity<DiffState>,
     pub(crate) message: Entity<TextareaState>,
     pub(crate) branch_name: Entity<InputState>,
+    /// The search field above the branch list.
+    pub(crate) branch_filter: Entity<InputState>,
     workspace_name: Entity<InputState>,
     pub(crate) history_scroll: UniformListScrollHandle,
     pub(crate) history_focus: FocusHandle,
@@ -270,6 +278,8 @@ impl Spor {
                 .auto_grow(3, 10)
         });
         let branch_name = cx.new(|cx| InputState::new(window, cx).placeholder("Branch name"));
+        let branch_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search branches and tags"));
         let workspace_name =
             cx.new(|cx| InputState::new(window, cx).placeholder("Work, Side projects, …"));
         let history_focus = cx.focus_handle().tab_stop(true);
@@ -283,6 +293,7 @@ impl Spor {
                 }
             }),
             cx.observe(&message, |_, _, cx| cx.notify()),
+            cx.observe(&branch_filter, |_, _, cx| cx.notify()),
         ];
 
         let mut this = Self {
@@ -299,6 +310,7 @@ impl Spor {
             changes_diff,
             message,
             branch_name,
+            branch_filter,
             workspace_name,
             history_scroll: UniformListScrollHandle::new(),
             history_focus,
@@ -1046,6 +1058,7 @@ impl Spor {
             Undo::Restore(files) => format!("Restored {}", plural(files.len(), "file")),
             Undo::Uncommit { .. } => "Commit undone — its changes are staged again".into(),
             Undo::Merge { branch, .. } => format!("Merge into {branch} undone"),
+            Undo::Tag { name, .. } => format!("Restored tag {name}"),
             _ => format!("Undid {label}"),
         };
         let result = match action {
@@ -1084,6 +1097,7 @@ impl Spor {
                     git::reset_keep(&before)
                 }
             }
+            Undo::Tag { name, target } => git::restore_tag(&name, &target),
         };
         match result {
             Ok(()) => {
@@ -1400,6 +1414,89 @@ impl Spor {
                 this.reload(window, cx);
                 this.fetch_prs(cx);
             });
+        });
+    }
+
+    // ── Tags ─────────────────────────────────────────────────────────────────
+
+    /// Delete a local tag — immediately, but undoably.
+    pub(crate) fn delete_tag(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let deleted =
+            git::tag_target(name).and_then(|target| git::delete_tag(name).map(|()| target));
+        match deleted {
+            Ok(target) => {
+                self.did(
+                    format!("Deleted tag {name}"),
+                    Undo::Tag {
+                        name: name.to_string(),
+                        target,
+                    },
+                    window,
+                    cx,
+                );
+                self.reload(window, cx);
+            }
+            Err(e) => self.error(
+                format!("Couldn't delete tag: {}", first_line(&e)),
+                window,
+                cx,
+            ),
+        }
+    }
+
+    /// Delete a tag from `remote` and locally, after confirming. Others may
+    /// already have fetched it, so this can't be taken back.
+    pub(crate) fn delete_remote_tag(
+        &mut self,
+        name: &str,
+        remote: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.repo.as_ref().map(|r| r.root.clone()) else {
+            return;
+        };
+        let (name, remote) = (name.to_string(), remote.to_string());
+        let spor = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let spor = spor.clone();
+            let (name, remote, root) = (name.clone(), remote.clone(), root.clone());
+            dialog
+                .title(format!("Delete tag “{name}” from {remote}?"))
+                .w(gpui_kit::px(420.))
+                .child(
+                    gpui_kit::div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!(
+                            "It's deleted here and on {remote}. This can't be undone, \
+                             and anyone who already fetched it keeps their copy."
+                        )),
+                )
+                .footer(dialog_footer("delete-tag", "Delete Tag"))
+                .on_ok(move |_, window, cx| {
+                    let (name, remote, root) = (name.clone(), remote.clone(), root.clone());
+                    let _ = spor.update(cx, |this, cx| {
+                        this.run_job("Delete Tag", window, cx, move || {
+                            let r = format!("refs/tags/{name}");
+                            let remote_result =
+                                support::git_network(&root, &["push", &remote, "--delete", &r]);
+                            // Already gone there is fine: still tidy up here.
+                            let missing = matches!(&remote_result,
+                                Err(e) if e.contains("remote ref does not exist"));
+                            if !missing {
+                                remote_result?;
+                            }
+                            support::git_network(&root, &["tag", "-d", &name])?;
+                            Ok(if missing {
+                                format!("Deleted tag {name} (it wasn't on {remote})")
+                            } else {
+                                format!("Deleted tag {name} here and on {remote}")
+                            })
+                        });
+                    });
+                    true
+                })
         });
     }
 
