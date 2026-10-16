@@ -792,17 +792,34 @@ fn commit_menu(
         row.commit.hash.clone(),
         row.commit.subject.clone(),
     );
-    menu.item(act(
-        "New Branch from Here…".into(),
-        Rc::new(move |this, w, cx| this.new_branch(Some(hash.clone()), w, cx)),
-    ))
-    .separator()
-    .item(act(
-        "Copy Commit SHA".into(),
-        Rc::new(move |this, w, cx| this.copy(sha.clone(), "Commit SHA", w, cx)),
-    ))
-    .item(act(
-        "Copy Message".into(),
-        Rc::new(move |this, w, cx| this.copy(subject.clone(), "Message", w, cx)),
-    ))
+    menu = menu
+        .item(act(
+            "New Branch from Here…".into(),
+            Rc::new(move |this, w, cx| this.new_branch(Some(hash.clone()), w, cx)),
+        ))
+        .separator()
+        .item(act(
+            "Copy Commit SHA".into(),
+            Rc::new(move |this, w, cx| this.copy(sha.clone(), "Commit SHA", w, cx)),
+        ))
+        .item(act(
+            "Copy Message".into(),
+            Rc::new(move |this, w, cx| this.copy(subject.clone(), "Message", w, cx)),
+        ));
+    let tags: Vec<String> = row
+        .commit
+        .refs
+        .iter()
+        .filter_map(|r| r.strip_prefix("tag:").map(str::to_string))
+        .collect();
+    if !tags.is_empty() {
+        menu = menu.separator();
+    }
+    for tag in tags {
+        menu = menu.item(act(
+            format!("Delete Tag {tag}"),
+            Rc::new(move |this, w, cx| this.delete_tag(&tag, w, cx)),
+        ));
+    }
+    menu
 }
