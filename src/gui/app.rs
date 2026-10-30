@@ -251,6 +251,9 @@ pub struct Spor {
     pub(crate) repo_heads: HashMap<PathBuf, RepoHead>,
     /// The last background fetch: which repository, and when.
     last_fetch: Option<(PathBuf, Instant)>,
+    /// A background fetch is running. Jobs wait for it: two gits updating
+    /// the same remote refs at once make one of them fail.
+    auto_fetching: bool,
     pub(crate) appearance: Appearance,
     undo: Vec<(String, Undo)>,
     fingerprint: Option<String>,
@@ -322,6 +325,7 @@ impl Spor {
             pr_search_root: None,
             repo_heads: HashMap::new(),
             last_fetch: None,
+            auto_fetching: false,
             appearance,
             undo: Vec::new(),
             fingerprint: None,
@@ -724,13 +728,15 @@ impl Spor {
             if let Some(root) = due {
                 let fetched = root.clone();
                 let _ = this.update(cx, |this, _| {
-                    this.last_fetch = Some((fetched, Instant::now()))
+                    this.last_fetch = Some((fetched, Instant::now()));
+                    this.auto_fetching = true;
                 });
                 let _ = cx
                     .background_spawn(async move {
                         support::git_network(&root, &["fetch", "--all", "--prune"])
                     })
                     .await;
+                let _ = this.update(cx, |this, _| this.auto_fetching = false);
                 // The poll loop sees the moved refs and reloads.
             }
             cx.background_executor()
@@ -1380,7 +1386,8 @@ impl Spor {
 
     /// Run network work in the background. There's no terminal to prompt in,
     /// so credentials come from a helper (the keychain, ssh-agent) and git
-    /// fails rather than hanging.
+    /// fails rather than hanging. A background fetch already under way
+    /// finishes first.
     fn run_job(
         &mut self,
         label: &'static str,
@@ -1388,12 +1395,24 @@ impl Spor {
         cx: &mut Context<Self>,
         work: impl FnOnce() -> Result<String, String> + Send + 'static,
     ) {
-        if self.job.is_some() {
-            return;
+        if let Some(running) = self.job {
+            return self.info(
+                format!("{running} is still running — try again when it's done"),
+                window,
+                cx,
+            );
         }
         self.job = Some(label);
         cx.notify();
         self._job_task = cx.spawn_in(window, async move |this, cx| {
+            while this
+                .read_with(cx, |this, _| this.auto_fetching)
+                .unwrap_or(false)
+            {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+            }
             let result = cx.background_spawn(async move { work() }).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.job = None;
