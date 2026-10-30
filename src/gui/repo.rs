@@ -235,6 +235,7 @@ pub fn fingerprint(root: &Path) -> Option<String> {
         let out = Command::new("git")
             .current_dir(root)
             .args(args)
+            .env("GIT_OPTIONAL_LOCKS", "0")
             .output()
             .ok()?;
         out.status
@@ -280,6 +281,7 @@ pub fn head(root: &Path) -> Option<RepoHead> {
         let out = Command::new("git")
             .current_dir(root)
             .args(args)
+            .env("GIT_OPTIONAL_LOCKS", "0")
             .output()
             .ok()?;
         out.status
