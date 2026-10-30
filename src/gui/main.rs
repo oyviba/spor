@@ -5,8 +5,8 @@
 //!
 //! The layout follows Zed: title bar (repository / branch), the workspace's
 //! repositories on the left, a dock with the git panel or the branch list
-//! (on either side), a center pane with Uncommitted Changes and History tabs,
-//! and a status bar that toggles the panels.
+//! (on either side), a center pane with Uncommitted Changes, History, Pull
+//! Requests and Actions tabs, and a status bar that toggles the panels.
 
 mod app;
 mod assets;
@@ -16,12 +16,15 @@ mod git_panel;
 mod graph;
 mod history;
 mod history_options;
+mod hub;
 mod keymap;
 mod palette;
+mod pulls;
 mod rail;
 mod render;
 mod repo;
 mod repos_panel;
+mod runs;
 mod support;
 mod theme;
 mod theme_editor;

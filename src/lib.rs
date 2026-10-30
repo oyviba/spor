@@ -4,5 +4,6 @@
 
 pub mod color;
 pub mod git;
+pub mod github;
 pub mod graph;
 pub mod remote;

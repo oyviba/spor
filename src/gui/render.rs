@@ -71,6 +71,8 @@ impl Render for Spor {
                 this.history_focus.focus(window, cx);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &ShowPullRequests, _, cx| this.show_pulls(cx)))
+            .on_action(cx.listener(|this, _: &ShowActions, _, cx| this.show_runs(cx)))
             .on_action(cx.listener(|this, _: &Refresh, window, cx| this.reload(window, cx)))
             .on_action(cx.listener(|this, _: &UndoLast, window, cx| this.undo_last(window, cx)))
             .on_action(cx.listener(|this, _: &Commit, window, cx| this.commit(window, cx)))
@@ -83,7 +85,7 @@ impl Render for Spor {
                         .selected
                         .and_then(|i| this.repo.as_ref()?.rows.get(i))
                         .map(|r| r.commit.hash.clone()),
-                    Tab::Changes => None,
+                    _ => None,
                 };
                 this.new_branch(sha, window, cx)
             }))
@@ -445,16 +447,16 @@ impl Spor {
                     })
                     .when_some(pr, |this, pr| {
                         let spor = spor.clone();
+                        let number = pr.number;
                         this.child(
                             Button::new("pull-request")
                                 .ghost()
                                 .small()
                                 .icon(Icon::empty().path(icon::GIT_PULL_REQUEST))
                                 .label(pr_label(&pr))
-                                .tooltip("Open this branch's pull request")
-                                .on_click(move |_, window, cx| {
-                                    let _ = spor
-                                        .update(cx, |this, cx| this.open_pull_request(window, cx));
+                                .tooltip("Show this branch's pull request")
+                                .on_click(move |_, _, cx| {
+                                    let _ = spor.update(cx, |this, cx| this.show_pull(number, cx));
                                 }),
                         )
                     }),
@@ -499,6 +501,8 @@ impl Spor {
         let selected = match self.tab {
             Tab::Changes => 0,
             Tab::History => 1,
+            Tab::PullRequests => 2,
+            Tab::Actions => 3,
         };
         let changes_label = if changes > 0 {
             format!("Uncommitted Changes ({changes})")
@@ -524,11 +528,26 @@ impl Spor {
                     .label("History")
                     .prefix(tab_icon(icon::CLOCK)),
             )
+            .child(
+                TabItem::new()
+                    .label("Pull Requests")
+                    .prefix(tab_icon(icon::GIT_PULL_REQUEST)),
+            )
+            .child(
+                TabItem::new()
+                    .label("Actions")
+                    .prefix(tab_icon(icon::ACTIONS)),
+            )
             .selected_index(selected)
             .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                this.tab = if *ix == 0 { Tab::Changes } else { Tab::History };
-                if this.tab == Tab::History {
-                    this.history_focus.focus(window, cx);
+                match ix {
+                    0 => this.tab = Tab::Changes,
+                    1 => {
+                        this.tab = Tab::History;
+                        this.history_focus.focus(window, cx);
+                    }
+                    2 => this.show_pulls(cx),
+                    _ => this.show_runs(cx),
                 }
                 cx.notify();
             }));
@@ -539,6 +558,8 @@ impl Spor {
             .child(div().flex_1().min_h_0().child(match self.tab {
                 Tab::Changes => self.render_changes(window, cx),
                 Tab::History => self.render_history(window, cx),
+                Tab::PullRequests => self.render_pulls(window, cx),
+                Tab::Actions => self.render_runs(window, cx),
             }))
             .into_any_element()
     }
