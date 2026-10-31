@@ -17,7 +17,7 @@ dependency (`crossterm`); the app is opt-in behind the `gui` feature.
 - Auto-stash on switch when the working tree blocks
 - Open a PR / MR from the current branch (uses `gh` or `glab` if available, falls back to printing the compare URL)
 - PR badges on branch tips — `(feat/login #42✓)` shows the open PR's number, review state, and CI status (GitHub repos with `gh` installed)
-- In the Mac app, a GitHub client: browse pull requests (conversation, checks, files), merge, approve, comment and check them out; follow GitHub Actions runs down to each job's log, and re-run or cancel them
+- In the Mac app, a GitHub client: browse pull requests (checks, files, conversation), merge, approve, comment and check them out; follow GitHub Actions runs down to each job's log, and re-run or cancel them
 
 ## PR badges
 
@@ -107,21 +107,25 @@ The layout follows Zed's:
   in the header picks columns, labels, row height and lane width. **Drag a
   branch** onto another branch's row to merge it there (⌘Z undoes) or open
   a pull request between the two
-- **Pull Requests** (⌘⇧P) — the repository's pull requests: *Open*,
-  *Yours*, *Review Requested* or *Closed*, each with its CI and review
-  state. The selected one shows its description, reviews and comments
-  (rendered Markdown) with a box to add a comment, its **checks** (failing
-  first; click an Actions check to open its job, others open on the web),
-  and its **files** as a diff. Merge it (squash, merge commit or rebase),
-  approve it, mark a draft ready, close or reopen it, or check its branch
-  out — forks included. The title bar's PR button and ⌘P open PRs here too
-- **Actions** (⌘⇧A) — recent workflow runs, on every branch or the
-  checked-out one. A run shows what it ran for, its jobs and the selected
-  job's steps, and the job's log with errors and warnings colored — a
-  failed job opens at its first error. Re-run failed jobs or all jobs,
-  cancel a running one, or open it on GitHub. While something is running
-  the tab refreshes every few seconds; GitHub serves a job's log once the
-  job finishes
+- **Pull requests and Actions** — two more dock panels (⌘⇧P, ⌘⇧A, or the
+  status bar). **Pull Requests** lists the repository's PRs with their CI
+  and review state; the menu on top picks *Open*, *Yours*, *Review
+  Requested* or *Closed*. **Actions** lists recent workflow runs, on every
+  branch or the checked-out one. Picking one opens it in the center as a
+  third tab, which closes with its ×:
+  - a **pull request** is one page: its checks (failing ones listed,
+    passing ones folded away; an Actions check opens its run), a row that
+    opens the diff, then the description, reviews and comments as Markdown
+    with a box to add one. Merge it (squash, merge commit or rebase),
+    approve it, mark a draft ready, close or reopen it, or check its branch
+    out — forks included. The title bar's PR button and ⌘P open PRs here too
+  - a **run** shows what it ran for, its jobs and the selected job's steps,
+    and the job's log with errors and warnings colored — a failed job opens
+    at its first error. Re-run failed jobs or all jobs, cancel a running
+    one, or open it on GitHub; reached from a PR, ← goes back to it.
+
+  What's on screen refreshes every few seconds while something on it is
+  running; GitHub serves a job's log once the job finishes
 - **Status bar** — dock toggles, the branch with ahead counts and a
   clickable *↓3 to pull*,
   background jobs, and unified / split diffs
@@ -242,11 +246,12 @@ Mac app (`spor-app`, `--features gui`):
 - `src/gui/render.rs` — window frame: title bar, dock + center, status bar
 - `src/gui/rail.rs` — the workspace rail
 - `src/gui/repos_panel.rs` — the repository sidebar
-- `src/gui/git_panel.rs`, `branches.rs` — the two dock panels
-- `src/gui/changes_view.rs`, `history.rs`, `pulls.rs`, `runs.rs` — the
-  center tabs
-- `src/gui/hub.rs` — what the Pull Requests and Actions tabs have loaded and
-  selected, and the background `gh` calls behind them
+- `src/gui/git_panel.rs`, `branches.rs` — the git and branch dock panels
+- `src/gui/changes_view.rs`, `history.rs` — the two center tabs
+- `src/gui/pulls.rs`, `runs.rs` — the Pull Requests and Actions dock panels
+  and the PR and run pages they open
+- `src/gui/hub.rs` — what those have loaded and open, and the background
+  `gh` calls behind them
 - `src/gui/history_options.rs` — the History graph's saved options
 - `src/gui/palette.rs` — the ⌘P palette (PR search, commands) and the
   table of commands with their default shortcuts

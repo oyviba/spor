@@ -470,6 +470,8 @@ impl Spor {
         let dock_content = dock.map(|panel| match panel {
             DockPanel::Git => self.render_git_panel(window, cx),
             DockPanel::Branches => self.render_branches(window, cx),
+            DockPanel::PullRequests => self.render_pull_panel(cx),
+            DockPanel::Actions => self.render_run_panel(cx),
         });
         let dock_panel = |content| {
             resizable_panel()
@@ -498,12 +500,6 @@ impl Spor {
 
     fn render_center(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let changes = self.repo.as_ref().map_or(0, |r| r.changes.len());
-        let selected = match self.tab {
-            Tab::Changes => 0,
-            Tab::History => 1,
-            Tab::PullRequests => 2,
-            Tab::Actions => 3,
-        };
         let changes_label = if changes > 0 {
             format!("Uncommitted Changes ({changes})")
         } else {
@@ -517,6 +513,45 @@ impl Spor {
                     .text_color(cx.theme().muted_foreground),
             )
         };
+        // An open pull request or run gets a third tab while it's open.
+        let page = match self.tab {
+            Tab::Pull => self.hub.pull_detail.ready().map_or_else(
+                || self.hub.pull.map(|n| format!("#{n}")),
+                |d| Some(format!("#{} {}", d.pull.number, d.pull.title)),
+            ),
+            Tab::Run => self.hub.run_detail.ready().map_or_else(
+                || Some("Run".to_string()),
+                |d| Some(format!("{} #{}", d.run.workflow, d.run.number)),
+            ),
+            _ => None,
+        }
+        .map(|label| {
+            let path = if self.tab == Tab::Pull {
+                icon::GIT_PULL_REQUEST
+            } else {
+                icon::ACTIONS
+            };
+            let label: String = if label.chars().count() > 48 {
+                label.chars().take(47).chain(['…']).collect()
+            } else {
+                label
+            };
+            TabItem::new().label(label).prefix(tab_icon(path)).suffix(
+                div().pr_1().child(
+                    Button::new("close-page")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Close)
+                        .tooltip("Close")
+                        .on_click(cx.listener(|this, _, _, cx| this.close_page(cx))),
+                ),
+            )
+        });
+        let selected = match self.tab {
+            Tab::Changes => 0,
+            Tab::History => 1,
+            Tab::Pull | Tab::Run => 2,
+        };
         let tabs = TabBar::new("center-tabs")
             .child(
                 TabItem::new()
@@ -528,16 +563,7 @@ impl Spor {
                     .label("History")
                     .prefix(tab_icon(icon::CLOCK)),
             )
-            .child(
-                TabItem::new()
-                    .label("Pull Requests")
-                    .prefix(tab_icon(icon::GIT_PULL_REQUEST)),
-            )
-            .child(
-                TabItem::new()
-                    .label("Actions")
-                    .prefix(tab_icon(icon::ACTIONS)),
-            )
+            .children(page)
             .selected_index(selected)
             .on_click(cx.listener(|this, ix: &usize, window, cx| {
                 match ix {
@@ -546,8 +572,7 @@ impl Spor {
                         this.tab = Tab::History;
                         this.history_focus.focus(window, cx);
                     }
-                    2 => this.show_pulls(cx),
-                    _ => this.show_runs(cx),
+                    _ => {}
                 }
                 cx.notify();
             }));
@@ -558,8 +583,8 @@ impl Spor {
             .child(div().flex_1().min_h_0().child(match self.tab {
                 Tab::Changes => self.render_changes(window, cx),
                 Tab::History => self.render_history(window, cx),
-                Tab::PullRequests => self.render_pulls(window, cx),
-                Tab::Actions => self.render_runs(window, cx),
+                Tab::Pull => self.render_pull_page(window, cx),
+                Tab::Run => self.render_run_page(window, cx),
             }))
             .into_any_element()
     }
@@ -589,13 +614,17 @@ impl Spor {
                     .icon(Icon::empty().path(path))
                     .selected(dock == Some(panel))
                     .tooltip(tip)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.dock = if this.dock == Some(panel) {
-                            None
-                        } else {
-                            Some(panel)
-                        };
-                        cx.notify();
+                    .on_click(cx.listener(move |this, _, _, cx| match panel {
+                        _ if this.dock == Some(panel) => {
+                            this.dock = None;
+                            cx.notify();
+                        }
+                        DockPanel::PullRequests => this.show_pulls(cx),
+                        DockPanel::Actions => this.show_runs(cx),
+                        _ => {
+                            this.dock = Some(panel);
+                            cx.notify();
+                        }
                     }))
             };
 
@@ -623,6 +652,18 @@ impl Spor {
                         icon::GIT_BRANCH,
                         DockPanel::Branches,
                         "Branches",
+                    ))
+                    .child(dock_button(
+                        "dock-pulls",
+                        icon::GIT_PULL_REQUEST,
+                        DockPanel::PullRequests,
+                        "Pull Requests (⌘⇧P)",
+                    ))
+                    .child(dock_button(
+                        "dock-actions",
+                        icon::ACTIONS,
+                        DockPanel::Actions,
+                        "Actions (⌘⇧A)",
                     ))
                     .child(
                         Button::new("dock-side")

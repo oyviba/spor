@@ -116,14 +116,18 @@ pub fn init(cx: &mut App) {
 pub enum Tab {
     Changes,
     History,
-    PullRequests,
-    Actions,
+    /// A pull request opened from the dock, the title bar or ⌘P.
+    Pull,
+    /// An Actions run opened from the dock or a PR's checks.
+    Run,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum DockPanel {
     Git,
     Branches,
+    PullRequests,
+    Actions,
 }
 
 /// Which side of the center pane the dock sits on.
@@ -251,7 +255,7 @@ pub struct Spor {
     /// Every PR, for the ⌘P search, and the repository it belongs to.
     pub(crate) pr_search: PrSearch,
     pub(crate) pr_search_root: Option<PathBuf>,
-    /// Pull requests and Actions runs, for their tabs.
+    /// Pull requests and Actions runs: the dock lists and the open page.
     pub(crate) hub: Hub,
     /// Branch and upstream counts of the workspace's other repositories,
     /// for the repository sidebar.

@@ -1,12 +1,12 @@
-//! The Pull Requests tab: the repository's pull requests on the left
-//! (Open, Yours, Review Requested, Closed), the selected one on the right —
-//! its header and actions (check out, approve, merge, close), then its
-//! conversation, its checks, and its files.
+//! Pull requests: the list in the dock (Open, Yours, Review Requested or
+//! Closed, picked from its header), and the open one in the center — its
+//! header and actions (merge, approve, check out, close), then one page with
+//! its checks, a row that opens its diff, and its conversation.
 
 use super::app::*;
 use super::assets::icon;
 use super::changes_view::empty_state;
-use super::hub::{now, Load, PullTab};
+use super::hub::{now, Load};
 use super::support::{plural, relative_time};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
@@ -14,13 +14,10 @@ use gpui_kit::component::{
     h_flex,
     input::Textarea,
     menu::{DropdownMenu as _, PopupMenuItem},
-    resizable::{h_resizable, resizable_panel},
     spinner::Spinner,
-    tab::{Tab as TabItem, TabBar},
     tag::Tag,
     text::TextView,
-    v_flex, ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _,
-    StyledExt as _,
+    v_flex, ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
 };
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, AnyElement, App, Context, Hsla, InteractiveElement as _,
@@ -140,49 +137,43 @@ fn avatar(name: &str) -> impl IntoElement {
 }
 
 impl Spor {
-    pub(crate) fn render_pulls(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let list = self.render_pull_list(cx);
-        let detail = self.render_pull_page(window, cx);
-        h_resizable("pulls-split")
-            .child(
-                resizable_panel()
-                    .size(px(380.))
-                    .size_range(px(260.)..px(640.))
-                    .child(list),
-            )
-            .child(
-                resizable_panel()
-                    .size_range(px(360.)..px(4000.))
-                    .child(detail),
-            )
-            .into_any_element()
-    }
-
-    fn render_pull_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    /// The dock panel: the repository's pull requests, filtered from the
+    /// header's menu. Picking one opens it in the center.
+    pub(crate) fn render_pull_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let filter = self.hub.pull_filter;
-        let selected = self.hub.pull;
+        let open = self.hub.pull.filter(|_| self.tab == Tab::Pull);
         let refreshing = matches!(self.hub.pulls, Load::Loading);
+        let spor = Self::weak(cx);
 
         let header = h_flex()
             .h(px(36.))
             .flex_none()
             .px_2()
-            .gap_0p5()
+            .gap_1()
             .border_b_1()
             .border_color(theme.border)
-            .children(PullFilter::ALL.into_iter().map(|f| {
-                Button::new(SharedString::from(format!("pull-filter-{}", f.label())))
+            .child(
+                Button::new("pull-filter")
                     .ghost()
                     .xsmall()
-                    .label(f.label())
-                    .selected(f == filter)
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_pull_filter(f, cx)))
-            }))
+                    .label(format!("{} Pull Requests", filter.label()))
+                    .dropdown_caret(true)
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for f in PullFilter::ALL {
+                            let spor = spor.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(f.label()).checked(f == filter).on_click(
+                                    move |_, _, cx| {
+                                        let _ =
+                                            spor.update(cx, |this, cx| this.set_pull_filter(f, cx));
+                                    },
+                                ),
+                            );
+                        }
+                        menu
+                    }),
+            )
             .child(div().flex_1())
             .child(
                 Button::new("pulls-refresh")
@@ -191,12 +182,7 @@ impl Spor {
                     .icon(Icon::empty().path(icon::REFRESH))
                     .loading(refreshing)
                     .tooltip("Refresh")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.load_pulls(cx);
-                        if let Some(n) = this.hub.pull {
-                            this.select_pull_again(n, cx);
-                        }
-                    })),
+                    .on_click(cx.listener(|this, _, _, cx| this.load_pulls(cx))),
             );
 
         let body = match &self.hub.pulls {
@@ -205,13 +191,13 @@ impl Spor {
             Load::Ready(list) if list.is_empty() => empty_state(
                 icon::GIT_PULL_REQUEST,
                 "No pull requests here",
-                "Try another filter above",
+                "Pick another filter from the menu above",
                 cx,
             ),
             Load::Ready(list) => {
                 let rows: Vec<AnyElement> = list
                     .iter()
-                    .map(|pull| self.render_pull_row(pull, selected == Some(pull.number), cx))
+                    .map(|pull| self.render_pull_row(pull, open == Some(pull.number), cx))
                     .collect();
                 div()
                     .id("pull-list")
@@ -244,12 +230,10 @@ impl Spor {
             .id(SharedString::from(format!("pull-{number}")))
             .px_3()
             .py_2()
-            .border_b_1()
-            .border_color(theme.border.opacity(0.6))
             .cursor_pointer()
             .when(selected, |this| this.bg(theme.list_active))
             .when(!selected, |this| this.hover(|s| s.bg(theme.list_hover)))
-            .on_click(cx.listener(move |this, _, _, cx| this.select_pull(number, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.show_pull(number, cx)))
             .child(
                 h_flex()
                     .gap_2()
@@ -262,84 +246,54 @@ impl Spor {
                             .gap_0p5()
                             .child(div().text_sm().truncate().child(pull.title.clone()))
                             .child(
-                                div()
+                                h_flex()
+                                    .gap_1()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .truncate()
-                                    .child(format!(
-                                        "#{number} · {} · {} · {}",
-                                        pull.head,
+                                    .child(div().min_w_0().truncate().child(format!(
+                                        "#{number} · {} · {}",
                                         pull.author,
                                         relative_time(pull.updated)
-                                    )),
-                            )
-                            .when_some(review, |this, (label, color)| {
-                                this.child(div().text_xs().text_color(color).child(label))
-                            }),
+                                    )))
+                                    .when_some(review, |this, (label, color)| {
+                                        this.child(
+                                            div()
+                                                .flex_none()
+                                                .text_color(color)
+                                                .child(format!("· {label}")),
+                                        )
+                                    }),
+                            ),
                     )
                     .children(checks.map(|icon| div().pt(px(2.)).child(icon))),
             )
             .into_any_element()
     }
 
-    /// Reload the selected PR's page even though it's already showing.
-    fn select_pull_again(&mut self, number: u64, cx: &mut Context<Self>) {
-        self.hub.pull = None;
-        self.select_pull(number, cx);
-    }
-
-    fn render_pull_page(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// The open pull request: its header, then one scrolling page — checks,
+    /// the files row, the conversation — or its diff.
+    pub(crate) fn render_pull_page(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let detail = match &self.hub.pull_detail {
             Load::Idle => {
-                return empty_state(
-                    icon::GIT_PULL_REQUEST,
-                    "No pull request selected",
-                    "Pick one from the list",
-                    cx,
-                )
+                return empty_state(icon::GIT_PULL_REQUEST, "No pull request open", "", cx)
             }
             Load::Loading => return pending_state(Some("Loading pull request…"), None, cx),
             Load::Failed(e) => return pending_state(None, Some(&e.clone()), cx),
             Load::Ready(d) => d.clone(),
         };
         let header = self.render_pull_header(&detail, cx);
-        let tab = self.hub.pull_tab;
-        let failing = detail
-            .checks
-            .iter()
-            .filter(|c| c.status == Status::Failure)
-            .count();
-        let checks_label = if failing > 0 {
-            format!("Checks ({failing} failing)")
+        let body = if self.hub.pull_files {
+            self.render_pull_files(&detail, cx)
         } else {
-            format!("Checks ({})", detail.checks.len())
-        };
-        let tabs = TabBar::new("pull-tabs")
-            .child(TabItem::new().label(format!("Conversation ({})", detail.timeline.len())))
-            .child(TabItem::new().label(checks_label))
-            .child(TabItem::new().label(format!("Files ({})", detail.changed_files)))
-            .selected_index(match tab {
-                PullTab::Conversation => 0,
-                PullTab::Checks => 1,
-                PullTab::Files => 2,
-            })
-            .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                let tab = match ix {
-                    0 => PullTab::Conversation,
-                    1 => PullTab::Checks,
-                    _ => PullTab::Files,
-                };
-                this.set_pull_tab(tab, cx);
-            }));
-        let body = match tab {
-            PullTab::Conversation => self.render_conversation(&detail, window, cx),
-            PullTab::Checks => self.render_checks(&detail, cx),
-            PullTab::Files => self.render_pull_files(cx),
+            self.render_conversation(&detail, window, cx)
         };
         v_flex()
             .size_full()
             .child(header)
-            .child(tabs)
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
     }
@@ -408,6 +362,8 @@ impl Spor {
             .pt_3()
             .pb_2()
             .gap_2()
+            .border_b_1()
+            .border_color(theme.border)
             .child(
                 h_flex()
                     .gap_2()
@@ -534,14 +490,56 @@ impl Spor {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme().clone();
-        let number = detail.pull.number;
+        let pull = &detail.pull;
+        let number = pull.number;
         let busy = self.hub.busy;
         let can_comment = !self.hub.comment.read(cx).value().trim().is_empty();
 
+        let checks = (!detail.checks.is_empty()).then(|| self.render_checks(detail, cx));
+        let files = h_flex()
+            .id("pull-files-row")
+            .px_3()
+            .py_2()
+            .gap_2()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.list_hover))
+            .text_sm()
+            .on_click(cx.listener(|this, _, _, cx| this.show_pull_files(true, cx)))
+            .child(
+                Icon::empty()
+                    .path(icon::FILE_DIFF)
+                    .small()
+                    .text_color(theme.muted_foreground),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .child(format!("{} changed", plural(detail.changed_files, "file"))),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.green)
+                    .child(format!("+{}", pull.additions)),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.red)
+                    .child(format!("−{}", pull.deletions)),
+            )
+            .child(
+                Icon::from(IconName::ChevronRight)
+                    .xsmall()
+                    .text_color(theme.muted_foreground),
+            );
         let description = comment_card(
             &format!("pull-body-{number}"),
             &Comment {
-                author: detail.pull.author.clone(),
+                author: pull.author.clone(),
                 body: detail.body.clone(),
                 at: 0,
                 verdict: None,
@@ -564,14 +562,13 @@ impl Spor {
                 v_flex()
                     .p_4()
                     .gap_3()
+                    .children(checks)
+                    .child(files)
                     .child(description)
                     .children(timeline)
                     .child(
                         v_flex()
                             .gap_2()
-                            .pt_2()
-                            .border_t_1()
-                            .border_color(theme.border)
                             .child(Textarea::new(&self.hub.comment))
                             .child(
                                 h_flex().child(div().flex_1()).child(
@@ -592,16 +589,10 @@ impl Spor {
             .into_any_element()
     }
 
+    /// The checks as a card: what needs attention listed, passing ones
+    /// folded into one row until asked for.
     fn render_checks(&self, detail: &PullDetail, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        if detail.checks.is_empty() {
-            return empty_state(
-                icon::LIST_CHECKS,
-                "No checks",
-                "Nothing reported a status for this pull request's last commit",
-                cx,
-            );
-        }
         let count =
             |pred: fn(Status) -> bool| detail.checks.iter().filter(|c| pred(c.status)).count();
         let failing = count(|s| s == Status::Failure);
@@ -621,34 +612,66 @@ impl Spor {
         if skipped > 0 {
             summary.push(format!("{skipped} skipped or cancelled"));
         }
+        let overall = if failing > 0 {
+            Status::Failure
+        } else if running > 0 {
+            Status::Running
+        } else {
+            Status::Success
+        };
+        let show_passed = self.hub.show_passed;
         let now = now();
         let rows: Vec<AnyElement> = detail
             .checks
             .iter()
             .enumerate()
+            .filter(|(_, c)| show_passed || c.status != Status::Success)
             .map(|(ix, check)| self.render_check_row(ix, check, now, cx))
             .collect();
+        let fold = (passed > 0).then(|| {
+            div()
+                .id("checks-fold")
+                .px_3()
+                .py_1p5()
+                .border_t_1()
+                .border_color(theme.border.opacity(0.6))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.list_hover))
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.hub.show_passed = !this.hub.show_passed;
+                    cx.notify();
+                }))
+                .child(if show_passed {
+                    "Hide passing checks".to_string()
+                } else {
+                    format!("Show {passed} passing")
+                })
+        });
         v_flex()
-            .size_full()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .overflow_hidden()
             .child(
-                div()
-                    .flex_none()
-                    .px_4()
+                h_flex()
+                    .px_3()
                     .py_2()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(summary.join(" · ")),
+                    .gap_2()
+                    .bg(theme.muted.opacity(0.5))
+                    .text_sm()
+                    .child(status_icon(overall, cx))
+                    .child(div().font_medium().child("Checks"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(summary.join(" · ")),
+                    ),
             )
-            .child(
-                div()
-                    .id("check-list")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .children(rows),
-            )
+            .children(rows)
+            .children(fold)
             .into_any_element()
     }
 
@@ -674,10 +697,10 @@ impl Spor {
         let open = check.clone();
         h_flex()
             .id(SharedString::from(format!("check-{ix}")))
-            .px_4()
+            .px_3()
             .py_1p5()
             .gap_2()
-            .border_b_1()
+            .border_t_1()
             .border_color(theme.border.opacity(0.6))
             .cursor_pointer()
             .hover(|s| s.bg(theme.list_hover))
@@ -723,8 +746,39 @@ impl Spor {
             .into_any_element()
     }
 
-    fn render_pull_files(&self, cx: &mut Context<Self>) -> AnyElement {
-        match &self.hub.pull_diff_load {
+    /// The PR's diff, under a bar that leads back to the conversation.
+    fn render_pull_files(&self, detail: &PullDetail, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let bar = h_flex()
+            .h(px(32.))
+            .flex_none()
+            .px_2()
+            .gap_3()
+            .border_b_1()
+            .border_color(theme.border)
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(
+                Button::new("pull-files-back")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ArrowLeft)
+                    .label("Conversation")
+                    .on_click(cx.listener(|this, _, _, cx| this.show_pull_files(false, cx))),
+            )
+            .child(div().flex_1())
+            .child(plural(detail.changed_files, "file"))
+            .child(
+                div()
+                    .text_color(theme.green)
+                    .child(format!("+{}", detail.pull.additions)),
+            )
+            .child(
+                div()
+                    .text_color(theme.red)
+                    .child(format!("−{}", detail.pull.deletions)),
+            );
+        let diff = match &self.hub.pull_diff_load {
             Load::Idle | Load::Loading => pending_state(Some("Loading the diff…"), None, cx),
             Load::Failed(e) => pending_state(None, Some(e), cx),
             Load::Ready(_) if self.hub.pull_diff.read(cx).files().is_empty() => {
@@ -733,7 +787,12 @@ impl Spor {
             Load::Ready(_) => Diff::new(&self.hub.pull_diff)
                 .line_number(true)
                 .into_any_element(),
-        }
+        };
+        v_flex()
+            .size_full()
+            .child(bar)
+            .child(div().flex_1().min_h_0().child(diff))
+            .into_any_element()
     }
 }
 

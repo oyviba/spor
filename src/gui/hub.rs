@@ -1,12 +1,12 @@
-//! GitHub state for the Pull Requests and Actions tabs: what's loaded, what's
-//! selected, and the background `gh` calls that fill it in and act on it.
-//! Drawing is in `pulls.rs` and `runs.rs`.
+//! GitHub state: the pull request and Actions run lists in the dock, the PR
+//! or run open in the center, and the background `gh` calls that fill them
+//! in and act on them. Drawing is in `pulls.rs` and `runs.rs`.
 //!
-//! Lists stay up while a fresh copy loads, so refreshing never blanks the
-//! page. While the tab shows something still running (a check, a run), it
-//! is reloaded every few seconds; otherwise every minute.
+//! Lists stay up while a fresh copy loads, so refreshing never blanks them.
+//! What's on screen is reloaded every few seconds while something on it is
+//! running (a check, a run), otherwise every minute.
 
-use super::app::{Spor, Tab};
+use super::app::{DockPanel, Spor, Tab};
 use super::support::first_line;
 use gpui_kit::component::{
     diff::{DiffFile, DiffMode, DiffState},
@@ -49,14 +49,6 @@ impl<T> Load<T> {
     }
 }
 
-/// The sections of a pull request's page.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum PullTab {
-    Conversation,
-    Checks,
-    Files,
-}
-
 pub struct Hub {
     /// The repository everything here was loaded for.
     root: Option<PathBuf>,
@@ -64,7 +56,10 @@ pub struct Hub {
     pub pulls: Load<Rc<Vec<Pull>>>,
     pub pull: Option<u64>,
     pub pull_detail: Load<Rc<PullDetail>>,
-    pub pull_tab: PullTab,
+    /// The PR page shows its diff instead of its conversation.
+    pub pull_files: bool,
+    /// The PR page lists its passing checks too, not just a count.
+    pub show_passed: bool,
     pub pull_diff: Entity<DiffState>,
     /// Which PR's diff `pull_diff` holds, or is loading.
     pub pull_diff_load: Load<u64>,
@@ -74,6 +69,10 @@ pub struct Hub {
     pub runs: Load<Rc<Vec<Run>>>,
     pub run: Option<u64>,
     pub run_detail: Load<Rc<RunDetail>>,
+    /// The PR the open run was reached from, for its Back button.
+    pub run_back: Option<u64>,
+    /// Where closing the PR or run page goes back to.
+    return_to: Tab,
     pub job: Option<u64>,
     pub log: Load<Rc<Vec<LogLine>>>,
     log_for: Option<u64>,
@@ -98,7 +97,8 @@ impl Hub {
             pulls: Load::Idle,
             pull: None,
             pull_detail: Load::Idle,
-            pull_tab: PullTab::Conversation,
+            pull_files: false,
+            show_passed: false,
             pull_diff: cx.new(|cx| DiffState::new([], cx).with_mode(diff_mode)),
             pull_diff_load: Load::Idle,
             comment: cx.new(|cx| {
@@ -110,6 +110,8 @@ impl Hub {
             runs: Load::Idle,
             run: None,
             run_detail: Load::Idle,
+            run_back: None,
+            return_to: Tab::History,
             job: None,
             log: Load::Idle,
             log_for: None,
@@ -141,6 +143,7 @@ impl Hub {
         self.runs = Load::Idle;
         self.run = None;
         self.run_detail = Load::Idle;
+        self.run_back = None;
         self.job = None;
         self.log = Load::Idle;
         self.log_for = None;
@@ -148,23 +151,23 @@ impl Hub {
     }
 
     /// Anything on screen still queued or running.
-    fn live(&self, tab: Tab) -> bool {
-        match tab {
-            Tab::PullRequests => self
+    fn live(&self, tab: Tab, dock: Option<DockPanel>) -> bool {
+        let pull = tab == Tab::Pull
+            && self
                 .pull_detail
                 .ready()
-                .is_some_and(|d| d.checks.iter().any(|c| c.status.active())),
-            Tab::Actions => {
-                self.runs
-                    .ready()
-                    .is_some_and(|runs| runs.iter().any(|r| r.status.active()))
-                    || self
-                        .run_detail
-                        .ready()
-                        .is_some_and(|d| d.run.status.active())
-            }
-            _ => false,
-        }
+                .is_some_and(|d| d.checks.iter().any(|c| c.status.active()));
+        let runs = dock == Some(DockPanel::Actions)
+            && self
+                .runs
+                .ready()
+                .is_some_and(|runs| runs.iter().any(|r| r.status.active()));
+        let run = tab == Tab::Run
+            && self
+                .run_detail
+                .ready()
+                .is_some_and(|d| d.run.status.active());
+        pull || runs || run
     }
 }
 
@@ -194,28 +197,25 @@ impl Spor {
         self.hub._poll_task = cx.spawn_in(window, async move |this, cx| loop {
             cx.background_executor().timer(LIVE_EVERY).await;
             let alive = this.update(cx, |this, cx| {
-                if !matches!(this.tab, Tab::PullRequests | Tab::Actions) || this.repo.is_none() {
+                let (tab, dock) = (this.tab, this.dock);
+                let lists = matches!(dock, Some(DockPanel::PullRequests | DockPanel::Actions));
+                if this.repo.is_none() || !(lists || matches!(tab, Tab::Pull | Tab::Run)) {
                     return;
                 }
                 idle += 1;
-                let live = this.hub.live(this.tab);
-                if !live && idle < IDLE_TICKS {
+                if !this.hub.live(tab, dock) && idle < IDLE_TICKS {
                     return;
                 }
                 idle = 0;
-                match this.tab {
-                    Tab::PullRequests => {
-                        this.load_pulls(cx);
-                        if let Some(n) = this.hub.pull {
-                            this.load_pull_detail(n, cx);
-                        }
-                    }
-                    _ => {
-                        this.load_runs(cx);
-                        if let Some(id) = this.hub.run {
-                            this.load_run_detail(id, cx);
-                        }
-                    }
+                match dock {
+                    Some(DockPanel::PullRequests) => this.load_pulls(cx),
+                    Some(DockPanel::Actions) => this.load_runs(cx),
+                    _ => {}
+                }
+                match (tab, this.hub.pull, this.hub.run) {
+                    (Tab::Pull, Some(n), _) => this.load_pull_detail(n, cx),
+                    (Tab::Run, _, Some(id)) => this.load_run_detail(id, cx),
+                    _ => {}
                 }
             });
             if alive.is_err() {
@@ -226,8 +226,23 @@ impl Spor {
 
     // ── Pull requests ────────────────────────────────────────────────────────
 
+    /// Open a PR or run page in the center, remembering where to go back.
+    fn open_page(&mut self, page: Tab) {
+        if matches!(self.tab, Tab::Changes | Tab::History) {
+            self.hub.return_to = self.tab;
+        }
+        self.tab = page;
+    }
+
+    /// Close the PR or run page.
+    pub(crate) fn close_page(&mut self, cx: &mut Context<Self>) {
+        self.tab = self.hub.return_to;
+        cx.notify();
+    }
+
+    /// Show the pull request list in the dock.
     pub(crate) fn show_pulls(&mut self, cx: &mut Context<Self>) {
-        self.tab = Tab::PullRequests;
+        self.dock = Some(DockPanel::PullRequests);
         self.hub_repo_changed(cx);
         if self.hub.pulls.needs_load() {
             self.load_pulls(cx);
@@ -263,15 +278,7 @@ impl Spor {
                     return;
                 }
                 match result {
-                    Ok(list) => {
-                        let first = list.first().map(|p| p.number);
-                        this.hub.pulls = Load::Ready(Rc::new(list));
-                        if this.hub.pull.is_none() {
-                            if let Some(n) = first {
-                                this.select_pull(n, cx);
-                            }
-                        }
-                    }
+                    Ok(list) => this.hub.pulls = Load::Ready(Rc::new(list)),
                     // A failed refresh keeps the list that's up.
                     Err(_) if this.hub.pulls.ready().is_some() => {}
                     Err(e) => this.hub.pulls = Load::Failed(e),
@@ -288,17 +295,18 @@ impl Spor {
         self.hub.pull = Some(number);
         self.hub.pull_detail = Load::Loading;
         self.hub.pull_diff_load = Load::Idle;
+        self.hub.pull_files = false;
+        self.hub.show_passed = false;
         self.load_pull_detail(number, cx);
-        if self.hub.pull_tab == PullTab::Files {
-            self.load_pull_diff(number, cx);
-        }
         cx.notify();
     }
 
-    /// Show pull request `number` in the Pull Requests tab.
+    /// Open pull request `number` in the center.
     pub(crate) fn show_pull(&mut self, number: u64, cx: &mut Context<Self>) {
-        self.show_pulls(cx);
+        self.hub_repo_changed(cx);
+        self.open_page(Tab::Pull);
         self.select_pull(number, cx);
+        cx.notify();
     }
 
     fn load_pull_detail(&mut self, number: u64, cx: &mut Context<Self>) {
@@ -335,9 +343,10 @@ impl Spor {
         });
     }
 
-    pub(crate) fn set_pull_tab(&mut self, tab: PullTab, cx: &mut Context<Self>) {
-        self.hub.pull_tab = tab;
-        if let (PullTab::Files, Some(number)) = (tab, self.hub.pull) {
+    /// Switch the PR page between its conversation and its diff.
+    pub(crate) fn show_pull_files(&mut self, files: bool, cx: &mut Context<Self>) {
+        self.hub.pull_files = files;
+        if let (true, Some(number)) = (files, self.hub.pull) {
             let loaded = match self.hub.pull_diff_load {
                 Load::Ready(n) => n == number,
                 Load::Loading => true,
@@ -384,11 +393,15 @@ impl Spor {
         });
     }
 
-    /// Open a check: an Actions job in the Actions tab, anything else on
-    /// the web.
+    /// Open a check: an Actions job as a run page (with Back to the PR),
+    /// anything else on the web.
     pub(crate) fn open_check(&mut self, check: &Check, cx: &mut Context<Self>) {
         match check.run_id {
-            Some(run) => self.show_run(run, check.job_id, cx),
+            Some(run) => {
+                let back = self.hub.pull.filter(|_| self.tab == Tab::Pull);
+                self.show_run(run, check.job_id, cx);
+                self.hub.run_back = back;
+            }
             None if !check.url.is_empty() => cx.open_url(&check.url),
             None => {}
         }
@@ -504,8 +517,9 @@ impl Spor {
 
     // ── Actions ──────────────────────────────────────────────────────────────
 
+    /// Show the Actions run list in the dock.
     pub(crate) fn show_runs(&mut self, cx: &mut Context<Self>) {
-        self.tab = Tab::Actions;
+        self.dock = Some(DockPanel::Actions);
         self.hub_repo_changed(cx);
         if self.hub.runs.needs_load() {
             self.load_runs(cx);
@@ -513,14 +527,20 @@ impl Spor {
         cx.notify();
     }
 
-    /// Show run `id` in the Actions tab, with `job` (or its most telling
-    /// job) selected.
+    /// Open run `id` in the center, with `job` (or its most telling job)
+    /// selected.
     pub(crate) fn show_run(&mut self, id: u64, job: Option<u64>, cx: &mut Context<Self>) {
-        self.show_runs(cx);
+        self.hub_repo_changed(cx);
+        self.open_page(Tab::Run);
+        self.hub.run_back = None;
         self.select_run(id, cx);
-        if let Some(job) = job {
-            self.hub.job = Some(job);
+        match job {
+            // Already loaded: show that job's log now.
+            Some(job) if self.hub.run_detail.ready().is_some() => self.select_job(job, cx),
+            Some(job) => self.hub.job = Some(job),
+            None => {}
         }
+        cx.notify();
     }
 
     pub(crate) fn set_runs_this_branch(&mut self, this_branch: bool, cx: &mut Context<Self>) {
@@ -557,15 +577,7 @@ impl Spor {
                     return;
                 }
                 match result {
-                    Ok(list) => {
-                        let first = list.first().map(|r| r.id);
-                        this.hub.runs = Load::Ready(Rc::new(list));
-                        if this.hub.run.is_none() {
-                            if let Some(id) = first {
-                                this.select_run(id, cx);
-                            }
-                        }
-                    }
+                    Ok(list) => this.hub.runs = Load::Ready(Rc::new(list)),
                     Err(_) if this.hub.runs.ready().is_some() => {}
                     Err(e) => this.hub.runs = Load::Failed(e),
                 }

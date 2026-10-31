@@ -1,5 +1,5 @@
-//! The Actions tab: recent workflow runs on the left (every branch, or just
-//! the checked-out one), the selected run on the right — what it ran for,
+//! Actions: recent workflow runs in the dock (every branch, or just the
+//! checked-out one), and the open run in the center — what it ran for,
 //! re-run and cancel, its jobs with their steps, and the selected job's log.
 
 use super::app::*;
@@ -11,10 +11,10 @@ use super::support::relative_time;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
+    menu::{DropdownMenu as _, PopupMenuItem},
     resizable::{h_resizable, resizable_panel},
     tag::Tag,
-    v_flex, ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _,
-    StyledExt as _,
+    v_flex, ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
 };
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, uniform_list, AnyElement, Context,
@@ -45,60 +45,59 @@ fn run_took(run: &Run, now: i64) -> String {
 }
 
 impl Spor {
-    pub(crate) fn render_runs(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let list = self.render_run_list(cx);
-        let detail = self.render_run_page(window, cx);
-        h_resizable("runs-split")
-            .child(
-                resizable_panel()
-                    .size(px(360.))
-                    .size_range(px(240.)..px(620.))
-                    .child(list),
-            )
-            .child(
-                resizable_panel()
-                    .size_range(px(420.)..px(4000.))
-                    .child(detail),
-            )
-            .into_any_element()
-    }
-
-    fn render_run_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    /// The dock panel: recent workflow runs on every branch or the
+    /// checked-out one. Picking one opens it in the center.
+    pub(crate) fn render_run_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let this_branch = self.hub.runs_this_branch;
         let branch = self.repo.as_ref().and_then(|r| r.tracking.branch.clone());
         let refreshing = matches!(self.hub.runs, Load::Loading);
-        let selected = self.hub.run;
+        let selected = self.hub.run.filter(|_| self.tab == Tab::Run);
         let now = now();
+        let spor = Self::weak(cx);
 
+        let scope = match (&branch, this_branch) {
+            (Some(b), true) => format!("Runs on {b}"),
+            _ => "Runs on All Branches".to_string(),
+        };
         let header = h_flex()
             .h(px(36.))
             .flex_none()
             .px_2()
-            .gap_0p5()
+            .gap_1()
             .border_b_1()
             .border_color(theme.border)
             .child(
-                Button::new("runs-all")
+                Button::new("runs-scope")
                     .ghost()
                     .xsmall()
-                    .label("All Branches")
-                    .selected(!this_branch)
-                    .on_click(cx.listener(|this, _, _, cx| this.set_runs_this_branch(false, cx))),
-            )
-            .child(
-                Button::new("runs-branch")
-                    .ghost()
-                    .xsmall()
-                    .label(branch.clone().unwrap_or_else(|| "This Branch".into()))
-                    .icon(Icon::empty().path(icon::GIT_BRANCH))
-                    .selected(this_branch)
-                    .disabled(branch.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| this.set_runs_this_branch(true, cx))),
+                    .label(scope)
+                    .dropdown_caret(true)
+                    .dropdown_menu(move |menu, _, _| {
+                        let all = spor.clone();
+                        let mine = spor.clone();
+                        let menu = menu.item(
+                            PopupMenuItem::new("All Branches")
+                                .checked(!this_branch)
+                                .on_click(move |_, _, cx| {
+                                    let _ = all.update(cx, |this, cx| {
+                                        this.set_runs_this_branch(false, cx)
+                                    });
+                                }),
+                        );
+                        match &branch {
+                            Some(b) => menu.item(
+                                PopupMenuItem::new(b.clone()).checked(this_branch).on_click(
+                                    move |_, _, cx| {
+                                        let _ = mine.update(cx, |this, cx| {
+                                            this.set_runs_this_branch(true, cx)
+                                        });
+                                    },
+                                ),
+                            ),
+                            None => menu,
+                        }
+                    }),
             )
             .child(div().flex_1())
             .child(
@@ -108,12 +107,7 @@ impl Spor {
                     .icon(Icon::empty().path(icon::REFRESH))
                     .loading(refreshing)
                     .tooltip("Refresh")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.load_runs(cx);
-                        if let Some(id) = this.hub.run.take() {
-                            this.select_run(id, cx);
-                        }
-                    })),
+                    .on_click(cx.listener(|this, _, _, cx| this.load_runs(cx))),
             );
 
         let body = match &self.hub.runs {
@@ -159,12 +153,10 @@ impl Spor {
             .id(SharedString::from(format!("run-{id}")))
             .px_3()
             .py_2()
-            .border_b_1()
-            .border_color(theme.border.opacity(0.6))
             .cursor_pointer()
             .when(selected, |this| this.bg(theme.list_active))
             .when(!selected, |this| this.hover(|s| s.bg(theme.list_hover)))
-            .on_click(cx.listener(move |this, _, _, cx| this.select_run(id, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.show_run(id, None, cx)))
             .child(
                 h_flex()
                     .gap_2()
@@ -201,16 +193,13 @@ impl Spor {
             .into_any_element()
     }
 
-    fn render_run_page(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_run_page(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let detail = match &self.hub.run_detail {
-            Load::Idle => {
-                return empty_state(
-                    icon::ACTIONS,
-                    "No run selected",
-                    "Pick one from the list",
-                    cx,
-                )
-            }
+            Load::Idle => return empty_state(icon::ACTIONS, "No run open", "", cx),
             Load::Loading => return pending_state(Some("Loading run…"), None, cx),
             Load::Failed(e) => return pending_state(None, Some(&e.clone()), cx),
             Load::Ready(d) => d.clone(),
@@ -256,11 +245,30 @@ impl Spor {
             .border_b_1()
             .border_color(theme.border)
             .child(
-                div()
-                    .text_lg()
-                    .font_medium()
-                    .truncate()
-                    .child(run.title.clone()),
+                h_flex()
+                    .gap_2()
+                    .when_some(self.hub.run_back, |this, number| {
+                        this.child(
+                            Button::new("run-back")
+                                .ghost()
+                                .small()
+                                .icon(IconName::ArrowLeft)
+                                .label(format!("#{number}"))
+                                .tooltip("Back to the pull request")
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.show_pull(number, cx)),
+                                ),
+                        )
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_lg()
+                            .font_medium()
+                            .truncate()
+                            .child(run.title.clone()),
+                    ),
             )
             .child(
                 h_flex()
