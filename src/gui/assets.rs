@@ -1,5 +1,6 @@
 //! Asset source: the kit's default icons plus the few extra Lucide icons a
 //! git client needs, vendored in `assets/icons` and embedded at build time.
+//! (`icon` also names some of the defaults, like `circle-check`.)
 
 use gpui_kit::{AssetSource, Result, SharedString};
 use std::borrow::Cow;
@@ -18,6 +19,11 @@ macro_rules! icons {
 static EXTRA_ICONS: &[(&str, &[u8])] = icons![
     "archive",
     "arrow-up-down",
+    "circle-dashed",
+    "circle-dot",
+    "circle-minus",
+    "circle-play",
+    "circle-slash",
     "clipboard-copy",
     "clock",
     "cloud",
@@ -29,8 +35,12 @@ static EXTRA_ICONS: &[(&str, &[u8])] = icons![
     "git-compare",
     "git-merge",
     "git-pull-request",
+    "git-pull-request-closed",
+    "git-pull-request-draft",
     "laptop",
     "list-checks",
+    "message-square",
+    "rotate-ccw",
     "settings-2",
     "tag",
 ];
@@ -54,6 +64,20 @@ pub mod icon {
     pub const LIST_CHECKS: &str = "icons/list-checks.svg";
     pub const SYNC: &str = "icons/arrow-up-down.svg";
     pub const TAG: &str = "icons/tag.svg";
+    pub const ACTIONS: &str = "icons/circle-play.svg";
+    pub const CHECK_PASSED: &str = "icons/circle-check.svg";
+    pub const CHECK_FAILED: &str = "icons/circle-x.svg";
+    pub const CHECK_RUNNING: &str = "icons/circle-dot.svg";
+    pub const CHECK_QUEUED: &str = "icons/circle-dashed.svg";
+    pub const CHECK_SKIPPED: &str = "icons/circle-minus.svg";
+    pub const CHECK_CANCELLED: &str = "icons/circle-slash.svg";
+    pub const EXTERNAL_LINK: &str = "icons/external-link.svg";
+    pub const REFRESH: &str = "icons/refresh-cw.svg";
+    pub const GITHUB: &str = "icons/github.svg";
+    pub const COMMENT: &str = "icons/message-square.svg";
+    pub const RERUN: &str = "icons/rotate-ccw.svg";
+    pub const PR_CLOSED: &str = "icons/git-pull-request-closed.svg";
+    pub const PR_DRAFT: &str = "icons/git-pull-request-draft.svg";
 }
 
 pub struct Assets;

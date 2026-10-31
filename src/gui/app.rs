@@ -5,6 +5,7 @@
 
 use super::assets::icon;
 use super::history_options::HistoryOptions;
+use super::hub::Hub;
 use super::palette::PrSearch;
 use super::repo::{self, Change, RepoHead, Snapshot};
 use super::support::{self, first_line, plural};
@@ -44,6 +45,8 @@ actions!(
         SearchBranches,
         ShowChanges,
         ShowHistory,
+        ShowPullRequests,
+        ShowActions,
         Refresh,
         UndoLast,
         Commit,
@@ -113,12 +116,18 @@ pub fn init(cx: &mut App) {
 pub enum Tab {
     Changes,
     History,
+    /// A pull request opened from the dock, the title bar or ⌘P.
+    Pull,
+    /// An Actions run opened from the dock or a PR's checks.
+    Run,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum DockPanel {
     Git,
     Branches,
+    PullRequests,
+    Actions,
 }
 
 /// Which side of the center pane the dock sits on.
@@ -246,6 +255,8 @@ pub struct Spor {
     /// Every PR, for the ⌘P search, and the repository it belongs to.
     pub(crate) pr_search: PrSearch,
     pub(crate) pr_search_root: Option<PathBuf>,
+    /// Pull requests and Actions runs: the dock lists and the open page.
+    pub(crate) hub: Hub,
     /// Branch and upstream counts of the workspace's other repositories,
     /// for the repository sidebar.
     pub(crate) repo_heads: HashMap<PathBuf, RepoHead>,
@@ -285,6 +296,7 @@ impl Spor {
         let history_focus = cx.focus_handle().tab_stop(true);
         let root_focus = cx.focus_handle();
         root_focus.focus(window, cx);
+        let hub = Hub::new(diff_mode, window, cx);
 
         let subscriptions = vec![
             cx.observe_window_appearance(window, |this, window, cx| {
@@ -320,6 +332,7 @@ impl Spor {
             prs: HashMap::new(),
             pr_search: PrSearch::Idle,
             pr_search_root: None,
+            hub,
             repo_heads: HashMap::new(),
             last_fetch: None,
             appearance,
@@ -340,6 +353,7 @@ impl Spor {
         }
         this.start_polling(window, cx);
         this.start_auto_fetch(window, cx);
+        this.start_hub_polling(window, cx);
         this.refresh_repo_heads(cx);
         this
     }
@@ -413,6 +427,7 @@ impl Spor {
                     self.select_commit(head, cx);
                 }
                 self.fetch_prs(cx);
+                self.hub_repo_changed(cx);
                 self.refresh_repo_heads(cx);
             }
             Err(e) => self.open_error = Some(e),
@@ -426,6 +441,7 @@ impl Spor {
         self.selected = None;
         self.undo.clear();
         self.fingerprint = None;
+        self.hub_repo_changed(cx);
         window.set_window_title("Spor");
         self.refresh_repo_heads(cx);
         cx.notify();
@@ -1726,7 +1742,7 @@ impl Spor {
 
     pub(crate) fn set_diff_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
         self.diff_mode = mode;
-        for diff in [&self.changes_diff, &self.commit_diff] {
+        for diff in [&self.changes_diff, &self.commit_diff, &self.hub.pull_diff] {
             diff.update(cx, |state, cx| state.set_mode(mode, cx));
         }
         cx.notify();
