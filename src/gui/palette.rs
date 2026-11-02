@@ -142,6 +142,12 @@ pub const SHORTCUTS: &[Shortcut] = &[
         Box::new(OpenPullRequest)
     }),
     cmd("Git", "Stash Changes…", &[], || Box::new(StashChanges)),
+    cmd(
+        "Agents",
+        "New Agent Task…",
+        &["secondary-shift-t"],
+        || Box::new(NewTask),
+    ),
     cmd("Git", "Pull with Rebase", &[], || Box::new(PullRebase)),
     cmd("Git", "Amend Last Commit", &[], || Box::new(ToggleAmend)),
     cmd("Git", "Continue Merge or Rebase", &[], || {
@@ -181,6 +187,9 @@ pub const SHORTCUTS: &[Shortcut] = &[
     }),
     cmd("View", "Show Actions", &["secondary-shift-a"], || {
         Box::new(ShowActions)
+    }),
+    cmd("View", "Show Agents", &["secondary-shift-i"], || {
+        Box::new(ShowAgents)
     }),
     cmd("View", "Show Git Panel", &["secondary-shift-g"], || {
         Box::new(ShowGitPanel)

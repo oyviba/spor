@@ -281,6 +281,92 @@ impl Repo {
 
     // ── Reading ──────────────────────────────────────────────────────────
 
+    /// The git directory every worktree of this repository shares, for
+    /// state that belongs to the repository rather than one checkout.
+    pub fn common_dir(&self) -> Result<PathBuf, String> {
+        let out = self.run_ok(&["rev-parse", "--git-common-dir"])?;
+        Ok(self.root.join(out.trim()))
+    }
+
+    /// How many commits `range` (e.g. `main..feature`) holds.
+    pub fn count_commits(&self, range: &str) -> usize {
+        self.run_ok(&["rev-list", "--count", range])
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// The commit two revisions last had in common.
+    pub fn merge_base(&self, a: &str, b: &str) -> Result<String, String> {
+        self.run_ok(&["merge-base", a, b])
+            .map(|s| s.trim().to_string())
+    }
+
+    /// Files, added and deleted lines between `base` and the working tree
+    /// (committed and uncommitted changes to tracked files).
+    pub fn numstat_since(&self, base: &str) -> (usize, usize, usize) {
+        let out = self
+            .run_ok(&["diff", "--no-ext-diff", "--numstat", base, "--"])
+            .unwrap_or_default();
+        out.lines().fold((0, 0, 0), |(f, a, d), line| {
+            let mut it = line.split('\t');
+            let n = |s: Option<&str>| s.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            (f + 1, a + n(it.next()), d + n(it.next()))
+        })
+    }
+
+    /// Everything between `base` and the working tree as one patch,
+    /// untracked files included.
+    pub fn patch_since(&self, base: &str) -> Result<String, String> {
+        let mut args = vec!["diff"];
+        args.extend(PATCH_FLAGS);
+        args.extend([base, "--"]);
+        let mut patch = self.run_ok(&args)?;
+        let untracked: Vec<String> = self
+            .status()?
+            .into_iter()
+            .filter(|e| e.status == FileStatus::Untracked)
+            .map(|e| e.path)
+            .collect();
+        patch.push_str(&self.untracked_patch(&untracked));
+        Ok(patch)
+    }
+
+    /// When the last commit on `rev` was made.
+    pub fn commit_time(&self, rev: &str) -> i64 {
+        self.run_ok(&["log", "-1", "--format=%ct", rev])
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Stage everything in the working tree, new files too.
+    pub fn stage_all(&self) -> Result<(), String> {
+        self.run_ok(&["add", "--all"]).map(|_| ())
+    }
+
+    /// Bring `branch`'s changes into the index as one change, without
+    /// committing. Conflicts are left in the files.
+    pub fn squash_merge(&self, branch: &str) -> Result<Outcome, String> {
+        let out = self.run(&["merge", "--squash", branch])?;
+        if out.status.success() {
+            return Ok(Outcome::Done);
+        }
+        // A squash merge records no MERGE_HEAD, so look for conflicts directly.
+        let conflicts = self.conflicts()?;
+        if conflicts.is_empty() {
+            Err(error_text(&out))
+        } else {
+            Ok(Outcome::Conflicts(conflicts))
+        }
+    }
+
+    /// Merge `branch` with a merge commit even when it could fast-forward.
+    pub fn merge_no_ff(&self, branch: &str, message: &str) -> Result<Outcome, String> {
+        let out = self.run(&["merge", "--no-ff", "-m", message, branch])?;
+        self.outcome(out)
+    }
+
     /// Load commit graph. We use ASCII unit separators to survive weird subjects.
     pub fn log_all(&self, limit: usize) -> Result<Vec<Commit>, String> {
         let n = format!("-n{limit}");

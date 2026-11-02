@@ -4,6 +4,7 @@
 //! status bar. Everything git-related the views trigger lives here.
 
 use super::actions::{ChangesMode, RebaseDraft};
+use super::agents::Agents;
 use super::askpass;
 use super::assets::icon;
 use super::history_options::HistoryOptions;
@@ -84,6 +85,8 @@ actions!(
         StageLines,
         UnstageLines,
         DiscardLines,
+        NewTask,
+        ShowAgents,
         Workspace1,
         Workspace2,
         Workspace3,
@@ -142,6 +145,8 @@ pub enum Tab {
     Run,
     /// An interactive rebase being planned.
     Rebase,
+    /// An agent task's page.
+    Task,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -150,6 +155,7 @@ pub enum DockPanel {
     Branches,
     PullRequests,
     Actions,
+    Agents,
 }
 
 /// Which side of the center pane the dock sits on.
@@ -244,6 +250,8 @@ pub enum Undo {
     NewTag(String),
     /// Put a deleted stash back.
     Stash(git::Stash),
+    /// Bring back a landed or discarded agent task.
+    Task(Box<spor::tasks::Undoable>),
     /// Put a deleted tag back where it pointed.
     Tag {
         name: String,
@@ -345,6 +353,10 @@ pub struct Spor {
     /// A rewrite stopped on conflicts: what to say and where to undo to
     /// once it's continued to the end.
     pub(crate) pending_rewrite: Option<(String, (String, String))>,
+    /// Agent tasks: the Agents panel and the open task's page.
+    pub(crate) agents: Agents,
+    /// Run once the current job succeeds.
+    pub(crate) after_job: Option<SporAction>,
     fingerprint: Option<String>,
     _job_task: Task<()>,
     _pr_task: Task<()>,
@@ -461,6 +473,8 @@ impl Spor {
             search_hits: Default::default(),
             _search_task: Task::ready(()),
             pending_rewrite: None,
+            agents: Agents::new(window, cx),
+            after_job: None,
             fingerprint: None,
             _job_task: Task::ready(()),
             _pr_task: Task::ready(()),
@@ -557,9 +571,12 @@ impl Spor {
                 self.search_hits.clear();
                 self.history_search
                     .update(cx, |state, cx| state.set_value("", window, cx));
-                if self.tab == Tab::Rebase {
+                if matches!(self.tab, Tab::Rebase | Tab::Task) {
                     self.tab = Tab::History;
                 }
+                self.agents.open = None;
+                self.agents.list.clear();
+                self.refresh_tasks(cx);
                 self.message
                     .update(cx, |state, cx| state.set_value("", window, cx));
                 self.tab = if dirty { Tab::Changes } else { Tab::History };
@@ -807,6 +824,7 @@ impl Spor {
                     .and_then(|h| snapshot.rows.iter().position(|r| r.commit.hash == h))
                     .or_else(|| snapshot.head_row());
                 self.repo = Some(snapshot);
+                self.refresh_tasks(cx);
                 // File contents can change without the change list
                 // changing, so the diff is always reloaded.
                 self.load_changes_diff(cx);
@@ -853,6 +871,13 @@ impl Spor {
             {
                 break;
             }
+            // An agent's uncommitted work doesn't move any ref, so watch
+            // its folder while tasks are on screen.
+            let _ = this.update(cx, |this, cx| {
+                if this.dock == Some(DockPanel::Agents) || this.tab == Tab::Task {
+                    this.refresh_tasks(cx);
+                }
+            });
             let Ok(Some(root)) = this.read_with(cx, |this, _| {
                 (this.job.is_none()).then(|| this.repo.as_ref().map(|r| r.root.clone()))?
             }) else {
@@ -1383,6 +1408,7 @@ impl Spor {
             Undo::Rename { old, .. } => format!("Renamed back to {old}"),
             Undo::NewTag(name) => format!("Deleted tag {name}"),
             Undo::Stash(_) => "Stash restored".into(),
+            Undo::Task(u) => format!("Brought back {}", u.task.id),
             Undo::Tag { name, .. } => format!("Restored tag {name}"),
             _ => format!("Undid {label}"),
         };
@@ -1439,6 +1465,7 @@ impl Spor {
             Undo::Rename { old, new } => self.git().rename_branch(&new, &old),
             Undo::NewTag(name) => self.git().delete_tag(&name),
             Undo::Stash(stash) => self.git().restore_stash(&stash),
+            Undo::Task(u) => spor::tasks::Tasks::open(&self.git()).and_then(|t| t.restore(&u)),
             Undo::Tag { name, target } => self.git().restore_tag(&name, &target),
         };
         match result {
@@ -1746,6 +1773,9 @@ impl Spor {
             let result = cx.background_spawn(async move { work() }).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.job = None;
+                if result.is_err() {
+                    this.after_job = None;
+                }
                 match result {
                     Ok(msg) => {
                         // Once commits are pushed, taking one back would
@@ -1755,11 +1785,14 @@ impl Spor {
                                 !matches!(
                                     u,
                                     Undo::Uncommit { .. } | Undo::Reset { .. } | Undo::Amend { .. }
-                                )
+                                ) && !matches!(u, Undo::Task(t) if t.base_before.is_some())
                             });
                             window.remove_notification::<UndoNote>(cx);
                         }
                         this.ok(msg, window, cx);
+                        if let Some(then) = this.after_job.take() {
+                            then(this, window, cx);
+                        }
                     }
                     Err(e) if e.contains("have diverged") => {
                         let spor = cx.entity().downgrade();

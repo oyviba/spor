@@ -192,6 +192,27 @@ it. Outside History a shortcut needs ⌘, ⌃ or ⌥ so it can't swallow typing;
 ⌘1–⌘9 stay reserved for workspaces. Changes apply at once and are saved
 in `keymap` in the config directory.
 
+**Agent tasks** (⌘⇧T, or the Agents panel, ⌘⇧I) — give a coding agent
+its own branch and folder so several can work at once without touching your
+checkout. A task is a prompt: spor creates `agent/<name>` from the
+checked-out branch, checks it out in `<repo>.spor/<name>` beside the
+repository, and hands you the command to start Claude Code there (*Copy
+Agent Command*, or open the folder in Terminal). Any agent works — run it
+in the folder. Its commits appear in History as they're made (a robot
+marks agent branches), and the task's page shows everything it changed
+against its base, uncommitted work included, refreshing as it goes. Then:
+
+- **Land** squashes it onto the base as one commit with the prompt as its
+  message and a `Spor-Task:` trailer (or *Land with a Merge Commit*). If
+  the base moved, the task is rebased first; if that conflicts, nothing
+  changes and spor says where. Its folder and branch are cleaned up
+- **Open Pull Request** publishes the branch and opens the host's page
+- **Discard** removes the folder and branch
+
+Landing and discarding can be undone with ⌘Z. Tasks are kept in
+`.git/spor/tasks/`, shared by every worktree and never committed. What
+comes next is in [docs/agents.md](docs/agents.md).
+
 **Knowing when to pull** — the open repository is fetched quietly in the
 background every few minutes. When its upstream has new commits, a
 notification says so (with a Pull button), a *Pull 3* button appears in the
@@ -267,6 +288,8 @@ The core is a library (`src/lib.rs`) that knows nothing about how it's drawn:
 
 - `src/git.rs` — a `Repo` handle that runs `git` in that repository's
   directory (never the process's), and parses its output
+- `src/tasks.rs` — agent tasks: a prompt with its own branch and
+  worktree; creating, measuring, landing, discarding and restoring them
 - `src/patch.rs` — cuts a patch down to selected lines, for staging,
   unstaging or discarding part of a file
 - `src/graph.rs` — lane assignment, with main pinned to lane 0
@@ -289,6 +312,8 @@ Mac app (`spor-app`, `--features gui`):
 - `src/gui/repos_panel.rs` — the repository sidebar
 - `src/gui/git_panel.rs`, `branches.rs` — the git and branch dock panels
 - `src/gui/changes_view.rs`, `history.rs` — the two center tabs
+- `src/gui/agents.rs` — the Agents panel, the New Agent Task dialog and a
+  task's page
 - `src/gui/actions.rs` — cherry-pick, revert, rebase, reset, conflicts,
   line staging, branch and stash management, tags, search, and the
   interactive rebase tab

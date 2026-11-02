@@ -10,6 +10,7 @@
 //! a status bar that toggles the panels.
 
 mod actions;
+mod agents;
 mod app;
 mod askpass;
 mod assets;

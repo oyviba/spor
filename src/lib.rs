@@ -8,3 +8,4 @@ pub mod github;
 pub mod graph;
 pub mod patch;
 pub mod remote;
+pub mod tasks;

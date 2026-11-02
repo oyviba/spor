@@ -18,6 +18,7 @@ macro_rules! icons {
 
 static EXTRA_ICONS: &[(&str, &[u8])] = icons![
     "archive",
+    "bot",
     "arrow-up-down",
     "circle-dashed",
     "circle-dot",
@@ -48,6 +49,7 @@ static EXTRA_ICONS: &[(&str, &[u8])] = icons![
 /// Icon paths for `Icon::empty().path(…)`.
 pub mod icon {
     pub const ARCHIVE: &str = "icons/archive.svg";
+    pub const BOT: &str = "icons/bot.svg";
     pub const CLOUD: &str = "icons/cloud.svg";
     pub const LAPTOP: &str = "icons/laptop.svg";
     pub const SETTINGS: &str = "icons/settings-2.svg";

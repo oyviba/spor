@@ -805,6 +805,15 @@ fn render_tag(
                     .text_color(icon_color),
             )
         })
+        // An agent task's branch: its work shows up here as it's committed.
+        .when(tag.name.starts_with("agent/"), |this| {
+            this.child(
+                Icon::empty()
+                    .path(icon::BOT)
+                    .xsmall()
+                    .text_color(icon_color),
+            )
+        })
         .when(tag.local, |this| {
             this.child(
                 Icon::empty()

@@ -130,6 +130,8 @@ impl Render for Spor {
                 cx.listener(|this, _: &SearchCommits, window, cx| this.focus_search(window, cx)),
             )
             .on_action(cx.listener(|this, _: &PullRebase, window, cx| this.pull_rebase(window, cx)))
+            .on_action(cx.listener(|this, _: &NewTask, window, cx| this.new_task(window, cx)))
+            .on_action(cx.listener(|this, _: &ShowAgents, _, cx| this.show_agents(cx)))
             .on_action(cx.listener(|this, _: &ContinueOperation, window, cx| {
                 this.continue_operation(window, cx)
             }))
@@ -515,6 +517,7 @@ impl Spor {
             DockPanel::Branches => self.render_branches(window, cx),
             DockPanel::PullRequests => self.render_pull_panel(cx),
             DockPanel::Actions => self.render_run_panel(cx),
+            DockPanel::Agents => self.render_agents_panel(cx),
         });
         let dock_panel = |content| {
             resizable_panel()
@@ -566,6 +569,10 @@ impl Spor {
                 || Some("Run".to_string()),
                 |d| Some(format!("{} #{}", d.run.workflow, d.run.number)),
             ),
+            Tab::Task => self
+                .agents
+                .open_task()
+                .map(|(t, _)| format!("Task: {}", t.title())),
             // A rebase being planned keeps its tab until it's run or cancelled.
             _ => self.rebase.as_ref().map(|d| format!("Rebase {}", d.branch)),
         }
@@ -573,6 +580,7 @@ impl Spor {
             let path = match self.tab {
                 Tab::Pull => icon::GIT_PULL_REQUEST,
                 Tab::Run => icon::ACTIONS,
+                Tab::Task => icon::BOT,
                 _ => icon::GIT_BRANCH,
             };
             let label: String = if label.chars().count() > 48 {
@@ -589,6 +597,7 @@ impl Spor {
                         .tooltip("Close")
                         .on_click(cx.listener(|this, _, _, cx| match this.tab {
                             Tab::Pull | Tab::Run => this.close_page(cx),
+                            Tab::Task => this.close_task_page(cx),
                             _ => this.close_rebase(cx),
                         })),
                 ),
@@ -597,7 +606,7 @@ impl Spor {
         let selected = match self.tab {
             Tab::Changes => 0,
             Tab::History => 1,
-            Tab::Pull | Tab::Run | Tab::Rebase => 2,
+            Tab::Pull | Tab::Run | Tab::Rebase | Tab::Task => 2,
         };
         let tabs = TabBar::new("center-tabs")
             .child(
@@ -619,7 +628,9 @@ impl Spor {
                         this.tab = Tab::History;
                         this.history_focus.focus(window, cx);
                     }
-                    2 if this.rebase.is_some() && !matches!(this.tab, Tab::Pull | Tab::Run) => {
+                    2 if this.rebase.is_some()
+                        && !matches!(this.tab, Tab::Pull | Tab::Run | Tab::Task) =>
+                    {
                         this.tab = Tab::Rebase
                     }
                     _ => {}
@@ -638,6 +649,7 @@ impl Spor {
                 Tab::Pull => self.render_pull_page(window, cx),
                 Tab::Run => self.render_run_page(window, cx),
                 Tab::Rebase => self.render_rebase(window, cx),
+                Tab::Task => self.render_task_page(cx),
             }))
             .into_any_element()
     }
@@ -674,6 +686,7 @@ impl Spor {
                         }
                         DockPanel::PullRequests => this.show_pulls(cx),
                         DockPanel::Actions => this.show_runs(cx),
+                        DockPanel::Agents => this.show_agents(cx),
                         _ => {
                             this.dock = Some(panel);
                             cx.notify();
@@ -717,6 +730,12 @@ impl Spor {
                         icon::ACTIONS,
                         DockPanel::Actions,
                         "Actions (⌘⇧A)",
+                    ))
+                    .child(dock_button(
+                        "dock-agents",
+                        icon::BOT,
+                        DockPanel::Agents,
+                        "Agents (⌘⇧I)",
                     ))
                     .child(
                         Button::new("dock-side")

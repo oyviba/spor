@@ -1,8 +1,8 @@
 # Spor for parallel coding agents
 
 A design for making spor the place where you run, watch, review and land
-the work of several coding agents at once. Nothing here is built yet; the
-git groundwork it needs is (see [What's already in place](#whats-already-in-place)).
+the work of several coding agents at once. **Phase 1 is built** (tasks
+without agent integration; see the README); the rest is the plan.
 
 ## The problem
 
@@ -187,7 +187,7 @@ answer from the agent's own reasoning, not just a name and a date.
 
 Each phase is useful on its own.
 
-1. **Tasks without agents.** New Task… creates a branch and a worktree from
+1. **Tasks without agents** — *done*. New Task… creates a branch and a worktree from
    a base. The Agents panel lists tasks with state taken from git (dirty,
    commits ahead, last change). A task page shows the diff against the base,
    with Land, Open Pull Request and Discard. That's already a better way to
