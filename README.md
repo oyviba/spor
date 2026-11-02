@@ -255,6 +255,12 @@ and always talk to the repository behind `origin`.
  ⎇ main ↑2 ↓1  │  ready  │  [j/k] move  [enter]/[o] checkout ...
 ```
 
+## What's next
+
+[docs/agents.md](docs/agents.md) is the plan for running several coding
+agents side by side in spor: each in its own branch and worktree, watched
+live in History, reviewed like a pull request, and landed in order.
+
 ## Design notes
 
 The core is a library (`src/lib.rs`) that knows nothing about how it's drawn:
