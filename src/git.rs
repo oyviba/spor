@@ -1,4 +1,7 @@
-use std::process::{Command, Output};
+use std::collections::HashMap;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
 
 #[derive(Debug, Clone)]
 pub struct Commit {
@@ -19,6 +22,8 @@ pub enum FileStatus {
     Modified,      // unstaged modification
     Deleted,       // deleted in the working tree, not staged
     Untracked,
+    /// Both sides changed it and git couldn't combine them.
+    Conflicted,
 }
 
 impl FileStatus {
@@ -49,44 +54,1129 @@ pub struct TrackingInfo {
     pub detached: bool,
 }
 
-/// Reads never take the index lock to refresh stat info, so they can't make
-/// a pull or commit running alongside fail with "index.lock: File exists".
-/// Writes still take every lock they need.
-fn run(args: &[&str]) -> Result<Output, String> {
-    Command::new("git")
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .map_err(|e| format!("failed to run git: {e}"))
+/// Full message and authorship of one commit, for a details view.
+#[derive(Debug, Clone, Default)]
+pub struct CommitDetails {
+    pub author: String,
+    pub email: String,
+    pub author_time: i64,
+    pub committer: String,
+    pub commit_time: i64,
+    /// Author date in local time, formatted by git, e.g. "Oct 01, 2026 at 14:02".
+    pub date: String,
+    pub message: String,
 }
 
-fn run_ok(args: &[&str]) -> Result<String, String> {
-    let out = run(args)?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+#[derive(Debug, Clone)]
+pub struct Branch {
+    pub name: String, // display name, e.g. "main" or "origin/feat/x"
+    pub is_current: bool,
+    pub is_remote: bool,
+}
+
+/// A repository on disk. Every command runs in its root, never in the
+/// process's working directory, so a background job keeps working on the
+/// repository it started in while another one is opened. Cheap to clone.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Repo {
+    root: PathBuf,
+}
+
+/// What a command that can stop half-way left behind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    Done,
+    /// Stopped on conflicts in these files; resolve them, then continue or
+    /// abort with [`Repo::continue_operation`] / [`Repo::abort_operation`].
+    Conflicts(Vec<String>),
+}
+
+/// A multi-step operation git is in the middle of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+}
+
+impl Operation {
+    pub fn label(self) -> &'static str {
+        match self {
+            Operation::Merge => "Merge",
+            Operation::Rebase => "Rebase",
+            Operation::CherryPick => "Cherry-pick",
+            Operation::Revert => "Revert",
+        }
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Load commit graph. We use ASCII unit separators to survive weird subjects.
-pub fn log_all(limit: usize) -> Result<Vec<Commit>, String> {
-    // %x1f = unit sep, %x1e = record sep
-    let fmt = "%H%x1f%h%x1f%P%x1f%D%x1f%s%x1f%an%x1f%at%x1e";
-    let n = format!("-n{limit}");
-    let pretty = format!("--pretty=format:{fmt}");
-    // Not `--all`: that would pull in refs/stash, whose internal "WIP on" /
-    // "index on" commits would show up as phantom branches.
-    let out = run_ok(&[
-        "log",
-        "--branches",
-        "--remotes",
-        "--tags",
-        "HEAD",
-        "--date-order",
-        &n,
-        &pretty,
-    ])?;
+/// Which side of a conflict to keep for a whole file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictSide {
+    /// The checked-out branch.
+    Ours,
+    /// The branch or commit being brought in.
+    Theirs,
+}
 
+/// How far `git reset` goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResetMode {
+    /// Move the branch only; the changes stay staged.
+    Soft,
+    /// Move the branch and the index; the changes stay in the files.
+    Mixed,
+    /// Move everything, throwing uncommitted changes away.
+    Hard,
+    /// Move the branch, keeping uncommitted changes (refuses if they'd clash).
+    Keep,
+}
+
+/// One entry of an interactive rebase plan, oldest commit first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RebaseStep {
+    Pick(String),
+    /// Pick, then replace its message.
+    Reword(String, String),
+    /// Fold into the commit before, keeping both messages.
+    Squash(String),
+    /// Fold into the commit before, keeping only its message.
+    Fixup(String),
+    Drop(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stash {
+    pub index: usize,
+    pub sha: String,
+    /// "WIP on main: …" or "On main: <message>".
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Worktree {
+    pub path: PathBuf,
+    /// The commit it's on (empty for a bare repository).
+    pub head: String,
+    /// The branch it has checked out, `None` when detached.
+    pub branch: Option<String>,
+    /// The repository's main working tree, as opposed to a linked one.
+    pub is_main: bool,
+    pub locked: bool,
+    /// Its directory is gone; `git worktree prune` would remove it.
+    pub prunable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlameLine {
+    pub hash: String,
+    pub author: String,
+    pub time: i64,
+    pub summary: String,
+    /// One-based line number in the file as it is now.
+    pub line: usize,
+    pub text: String,
+}
+
+/// Which diff a line selection was made in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffKind {
+    /// Index → working tree: what `git diff` shows.
+    Unstaged,
+    /// HEAD → index: what `git diff --cached` shows.
+    Staged,
+}
+
+impl Repo {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// The repository containing `dir`, at its top level.
+    pub fn discover(dir: &Path) -> Result<Self, String> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .map_err(|e| format!("failed to run git: {e}"))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+        }
+        Ok(Self::new(String::from_utf8_lossy(&out.stdout).trim()))
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// A path inside the working tree, for reading and writing files.
+    pub fn path(&self, relative: &str) -> PathBuf {
+        self.root.join(relative)
+    }
+
+    /// Reads never take the index lock to refresh stat info, so they can't
+    /// make a pull or commit running alongside fail with "index.lock: File
+    /// exists". Writes still take every lock they need. No command may stop
+    /// to ask for a message: there's nobody at a terminal to answer.
+    fn command(&self, args: &[&str]) -> Command {
+        let mut cmd = Command::new("git");
+        cmd.current_dir(&self.root)
+            .args(args)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_EDITOR", "true")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::null());
+        cmd
+    }
+
+    fn run(&self, args: &[&str]) -> Result<Output, String> {
+        self.command(args)
+            .output()
+            .map_err(|e| format!("failed to run git: {e}"))
+    }
+
+    fn run_ok(&self, args: &[&str]) -> Result<String, String> {
+        let out = self.run(args)?;
+        if !out.status.success() {
+            return Err(error_text(&out));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    fn succeeds(&self, args: &[&str]) -> bool {
+        self.run(args).map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    /// Run with `input` on stdin, for `git apply -`.
+    fn run_with_input(&self, args: &[&str], input: &str) -> Result<(), String> {
+        let mut child = self
+            .command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("failed to run git: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(input.as_bytes())
+                .map_err(|e| format!("failed to write to git: {e}"))?;
+        }
+        let out = child
+            .wait_with_output()
+            .map_err(|e| format!("failed to run git: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(error_text(&out))
+        }
+    }
+
+    /// A file under `.git` (or a linked worktree's own git directory).
+    fn git_path(&self, name: &str) -> Option<PathBuf> {
+        let out = self.run_ok(&["rev-parse", "--git-path", name]).ok()?;
+        Some(self.root.join(out.trim()))
+    }
+
+    // ── Reading ──────────────────────────────────────────────────────────
+
+    /// Load commit graph. We use ASCII unit separators to survive weird subjects.
+    pub fn log_all(&self, limit: usize) -> Result<Vec<Commit>, String> {
+        let n = format!("-n{limit}");
+        let pretty = format!("--pretty=format:{LOG_FORMAT}");
+        // Not `--all`: that would pull in refs/stash, whose internal "WIP on" /
+        // "index on" commits would show up as phantom branches.
+        let out = self.run_ok(&[
+            "log",
+            "--branches",
+            "--remotes",
+            "--tags",
+            "HEAD",
+            "--date-order",
+            &n,
+            &pretty,
+        ])?;
+        Ok(parse_log(&out))
+    }
+
+    /// Commits that touched `path`, newest first, following renames.
+    pub fn file_log(&self, path: &str, limit: usize) -> Result<Vec<Commit>, String> {
+        let n = format!("-n{limit}");
+        let pretty = format!("--pretty=format:{LOG_FORMAT}");
+        let out = self.run_ok(&["log", "--follow", &n, &pretty, "--", path])?;
+        Ok(parse_log(&out))
+    }
+
+    /// Commits whose message, author or hash matches `query` (ignoring
+    /// case), newest first, from the same refs History shows.
+    pub fn search_commits(&self, query: &str, limit: usize) -> Result<Vec<String>, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let n = format!("-n{limit}");
+        let mut hashes: Vec<String> = Vec::new();
+        let mut add = |out: String| {
+            for h in out.lines().map(str::trim).filter(|h| !h.is_empty()) {
+                if !hashes.iter().any(|x| x == h) {
+                    hashes.push(h.to_string());
+                }
+            }
+        };
+        let refs = ["--branches", "--remotes", "--tags", "HEAD"];
+        for field in ["--grep", "--author"] {
+            let pattern = format!("{field}={query}");
+            let mut args = vec!["log", "--format=%H", "-i", "--fixed-strings", &n, &pattern];
+            args.extend(refs);
+            add(self.run_ok(&args)?);
+        }
+        if query.len() >= 4 && query.chars().all(|c| c.is_ascii_hexdigit()) {
+            let spec = format!("{query}^{{commit}}");
+            if let Ok(h) = self.run_ok(&["rev-parse", "--verify", "--quiet", &spec]) {
+                hashes.insert(0, h.trim().to_string());
+                hashes.dedup();
+            }
+        }
+        hashes.truncate(limit);
+        Ok(hashes)
+    }
+
+    /// Who last changed each line of `path`, as it is in the working tree.
+    pub fn blame(&self, path: &str) -> Result<Vec<BlameLine>, String> {
+        let out = self.run_ok(&["blame", "--porcelain", "--", path])?;
+        Ok(parse_blame(&out))
+    }
+
+    /// Working tree status. `-z` gives NUL-separated records with no
+    /// quoting, so paths with spaces, quotes, or non-ASCII survive, and
+    /// rename origins arrive as a separate field instead of `old -> new`.
+    pub fn status(&self) -> Result<Vec<StatusEntry>, String> {
+        let out = self.run_ok(&["status", "--porcelain=v1", "-z", "-uall"])?;
+        Ok(parse_status(&out))
+    }
+
+    pub fn tracking(&self) -> Result<TrackingInfo, String> {
+        let out = self.run_ok(&["status", "--porcelain=v2", "--branch"])?;
+        Ok(parse_tracking(&out))
+    }
+
+    pub fn commit_details(&self, hash: &str) -> Result<CommitDetails, String> {
+        let out = self.run_ok(&[
+            "show",
+            "-s",
+            "--date=format-local:%b %d, %Y at %H:%M",
+            "--format=%an%x1f%ae%x1f%at%x1f%cn%x1f%ct%x1f%ad%x1f%B",
+            hash,
+        ])?;
+        Ok(parse_commit_details(&out))
+    }
+
+    /// The last commit's full message, to start an amend from.
+    pub fn head_message(&self) -> Result<String, String> {
+        self.run_ok(&["log", "-1", "--format=%B"])
+            .map(|s| s.trim_end().to_string())
+    }
+
+    pub fn head_sha(&self) -> Result<String, String> {
+        self.run_ok(&["rev-parse", "HEAD"])
+            .map(|s| s.trim().to_string())
+    }
+
+    /// What `rev` names, as a full hash.
+    pub fn resolve(&self, rev: &str) -> Result<String, String> {
+        let spec = format!("{rev}^{{commit}}");
+        self.run_ok(&["rev-parse", "--verify", "--quiet", &spec])
+            .map(|s| s.trim().to_string())
+            .map_err(|_| format!("{rev} isn't a commit"))
+    }
+
+    pub fn parents(&self, sha: &str) -> Result<Vec<String>, String> {
+        let out = self.run_ok(&["rev-list", "--parents", "-n1", sha])?;
+        Ok(out.split_whitespace().skip(1).map(str::to_string).collect())
+    }
+
+    /// Is `ancestor` part of `descendant`'s history?
+    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
+        self.succeeds(&["merge-base", "--is-ancestor", ancestor, descendant])
+    }
+
+    /// Commits on HEAD that `base` doesn't have, oldest first — what a
+    /// rebase onto `base` would replay.
+    pub fn commits_since(&self, base: &str) -> Result<Vec<Commit>, String> {
+        let range = format!("{base}..HEAD");
+        let pretty = format!("--pretty=format:{LOG_FORMAT}");
+        let out = self.run_ok(&["log", "--reverse", "--no-merges", &pretty, &range])?;
+        Ok(parse_log(&out))
+    }
+
+    /// Diff for one working-tree entry. Untracked files have nothing in the
+    /// index to compare against, so they're shown as entirely new content.
+    pub fn diff_entry(&self, entry: &StatusEntry) -> Result<String, String> {
+        if entry.status != FileStatus::Untracked {
+            let staged = if entry.status.is_staged() {
+                "--cached"
+            } else {
+                "--no-color"
+            };
+            return self.run_ok(&["diff", staged, "--", &entry.path]);
+        }
+        let out = self.run(&["diff", "--no-index", "--", "/dev/null", &entry.path])?;
+        // --no-index exits 1 when the files differ — which, here, they always do.
+        match out.status.code() {
+            Some(0) | Some(1) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+            _ => Err(error_text(&out)),
+        }
+    }
+
+    /// The patch a commit introduced, without the commit header. Merges are
+    /// diffed against their first parent — what the merge brought into the
+    /// branch — rather than git's combined-diff format.
+    pub fn commit_patch(&self, hash: &str, parents: &[String]) -> Result<String, String> {
+        let mut args: Vec<&str> = Vec::new();
+        match parents.first() {
+            Some(first) => {
+                args.push("diff");
+                args.extend(PATCH_FLAGS);
+                args.extend([first.as_str(), hash, "--"]);
+            }
+            None => {
+                args.extend(["show", "--format="]);
+                args.extend(PATCH_FLAGS);
+                args.extend([hash, "--"]);
+            }
+        }
+        self.run_ok(&args)
+    }
+
+    /// Everything not yet committed, as one patch: staged and unstaged
+    /// changes to tracked files against HEAD, then each untracked file as new.
+    pub fn uncommitted_patch(&self, untracked: &[String]) -> Result<String, String> {
+        let mut args = vec!["diff"];
+        args.extend(PATCH_FLAGS);
+        // An unborn branch has no HEAD yet: then only the index has content.
+        args.push(if self.has_head() { "HEAD" } else { "--cached" });
+        args.push("--");
+        let mut patch = self.run_ok(&args)?;
+        patch.push_str(&self.untracked_patch(untracked));
+        Ok(patch)
+    }
+
+    /// One side of the uncommitted changes: index → working tree (with
+    /// untracked files as new), or HEAD → index.
+    pub fn patch(&self, kind: DiffKind, untracked: &[String]) -> Result<String, String> {
+        let mut args = vec!["diff"];
+        args.extend(PATCH_FLAGS);
+        match kind {
+            DiffKind::Unstaged => {
+                args.push("--");
+                let mut patch = self.run_ok(&args)?;
+                patch.push_str(&self.untracked_patch(untracked));
+                Ok(patch)
+            }
+            DiffKind::Staged => {
+                args.extend(["--cached", "--"]);
+                self.run_ok(&args)
+            }
+        }
+    }
+
+    fn untracked_patch(&self, untracked: &[String]) -> String {
+        let mut patch = String::new();
+        for path in untracked {
+            let mut args = vec!["diff", "--no-index"];
+            args.extend(PATCH_FLAGS);
+            args.extend(["--", "/dev/null", path.as_str()]);
+            if let Ok(out) = self.run(&args) {
+                // --no-index exits 1 when the files differ — which, here, they do.
+                if matches!(out.status.code(), Some(0) | Some(1)) {
+                    patch.push_str(&String::from_utf8_lossy(&out.stdout));
+                }
+            }
+        }
+        patch
+    }
+
+    fn has_head(&self) -> bool {
+        self.succeeds(&["rev-parse", "--verify", "--quiet", "HEAD"])
+    }
+
+    pub fn diff_commit(&self, hash: &str) -> Result<String, String> {
+        self.run_ok(&["show", "--stat", "--patch", hash])
+    }
+
+    /// Find the repo's "main" branch name. Checks common names.
+    pub fn main_branch(&self) -> Option<String> {
+        ["main", "master", "trunk"]
+            .into_iter()
+            .find(|c| self.succeeds(&["rev-parse", "--verify", "--quiet", c]))
+            .map(str::to_string)
+    }
+
+    /// Commits on the main branch's first-parent chain — these get pinned to lane 0.
+    pub fn main_chain(&self) -> Result<Vec<String>, String> {
+        let Some(main) = self.main_branch() else {
+            return Ok(Vec::new());
+        };
+        let out = self.run_ok(&["log", "--first-parent", "--format=%H", &main])?;
+        Ok(out.lines().map(|s| s.to_string()).collect())
+    }
+
+    /// What does the remote consider its default branch? Reads
+    /// `refs/remotes/origin/HEAD`, which git maintains as a symbolic ref.
+    /// Falls back to local main/master/trunk detection.
+    pub fn default_base_branch(&self) -> Option<String> {
+        if let Ok(out) = self.run_ok(&["symbolic-ref", "refs/remotes/origin/HEAD"]) {
+            if let Some(name) = out.trim().strip_prefix("refs/remotes/origin/") {
+                return Some(name.to_string());
+            }
+        }
+        self.main_branch()
+    }
+
+    /// List all branches, local and remote-tracking, excluding `origin/HEAD` stubs.
+    pub fn list_branches(&self) -> Result<Vec<Branch>, String> {
+        let out = self.run_ok(&[
+            "for-each-ref",
+            "--format=%(HEAD)%09%(refname)",
+            "refs/heads",
+            "refs/remotes",
+        ])?;
+        Ok(parse_branches(&out))
+    }
+
+    /// Names of configured remotes, e.g. ["origin", "upstream"].
+    pub fn remotes(&self) -> Vec<String> {
+        self.run_ok(&["remote"])
+            .map(|out| out.lines().map(str::to_string).collect())
+            .unwrap_or_default()
+    }
+
+    /// Paths staged as brand-new files (git status reports these as plain
+    /// "staged", same as modifications).
+    pub fn staged_new_files(&self) -> std::collections::HashSet<String> {
+        self.run_ok(&["diff", "--cached", "--name-only", "--diff-filter=A", "-z"])
+            .map(|s| {
+                s.split('\0')
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    // ── Staging ──────────────────────────────────────────────────────────
+
+    pub fn stage(&self, path: &str) -> Result<(), String> {
+        self.run_ok(&["add", "--", path]).map(|_| ())
+    }
+
+    /// Unstage an entry. A staged rename is two index operations (delete at
+    /// the old path, add at the new), so undoing it has to restore both.
+    pub fn unstage(&self, entry: &StatusEntry) -> Result<(), String> {
+        let mut args = vec!["restore", "--staged", "--", entry.path.as_str()];
+        if let Some(orig) = &entry.orig_path {
+            args.push(orig.as_str());
+        }
+        if !self.has_head() {
+            // Nothing to restore from on an unborn branch: drop from the index.
+            args = vec!["rm", "--cached", "--quiet", "--", entry.path.as_str()];
+        }
+        self.run_ok(&args).map(|_| ())
+    }
+
+    /// Stage, unstage or discard the changed lines between `from` and `to`
+    /// of `path`, as numbered in the `kind` diff: staging and discarding
+    /// work on the unstaged diff, unstaging on the staged one. Returns the
+    /// patch that was applied, so it can be undone with [`Repo::apply`].
+    pub fn apply_lines(
+        &self,
+        path: &str,
+        kind: DiffKind,
+        action: LineAction,
+        from: crate::patch::LinePos,
+        to: crate::patch::LinePos,
+    ) -> Result<AppliedPatch, String> {
+        let expected = match action {
+            LineAction::Stage | LineAction::Discard => DiffKind::Unstaged,
+            LineAction::Unstage => DiffKind::Staged,
+        };
+        if kind != expected {
+            return Err(match action {
+                LineAction::Unstage => "Only staged lines can be unstaged".into(),
+                _ => "Only unstaged lines can be staged or discarded".into(),
+            });
+        }
+        // An untracked file has to be in the index (empty, "intent to add")
+        // before part of it can be staged.
+        let untracked = self
+            .status()?
+            .iter()
+            .any(|e| e.path == path && e.status == FileStatus::Untracked);
+        if untracked {
+            if action == LineAction::Discard {
+                return Err("Discard the whole file to remove an untracked file".into());
+            }
+            self.run_ok(&["add", "--intent-to-add", "--", path])?;
+        }
+        let mut args = vec!["diff"];
+        args.extend(PATCH_FLAGS);
+        if kind == DiffKind::Staged {
+            args.push("--cached");
+        }
+        args.extend(["--", path]);
+        let text = self.run_ok(&args)?;
+        let file = crate::patch::parse(&text)
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("{path} has no changes there"))?;
+        let reverse = action != LineAction::Stage;
+        let patch = file
+            .select(from, to, reverse)
+            .ok_or_else(|| "No changed lines are selected".to_string())?;
+        let applied = AppliedPatch {
+            patch,
+            cached: action != LineAction::Discard,
+            reverse,
+        };
+        self.apply(&applied)?;
+        Ok(applied)
+    }
+
+    /// Apply a patch to the index (`cached`) or the working tree.
+    pub fn apply(&self, p: &AppliedPatch) -> Result<(), String> {
+        let mut args = vec!["apply", "--recount", "--whitespace=nowarn"];
+        if p.cached {
+            args.push("--cached");
+        }
+        if p.reverse {
+            args.push("--reverse");
+        }
+        args.push("-");
+        self.run_with_input(&args, &p.patch)
+    }
+
+    /// Take back an [`apply`](Repo::apply).
+    pub fn unapply(&self, p: &AppliedPatch) -> Result<(), String> {
+        self.apply(&AppliedPatch {
+            reverse: !p.reverse,
+            ..p.clone()
+        })
+    }
+
+    /// Throw away unstaged changes to a tracked file — reverts
+    /// modifications, brings back deletions. Does not touch the index.
+    pub fn discard_worktree(&self, path: &str) -> Result<(), String> {
+        self.run_ok(&["restore", "--", path]).map(|_| ())
+    }
+
+    /// Delete an untracked file from the working tree.
+    pub fn remove_untracked(&self, path: &str) -> Result<(), String> {
+        self.run_ok(&["clean", "-f", "--", path]).map(|_| ())
+    }
+
+    // ── Committing ───────────────────────────────────────────────────────
+
+    pub fn commit(&self, message: &str) -> Result<(), String> {
+        self.run_ok(&["commit", "-m", message]).map(|_| ())
+    }
+
+    /// Replace the last commit with one that also holds what's staged, and
+    /// `message` (or the old message when `None`).
+    pub fn amend(&self, message: Option<&str>) -> Result<(), String> {
+        match message {
+            Some(m) => self.run_ok(&["commit", "--amend", "-m", m]),
+            None => self.run_ok(&["commit", "--amend", "--no-edit"]),
+        }
+        .map(|_| ())
+    }
+
+    /// Undo the last commit, keeping its changes staged.
+    pub fn uncommit(&self) -> Result<(), String> {
+        self.run_ok(&["reset", "--soft", "HEAD~1"]).map(|_| ())
+    }
+
+    pub fn reset(&self, sha: &str, mode: ResetMode) -> Result<(), String> {
+        let flag = match mode {
+            ResetMode::Soft => "--soft",
+            ResetMode::Mixed => "--mixed",
+            ResetMode::Hard => "--hard",
+            ResetMode::Keep => "--keep",
+        };
+        self.run_ok(&["reset", "--quiet", flag, sha]).map(|_| ())
+    }
+
+    /// Move the current branch back to `sha`, keeping uncommitted changes
+    /// (git refuses if they'd be overwritten).
+    pub fn reset_keep(&self, sha: &str) -> Result<(), String> {
+        self.reset(sha, ResetMode::Keep)
+    }
+
+    // ── Branches ─────────────────────────────────────────────────────────
+
+    /// Attempt `git switch`. For a remote-tracking ref like `origin/feat/x`,
+    /// git auto-creates a local tracking branch `feat/x` if none exists.
+    pub fn checkout_branch(&self, name: &str) -> Result<(), String> {
+        // `git switch origin/feat/x` is an error; `git switch feat/x` is
+        // what we want, and git will set up tracking automatically.
+        let target = match name.split_once('/') {
+            Some((remote, rest)) if self.remotes().iter().any(|r| r == remote) => rest,
+            _ => name,
+        };
+        self.run_ok(&["switch", target]).map(|_| ())
+    }
+
+    /// Check out a commit without a branch.
+    pub fn checkout_detached(&self, sha: &str) -> Result<(), String> {
+        self.run_ok(&["switch", "--detach", sha]).map(|_| ())
+    }
+
+    pub fn create_branch_at(&self, name: &str, sha: &str) -> Result<(), String> {
+        self.run_ok(&["switch", "-c", name, sha]).map(|_| ())
+    }
+
+    /// Delete a local branch and return the commit it was on, so it can be
+    /// recreated. Without `force`, git refuses a branch that isn't merged.
+    pub fn delete_branch(&self, name: &str, force: bool) -> Result<String, String> {
+        let r = format!("refs/heads/{name}");
+        let sha = self
+            .run_ok(&["rev-parse", "--verify", "--quiet", &r])
+            .map(|s| s.trim().to_string())
+            .map_err(|_| format!("there's no branch {name}"))?;
+        let flag = if force { "-D" } else { "-d" };
+        self.run_ok(&["branch", flag, "--", name])?;
+        Ok(sha)
+    }
+
+    /// Recreate a deleted branch at `sha`.
+    pub fn restore_branch(&self, name: &str, sha: &str) -> Result<(), String> {
+        self.run_ok(&["branch", "--", name, sha]).map(|_| ())
+    }
+
+    pub fn rename_branch(&self, old: &str, new: &str) -> Result<(), String> {
+        self.run_ok(&["branch", "-m", "--", old, new]).map(|_| ())
+    }
+
+    /// Is `name` a usable branch name?
+    pub fn valid_branch_name(&self, name: &str) -> bool {
+        !name.is_empty() && self.succeeds(&["check-ref-format", "--branch", name])
+    }
+
+    // ── Merging, rebasing, picking ───────────────────────────────────────
+
+    /// Merge `source` into the checked-out branch (fast-forward when possible).
+    pub fn merge(&self, source: &str) -> Result<Outcome, String> {
+        let out = self.run(&["merge", "--no-edit", source])?;
+        self.outcome(out)
+    }
+
+    /// Apply the change `sha` introduced on top of HEAD. A merge commit is
+    /// taken relative to its first parent.
+    pub fn cherry_pick(&self, sha: &str) -> Result<Outcome, String> {
+        let mut args = vec!["cherry-pick"];
+        if self.parents(sha)?.len() > 1 {
+            args.extend(["-m", "1"]);
+        }
+        args.push(sha);
+        let out = self.run(&args)?;
+        self.outcome(out)
+    }
+
+    /// Commit the inverse of `sha` on top of HEAD.
+    pub fn revert(&self, sha: &str) -> Result<Outcome, String> {
+        let mut args = vec!["revert", "--no-edit"];
+        if self.parents(sha)?.len() > 1 {
+            args.extend(["-m", "1"]);
+        }
+        args.push(sha);
+        let out = self.run(&args)?;
+        self.outcome(out)
+    }
+
+    /// Replay the current branch's commits on top of `onto`.
+    pub fn rebase(&self, onto: &str) -> Result<Outcome, String> {
+        let out = self.run(&["rebase", onto])?;
+        self.outcome(out)
+    }
+
+    /// Rewrite the commits after `base` following `plan`, oldest first:
+    /// reorder, reword, squash, fix up or drop them.
+    pub fn rebase_interactive(&self, base: &str, plan: &[RebaseStep]) -> Result<Outcome, String> {
+        let dir = self
+            .git_path("spor-rebase")
+            .ok_or_else(|| "couldn't find the git directory".to_string())?;
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let mut todo = String::new();
+        for (i, step) in plan.iter().enumerate() {
+            match step {
+                RebaseStep::Pick(sha) => todo.push_str(&format!("pick {sha}\n")),
+                RebaseStep::Squash(sha) => todo.push_str(&format!("squash {sha}\n")),
+                RebaseStep::Fixup(sha) => todo.push_str(&format!("fixup {sha}\n")),
+                RebaseStep::Drop(sha) => todo.push_str(&format!("drop {sha}\n")),
+                RebaseStep::Reword(sha, message) => {
+                    let file = dir.join(format!("message-{i}"));
+                    std::fs::write(&file, message).map_err(|e| e.to_string())?;
+                    todo.push_str(&format!(
+                        "pick {sha}\nexec git commit --amend --no-verify --quiet -F {}\n",
+                        shell_quote(&file.to_string_lossy())
+                    ));
+                }
+            }
+        }
+        if todo.is_empty() {
+            todo.push_str("noop\n");
+        }
+        let plan_file = dir.join("todo");
+        std::fs::write(&plan_file, todo).map_err(|e| e.to_string())?;
+        // git runs the sequence editor with the todo file's path appended.
+        let editor = format!("cp {}", shell_quote(&plan_file.to_string_lossy()));
+        let out = self
+            .command(&["rebase", "--interactive", base])
+            .env("GIT_SEQUENCE_EDITOR", editor)
+            .output()
+            .map_err(|e| format!("failed to run git: {e}"))?;
+        self.outcome(out)
+    }
+
+    /// Which multi-step operation is stopped half-way, if any.
+    pub fn operation(&self) -> Option<Operation> {
+        let exists = |name: &str| self.git_path(name).is_some_and(|p| p.exists());
+        if exists("rebase-merge") || exists("rebase-apply") {
+            Some(Operation::Rebase)
+        } else if exists("MERGE_HEAD") {
+            Some(Operation::Merge)
+        } else if exists("CHERRY_PICK_HEAD") {
+            Some(Operation::CherryPick)
+        } else if exists("REVERT_HEAD") {
+            Some(Operation::Revert)
+        } else {
+            None
+        }
+    }
+
+    /// Is a merge stopped on conflicts?
+    pub fn merge_in_progress(&self) -> bool {
+        self.operation() == Some(Operation::Merge)
+    }
+
+    pub fn merge_abort(&self) -> Result<(), String> {
+        self.abort_operation()
+    }
+
+    /// Give up on the operation in progress, putting things back as they were.
+    pub fn abort_operation(&self) -> Result<(), String> {
+        let args: &[&str] = match self.operation() {
+            Some(Operation::Merge) => &["merge", "--abort"],
+            Some(Operation::Rebase) => &["rebase", "--abort"],
+            Some(Operation::CherryPick) => &["cherry-pick", "--abort"],
+            Some(Operation::Revert) => &["revert", "--abort"],
+            None => return Ok(()),
+        };
+        self.run_ok(args).map(|_| ())
+    }
+
+    /// Carry on once conflicts are resolved and staged. A rebase can stop
+    /// again on the next commit.
+    pub fn continue_operation(&self) -> Result<Outcome, String> {
+        let left = self.conflicts()?;
+        if !left.is_empty() {
+            return Ok(Outcome::Conflicts(left));
+        }
+        let args: &[&str] = match self.operation() {
+            Some(Operation::Merge) => &["commit", "--no-edit"],
+            Some(Operation::Rebase) => &["rebase", "--continue"],
+            Some(Operation::CherryPick) => &["cherry-pick", "--continue"],
+            Some(Operation::Revert) => &["revert", "--continue"],
+            None => return Ok(Outcome::Done),
+        };
+        let out = self.run(args)?;
+        self.outcome(out)
+    }
+
+    /// Leave out the commit a rebase or cherry-pick stopped on.
+    pub fn skip_commit(&self) -> Result<Outcome, String> {
+        let args: &[&str] = match self.operation() {
+            Some(Operation::Rebase) => &["rebase", "--skip"],
+            Some(Operation::CherryPick) => &["cherry-pick", "--skip"],
+            Some(Operation::Revert) => &["revert", "--skip"],
+            _ => return Err("there's no commit to skip".into()),
+        };
+        let out = self.run(args)?;
+        self.outcome(out)
+    }
+
+    /// Files with unresolved conflicts.
+    pub fn conflicts(&self) -> Result<Vec<String>, String> {
+        let out = self.run_ok(&["diff", "--name-only", "--diff-filter=U", "-z"])?;
+        let mut paths: Vec<String> = out
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect();
+        paths.dedup();
+        Ok(paths)
+    }
+
+    /// Resolve a whole file by taking one side. If that side deleted the
+    /// file, the file is deleted.
+    pub fn resolve_with(&self, path: &str, side: ConflictSide) -> Result<(), String> {
+        let flag = match side {
+            ConflictSide::Ours => "--ours",
+            ConflictSide::Theirs => "--theirs",
+        };
+        match self.run_ok(&["checkout", flag, "--", path]) {
+            Ok(_) => self.stage(path),
+            Err(e) if e.contains("does not have") => {
+                self.run_ok(&["rm", "--quiet", "--", path]).map(|_| ())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Mark a conflicted file resolved as it is in the working tree.
+    pub fn mark_resolved(&self, path: &str) -> Result<(), String> {
+        if self.path(path).exists() {
+            self.stage(path)
+        } else {
+            self.run_ok(&["rm", "--quiet", "--", path]).map(|_| ())
+        }
+    }
+
+    /// Turn a command's exit into an [`Outcome`]: success, a stop on
+    /// conflicts, or an error.
+    fn outcome(&self, out: Output) -> Result<Outcome, String> {
+        if out.status.success() {
+            return Ok(Outcome::Done);
+        }
+        if self.operation().is_some() {
+            let conflicts = self.conflicts()?;
+            if !conflicts.is_empty() {
+                return Ok(Outcome::Conflicts(conflicts));
+            }
+        }
+        Err(error_text(&out))
+    }
+
+    // ── Stashes ──────────────────────────────────────────────────────────
+
+    pub fn stash_push(&self) -> Result<(), String> {
+        self.stash_save(Some("spor-auto-stash"), true)
+    }
+
+    /// Stash uncommitted changes (and untracked files when asked), with a
+    /// message to tell it apart later.
+    pub fn stash_save(&self, message: Option<&str>, untracked: bool) -> Result<(), String> {
+        let mut args = vec!["stash", "push"];
+        if untracked {
+            args.push("--include-untracked");
+        }
+        if let Some(m) = message.filter(|m| !m.trim().is_empty()) {
+            args.extend(["-m", m]);
+        }
+        self.run_ok(&args).map(|_| ())
+    }
+
+    pub fn stash_pop(&self) -> Result<(), String> {
+        self.run_ok(&["stash", "pop"]).map(|_| ())
+    }
+
+    /// Apply stash entry `index` and drop it.
+    pub fn stash_pop_at(&self, index: usize) -> Result<(), String> {
+        self.run_ok(&["stash", "pop", &stash_ref(index)])
+            .map(|_| ())
+    }
+
+    /// Apply stash entry `index` and keep it.
+    pub fn stash_apply_at(&self, index: usize) -> Result<(), String> {
+        self.run_ok(&["stash", "apply", &stash_ref(index)])
+            .map(|_| ())
+    }
+
+    /// Drop stash entry `index`, returning it so [`Repo::restore_stash`]
+    /// can bring it back.
+    pub fn stash_drop_at(&self, index: usize) -> Result<Stash, String> {
+        let stash = self
+            .stashes()
+            .into_iter()
+            .find(|s| s.index == index)
+            .ok_or_else(|| format!("there's no stash {index}"))?;
+        self.run_ok(&["stash", "drop", "--quiet", &stash_ref(index)])?;
+        Ok(stash)
+    }
+
+    /// Put a dropped stash back on the stack (it becomes the newest).
+    pub fn restore_stash(&self, stash: &Stash) -> Result<(), String> {
+        self.run_ok(&["stash", "store", "-m", &stash.message, &stash.sha])
+            .map(|_| ())
+    }
+
+    pub fn stashes(&self) -> Vec<Stash> {
+        self.run_ok(&["stash", "list", "--format=%H%x1f%gs"])
+            .map(|s| {
+                s.lines()
+                    .enumerate()
+                    .filter_map(|(index, line)| {
+                        let (sha, message) = line.split_once('\x1f')?;
+                        Some(Stash {
+                            index,
+                            sha: sha.to_string(),
+                            message: message.to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Stash entries, newest first, as their messages ("WIP on main: …").
+    pub fn stash_list(&self) -> Vec<String> {
+        self.stashes().into_iter().map(|s| s.message).collect()
+    }
+
+    /// Number of stash entries.
+    pub fn stash_count(&self) -> usize {
+        self.stashes().len()
+    }
+
+    // ── Tags ─────────────────────────────────────────────────────────────
+
+    /// Tag `sha`: annotated when there's a message, lightweight otherwise.
+    pub fn create_tag(&self, name: &str, sha: &str, message: Option<&str>) -> Result<(), String> {
+        match message.filter(|m| !m.trim().is_empty()) {
+            Some(m) => self.run_ok(&["tag", "-a", "-m", m, "--", name, sha]),
+            None => self.run_ok(&["tag", "--", name, sha]),
+        }
+        .map(|_| ())
+    }
+
+    /// What a tag points at — the tag object itself for an annotated tag —
+    /// so a deleted tag can be put back exactly, message and all.
+    pub fn tag_target(&self, name: &str) -> Result<String, String> {
+        let r = format!("refs/tags/{name}");
+        self.run_ok(&["rev-parse", "--verify", "--quiet", &r])
+            .map(|s| s.trim().to_string())
+    }
+
+    pub fn delete_tag(&self, name: &str) -> Result<(), String> {
+        self.run_ok(&["tag", "-d", name]).map(|_| ())
+    }
+
+    /// Recreate a deleted tag from [`Repo::tag_target`]. Refuses if a tag by
+    /// that name exists again.
+    pub fn restore_tag(&self, name: &str, target: &str) -> Result<(), String> {
+        let r = format!("refs/tags/{name}");
+        self.run_ok(&["update-ref", &r, target, ""]).map(|_| ())
+    }
+
+    // ── Worktrees ────────────────────────────────────────────────────────
+
+    pub fn worktrees(&self) -> Result<Vec<Worktree>, String> {
+        let out = self.run_ok(&["worktree", "list", "--porcelain"])?;
+        Ok(parse_worktrees(&out))
+    }
+
+    /// Check out `branch` in a new working tree at `path`. With `base`, the
+    /// branch is created there first.
+    pub fn add_worktree(
+        &self,
+        path: &Path,
+        branch: &str,
+        base: Option<&str>,
+    ) -> Result<Repo, String> {
+        let p = path.to_string_lossy();
+        let mut args = vec!["worktree", "add"];
+        match base {
+            Some(base) => args.extend(["-b", branch, &p, base]),
+            None => args.extend([&*p, branch]),
+        }
+        self.run_ok(&args)?;
+        Ok(Repo::new(path))
+    }
+
+    /// Remove a linked working tree. Without `force`, git refuses one with
+    /// uncommitted changes.
+    pub fn remove_worktree(&self, path: &Path, force: bool) -> Result<(), String> {
+        let p = path.to_string_lossy();
+        let mut args = vec!["worktree", "remove"];
+        if force {
+            args.push("--force");
+        }
+        args.push(&p);
+        self.run_ok(&args).map(|_| ())
+    }
+
+    // ── Remotes ──────────────────────────────────────────────────────────
+
+    pub fn push_args(&self) -> Result<Vec<String>, String> {
+        if self.succeeds(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]) {
+            return Ok(vec!["push".into()]);
+        }
+        let branch = self.run_ok(&["rev-parse", "--abbrev-ref", "HEAD"])?;
+        Ok(vec![
+            "push".into(),
+            "--set-upstream".into(),
+            "origin".into(),
+            branch.trim().to_string(),
+        ])
+    }
+}
+
+/// A patch [`Repo::apply_lines`] applied, kept so it can be taken back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedPatch {
+    pub patch: String,
+    /// Applied to the index rather than the working tree.
+    pub cached: bool,
+    pub reverse: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineAction {
+    Stage,
+    Unstage,
+    Discard,
+}
+
+/// Does this error message indicate that the working tree blocked the switch?
+pub fn is_worktree_conflict(err: &str) -> bool {
+    err.contains("would be overwritten") || err.contains("local changes")
+}
+
+fn stash_ref(index: usize) -> String {
+    format!("stash@{{{index}}}")
+}
+
+/// `'it'\''s'` — safe to paste into a shell command line.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// git's error, from stderr, or stdout when it reports there (merges do).
+fn error_text(out: &Output) -> String {
+    let err = String::from_utf8_lossy(&out.stderr);
+    if err.trim().is_empty() {
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    } else {
+        err.into_owned()
+    }
+}
+
+/// Flags that make patch output independent of the user's git config
+/// (`diff.noprefix`, `color.ui`, external diff tools, textconv filters).
+const PATCH_FLAGS: [&str; 6] = [
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "-M",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+];
+
+/// %x1f = unit separator, %x1e = record separator.
+const LOG_FORMAT: &str = "%H%x1f%h%x1f%P%x1f%D%x1f%s%x1f%an%x1f%at%x1e";
+
+fn parse_log(out: &str) -> Vec<Commit> {
     let mut commits = Vec::new();
     for record in out.split('\x1e') {
         let record = record.trim_start_matches('\n');
@@ -97,16 +1187,8 @@ pub fn log_all(limit: usize) -> Result<Vec<Commit>, String> {
         if fields.len() < 7 {
             continue;
         }
-        let parents = if fields[2].is_empty() {
-            Vec::new()
-        } else {
-            fields[2]
-                .split_whitespace()
-                .map(|s| s.to_string())
-                .collect()
-        };
+        let parents = fields[2].split_whitespace().map(str::to_string).collect();
         let (refs, head_ref) = parse_refs(fields[3]);
-        let timestamp = fields[6].trim().parse().unwrap_or(0);
         commits.push(Commit {
             hash: fields[0].to_string(),
             short: fields[1].to_string(),
@@ -115,10 +1197,119 @@ pub fn log_all(limit: usize) -> Result<Vec<Commit>, String> {
             head_ref,
             subject: fields[4].to_string(),
             author: fields[5].to_string(),
-            timestamp,
+            timestamp: fields[6].trim().parse().unwrap_or(0),
         });
     }
-    Ok(commits)
+    commits
+}
+
+fn parse_branches(out: &str) -> Vec<Branch> {
+    let mut branches = Vec::new();
+    for line in out.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let head_marker = parts.next().unwrap_or("");
+        let refname = parts.next().unwrap_or("");
+        let is_current = head_marker.trim() == "*";
+        if let Some(name) = refname.strip_prefix("refs/heads/") {
+            branches.push(Branch {
+                name: name.to_string(),
+                is_current,
+                is_remote: false,
+            });
+        } else if let Some(name) = refname.strip_prefix("refs/remotes/") {
+            // Skip "origin/HEAD" symbolic refs — they're noise.
+            if name.ends_with("/HEAD") {
+                continue;
+            }
+            branches.push(Branch {
+                name: name.to_string(),
+                is_current: false,
+                is_remote: true,
+            });
+        }
+    }
+    branches
+}
+
+/// `git worktree list --porcelain`: blank-line-separated records of
+/// `worktree <path>`, `HEAD <sha>`, `branch refs/heads/<name>` or
+/// `detached`, and optional `bare`, `locked`, `prunable` lines.
+fn parse_worktrees(out: &str) -> Vec<Worktree> {
+    let mut list: Vec<Worktree> = Vec::new();
+    for line in out.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            list.push(Worktree {
+                path: PathBuf::from(path),
+                head: String::new(),
+                branch: None,
+                is_main: list.is_empty(),
+                locked: false,
+                prunable: false,
+            });
+            continue;
+        }
+        let Some(wt) = list.last_mut() else { continue };
+        if let Some(sha) = line.strip_prefix("HEAD ") {
+            wt.head = sha.to_string();
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            wt.branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+        } else if line == "locked" || line.starts_with("locked ") {
+            wt.locked = true;
+        } else if line == "prunable" || line.starts_with("prunable ") {
+            wt.prunable = true;
+        }
+    }
+    list
+}
+
+/// `git blame --porcelain`: each line starts with a header
+/// `<sha> <orig-line> <final-line> [<group-size>]`, followed by the commit's
+/// fields the first time that commit appears, then the line itself after a
+/// tab.
+fn parse_blame(out: &str) -> Vec<BlameLine> {
+    #[derive(Default, Clone)]
+    struct Info {
+        author: String,
+        time: i64,
+        summary: String,
+    }
+    let mut info: HashMap<String, Info> = HashMap::new();
+    let mut lines = Vec::new();
+    let mut current: Option<(String, usize)> = None;
+    for line in out.lines() {
+        if let Some(text) = line.strip_prefix('\t') {
+            if let Some((hash, line_no)) = current.take() {
+                let i = info.get(&hash).cloned().unwrap_or_default();
+                lines.push(BlameLine {
+                    hash,
+                    author: i.author,
+                    time: i.time,
+                    summary: i.summary,
+                    line: line_no,
+                    text: text.to_string(),
+                });
+            }
+            continue;
+        }
+        let mut words = line.split(' ');
+        let first = words.next().unwrap_or("");
+        if first.len() == 40 && first.chars().all(|c| c.is_ascii_hexdigit()) {
+            let final_line = words.nth(1).and_then(|n| n.parse().ok()).unwrap_or(0);
+            current = Some((first.to_string(), final_line));
+            info.entry(first.to_string()).or_default();
+            continue;
+        }
+        let Some((hash, _)) = &current else { continue };
+        let entry = info.entry(hash.clone()).or_default();
+        let rest = line.split_once(' ').map(|(_, r)| r).unwrap_or("");
+        match first {
+            "author" => entry.author = rest.to_string(),
+            "author-time" => entry.time = rest.parse().unwrap_or(0),
+            "summary" => entry.summary = rest.to_string(),
+            _ => {}
+        }
+    }
+    lines
 }
 
 /// `%D` gives decorations like: "HEAD -> main, origin/main, tag: v1.0"
@@ -143,14 +1334,6 @@ fn parse_refs(s: &str) -> (Vec<String>, Option<String>) {
     (refs, head_ref)
 }
 
-/// Working tree status. `-z` gives NUL-separated records with no quoting, so
-/// paths with spaces, quotes, or non-ASCII survive, and rename origins arrive
-/// as a separate field instead of a literal `old -> new` string.
-pub fn status() -> Result<Vec<StatusEntry>, String> {
-    let out = run_ok(&["status", "--porcelain=v1", "-z", "-uall"])?;
-    Ok(parse_status(&out))
-}
-
 fn parse_status(out: &str) -> Vec<StatusEntry> {
     let mut entries = Vec::new();
     let mut fields = out.split('\0');
@@ -171,6 +1354,15 @@ fn parse_status(out: &str) -> Vec<StatusEntry> {
             None
         };
 
+        // Unmerged: either column U, or both added / both deleted.
+        if x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D') {
+            entries.push(StatusEntry {
+                status: FileStatus::Conflicted,
+                path: path.to_string(),
+                orig_path: None,
+            });
+            continue;
+        }
         // Untracked
         if x == '?' && y == '?' {
             entries.push(StatusEntry {
@@ -210,17 +1402,6 @@ fn parse_status(out: &str) -> Vec<StatusEntry> {
     entries
 }
 
-/// Parse the branch headers from `git status --porcelain=v2 --branch`.
-/// Headers look like:
-///   # branch.oid <sha>
-///   # branch.head <name>        (or "(detached)")
-///   # branch.upstream <name>    (absent if no upstream)
-///   # branch.ab +<ahead> -<behind>  (absent if no upstream)
-pub fn tracking() -> Result<TrackingInfo, String> {
-    let out = run_ok(&["status", "--porcelain=v2", "--branch"])?;
-    Ok(parse_tracking(&out))
-}
-
 fn parse_tracking(out: &str) -> TrackingInfo {
     let mut info = TrackingInfo::default();
 
@@ -253,115 +1434,6 @@ fn parse_tracking(out: &str) -> TrackingInfo {
     info
 }
 
-pub fn stage(path: &str) -> Result<(), String> {
-    run_ok(&["add", "--", path]).map(|_| ())
-}
-
-/// Unstage an entry. A staged rename is two index operations (delete at the
-/// old path, add at the new), so undoing it has to restore both paths.
-pub fn unstage(entry: &StatusEntry) -> Result<(), String> {
-    let mut args = vec!["restore", "--staged", "--", entry.path.as_str()];
-    if let Some(orig) = &entry.orig_path {
-        args.push(orig.as_str());
-    }
-    run_ok(&args).map(|_| ())
-}
-
-/// Throw away unstaged changes to a tracked file — reverts modifications,
-/// brings back deletions. Does not touch the index.
-pub fn discard_worktree(path: &str) -> Result<(), String> {
-    run_ok(&["restore", "--", path]).map(|_| ())
-}
-
-/// Delete an untracked file from the working tree.
-pub fn remove_untracked(path: &str) -> Result<(), String> {
-    run_ok(&["clean", "-f", "--", path]).map(|_| ())
-}
-
-/// What a tag points at — the tag object itself for an annotated tag — so a
-/// deleted tag can be put back exactly, message and all.
-pub fn tag_target(name: &str) -> Result<String, String> {
-    let r = format!("refs/tags/{name}");
-    run_ok(&["rev-parse", "--verify", "--quiet", &r]).map(|s| s.trim().to_string())
-}
-
-pub fn delete_tag(name: &str) -> Result<(), String> {
-    run_ok(&["tag", "-d", name]).map(|_| ())
-}
-
-/// Recreate a deleted tag from [`tag_target`]. Refuses if a tag by that name
-/// exists again.
-pub fn restore_tag(name: &str, target: &str) -> Result<(), String> {
-    let r = format!("refs/tags/{name}");
-    run_ok(&["update-ref", &r, target, ""]).map(|_| ())
-}
-
-pub fn commit(message: &str) -> Result<(), String> {
-    run_ok(&["commit", "-m", message]).map(|_| ())
-}
-
-pub fn push_args() -> Result<Vec<String>, String> {
-    let has_upstream = run(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if has_upstream {
-        return Ok(vec!["push".into()]);
-    }
-    let branch = run_ok(&["rev-parse", "--abbrev-ref", "HEAD"])?;
-    Ok(vec![
-        "push".into(),
-        "--set-upstream".into(),
-        "origin".into(),
-        branch.trim().to_string(),
-    ])
-}
-
-pub fn diff_file(path: &str, staged: bool) -> Result<String, String> {
-    if staged {
-        run_ok(&["diff", "--cached", "--", path])
-    } else {
-        run_ok(&["diff", "--", path])
-    }
-}
-
-/// Diff for one working-tree entry. Untracked files have nothing in the index
-/// to compare against, so they're shown as entirely new content.
-pub fn diff_entry(entry: &StatusEntry) -> Result<String, String> {
-    if entry.status != FileStatus::Untracked {
-        return diff_file(&entry.path, entry.status.is_staged());
-    }
-    let out = run(&["diff", "--no-index", "--", "/dev/null", &entry.path])?;
-    // --no-index exits 1 when the files differ — which, here, they always do.
-    match out.status.code() {
-        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
-        _ => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
-    }
-}
-
-/// Full message and authorship of one commit, for a details view.
-#[derive(Debug, Clone, Default)]
-pub struct CommitDetails {
-    pub author: String,
-    pub email: String,
-    pub author_time: i64,
-    pub committer: String,
-    pub commit_time: i64,
-    /// Author date in local time, formatted by git, e.g. "Oct 01, 2026 at 14:02".
-    pub date: String,
-    pub message: String,
-}
-
-pub fn commit_details(hash: &str) -> Result<CommitDetails, String> {
-    let out = run_ok(&[
-        "show",
-        "-s",
-        "--date=format-local:%b %d, %Y at %H:%M",
-        "--format=%an%x1f%ae%x1f%at%x1f%cn%x1f%ct%x1f%ad%x1f%B",
-        hash,
-    ])?;
-    Ok(parse_commit_details(&out))
-}
-
 fn parse_commit_details(out: &str) -> CommitDetails {
     let mut f = out.splitn(7, '\x1f');
     let mut next = || f.next().unwrap_or("").to_string();
@@ -374,255 +1446,6 @@ fn parse_commit_details(out: &str) -> CommitDetails {
         date: next(),
         message: next().trim_end().to_string(),
     }
-}
-
-/// Flags that make patch output independent of the user's git config
-/// (`diff.noprefix`, `color.ui`, external diff tools, textconv filters).
-const PATCH_FLAGS: [&str; 6] = [
-    "--no-color",
-    "--no-ext-diff",
-    "--no-textconv",
-    "-M",
-    "--src-prefix=a/",
-    "--dst-prefix=b/",
-];
-
-/// The patch a commit introduced, without the commit header. Merges are
-/// diffed against their first parent — what the merge brought into the
-/// branch — rather than git's combined-diff format.
-pub fn commit_patch(hash: &str, parents: &[String]) -> Result<String, String> {
-    let mut args: Vec<&str> = Vec::new();
-    match parents.first() {
-        Some(first) => {
-            args.push("diff");
-            args.extend(PATCH_FLAGS);
-            args.extend([first.as_str(), hash, "--"]);
-        }
-        None => {
-            args.extend(["show", "--format="]);
-            args.extend(PATCH_FLAGS);
-            args.extend([hash, "--"]);
-        }
-    }
-    run_ok(&args)
-}
-
-/// Everything not yet committed, as one patch: staged and unstaged changes
-/// to tracked files against HEAD, followed by each untracked file as new.
-pub fn uncommitted_patch(untracked: &[String]) -> Result<String, String> {
-    let mut args = vec!["diff"];
-    args.extend(PATCH_FLAGS);
-    // An unborn branch has no HEAD yet: then only the index has content.
-    let has_head = run(&["rev-parse", "--verify", "--quiet", "HEAD"])
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    args.push(if has_head { "HEAD" } else { "--cached" });
-    args.push("--");
-    let mut patch = run_ok(&args)?;
-    for path in untracked {
-        let mut args = vec!["diff", "--no-index"];
-        args.extend(PATCH_FLAGS);
-        args.extend(["--", "/dev/null", path.as_str()]);
-        let out = run(&args)?;
-        // --no-index exits 1 when the files differ — which, here, they do.
-        if matches!(out.status.code(), Some(0) | Some(1)) {
-            patch.push_str(&String::from_utf8_lossy(&out.stdout));
-        }
-    }
-    Ok(patch)
-}
-
-pub fn diff_commit(hash: &str) -> Result<String, String> {
-    run_ok(&["show", "--stat", "--patch", hash])
-}
-
-/// Find the repo's "main" branch name. Checks common names.
-pub fn main_branch() -> Option<String> {
-    for candidate in &["main", "master", "trunk"] {
-        if run(&["rev-parse", "--verify", candidate])
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            return Some(candidate.to_string());
-        }
-    }
-    None
-}
-
-/// Commits on the main branch's first-parent chain — these get pinned to lane 0.
-pub fn main_chain() -> Result<Vec<String>, String> {
-    let Some(main) = main_branch() else {
-        return Ok(Vec::new());
-    };
-    let out = run_ok(&["log", "--first-parent", "--format=%H", &main])?;
-    Ok(out.lines().map(|s| s.to_string()).collect())
-}
-
-#[derive(Debug, Clone)]
-pub struct Branch {
-    pub name: String, // display name, e.g. "main" or "origin/feat/x"
-    pub is_current: bool,
-    pub is_remote: bool,
-}
-
-/// List all branches, local and remote-tracking, excluding `origin/HEAD` stubs.
-pub fn list_branches() -> Result<Vec<Branch>, String> {
-    let out = run_ok(&[
-        "for-each-ref",
-        "--format=%(HEAD)%09%(refname)",
-        "refs/heads",
-        "refs/remotes",
-    ])?;
-
-    let mut branches = Vec::new();
-    for line in out.lines() {
-        let mut parts = line.splitn(2, '\t');
-        let head_marker = parts.next().unwrap_or("");
-        let refname = parts.next().unwrap_or("");
-        let is_current = head_marker.trim() == "*";
-
-        if let Some(name) = refname.strip_prefix("refs/heads/") {
-            branches.push(Branch {
-                name: name.to_string(),
-                is_current,
-                is_remote: false,
-            });
-        } else if let Some(name) = refname.strip_prefix("refs/remotes/") {
-            // Skip "origin/HEAD" symbolic refs — they're noise.
-            if name.ends_with("/HEAD") {
-                continue;
-            }
-            branches.push(Branch {
-                name: name.to_string(),
-                is_current: false,
-                is_remote: true,
-            });
-        }
-    }
-    Ok(branches)
-}
-
-/// Names of configured remotes, e.g. ["origin", "upstream"].
-pub fn remotes() -> Vec<String> {
-    run_ok(&["remote"])
-        .map(|out| out.lines().map(str::to_string).collect())
-        .unwrap_or_default()
-}
-
-/// Attempt `git switch`. For a remote-tracking ref like `origin/feat/x`, git
-/// will auto-create a local tracking branch `feat/x` if no local exists.
-pub fn checkout_branch(name: &str) -> Result<(), String> {
-    // Strip the remote prefix if we're checking out a remote-tracking ref.
-    // `git switch origin/feat/x` is an error; `git switch feat/x` is what we want,
-    // and git will set up tracking automatically.
-    let target = match name.split_once('/') {
-        Some((remote, rest)) if remotes().iter().any(|r| r == remote) => rest,
-        _ => name,
-    };
-
-    run_ok(&["switch", target]).map(|_| ())
-}
-
-pub fn create_branch_at(name: &str, sha: &str) -> Result<(), String> {
-    run_ok(&["switch", "-c", name, sha]).map(|_| ())
-}
-
-pub fn stash_pop() -> Result<(), String> {
-    run_ok(&["stash", "pop"]).map(|_| ())
-}
-
-/// Apply stash entry `index` and drop it.
-pub fn stash_pop_at(index: usize) -> Result<(), String> {
-    run_ok(&["stash", "pop", &format!("stash@{{{index}}}")]).map(|_| ())
-}
-
-/// Stash entries, newest first, as their messages ("WIP on main: …").
-pub fn stash_list() -> Vec<String> {
-    run_ok(&["stash", "list", "--format=%gs"])
-        .map(|s| s.lines().map(str::to_string).collect())
-        .unwrap_or_default()
-}
-
-/// Paths staged as brand-new files (git status reports these as plain
-/// "staged", same as modifications).
-pub fn staged_new_files() -> std::collections::HashSet<String> {
-    run_ok(&["diff", "--cached", "--name-only", "--diff-filter=A", "-z"])
-        .map(|s| {
-            s.split('\0')
-                .filter(|p| !p.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-pub fn head_sha() -> Result<String, String> {
-    run_ok(&["rev-parse", "HEAD"]).map(|s| s.trim().to_string())
-}
-
-/// Undo the last commit, keeping its changes staged.
-pub fn uncommit() -> Result<(), String> {
-    run_ok(&["reset", "--soft", "HEAD~1"]).map(|_| ())
-}
-
-/// Merge `source` into the checked-out branch (fast-forward when possible).
-pub fn merge(source: &str) -> Result<(), String> {
-    let out = run(&["merge", "--no-edit", source])?;
-    if out.status.success() {
-        return Ok(());
-    }
-    // Conflicts are reported on stdout, refusals on stderr.
-    let mut msg = String::from_utf8_lossy(&out.stderr).into_owned();
-    if msg.trim().is_empty() {
-        msg = String::from_utf8_lossy(&out.stdout).into_owned();
-    }
-    Err(msg)
-}
-
-/// Is a merge stopped on conflicts?
-pub fn merge_in_progress() -> bool {
-    run(&["rev-parse", "--verify", "--quiet", "MERGE_HEAD"])
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-pub fn merge_abort() -> Result<(), String> {
-    run_ok(&["merge", "--abort"]).map(|_| ())
-}
-
-/// Move the current branch back to `sha`, keeping uncommitted changes
-/// (git refuses if they'd be overwritten).
-pub fn reset_keep(sha: &str) -> Result<(), String> {
-    run_ok(&["reset", "--keep", sha]).map(|_| ())
-}
-
-/// Number of stash entries.
-pub fn stash_count() -> usize {
-    run_ok(&["stash", "list"])
-        .map(|s| s.lines().count())
-        .unwrap_or(0)
-}
-
-pub fn stash_push() -> Result<(), String> {
-    run_ok(&["stash", "push", "-u", "-m", "spor-auto-stash"]).map(|_| ())
-}
-
-/// Does this error message indicate that the working tree blocked the switch?
-pub fn is_worktree_conflict(err: &str) -> bool {
-    err.contains("would be overwritten") || err.contains("local changes")
-}
-
-/// What does the remote consider its default branch? Reads
-/// `refs/remotes/origin/HEAD`, which git maintains as a symbolic ref.
-/// Falls back to local main/master/trunk detection.
-pub fn default_base_branch() -> Option<String> {
-    if let Ok(out) = run_ok(&["symbolic-ref", "refs/remotes/origin/HEAD"]) {
-        // Returns "refs/remotes/origin/main" — strip the prefix.
-        if let Some(name) = out.trim().strip_prefix("refs/remotes/origin/") {
-            return Some(name.to_string());
-        }
-    }
-    main_branch()
 }
 
 #[cfg(test)]

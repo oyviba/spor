@@ -188,7 +188,8 @@ impl Layout {
 /// Something ⌘Z can take back.
 pub enum Undo {
     /// Put files' working-tree contents back (None: they didn't exist).
-    Restore(Vec<(String, Option<Vec<u8>>)>),
+    /// Paths are absolute, so they're right whatever is open by then.
+    Restore(Vec<(PathBuf, Option<Vec<u8>>)>),
     Stage(Vec<String>),
     Unstage(Vec<StatusEntry>),
     Uncommit {
@@ -223,6 +224,12 @@ fn dialog_footer(id: &'static str, action: &'static str) -> impl gpui_kit::IntoE
         .gap_2()
         .child(DialogClose::new().child(Button::new("dialog-cancel").label("Cancel").outline()))
         .child(DialogAction::new().child(Button::new(id).label(action).primary()))
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Marker type identifying the undo notification, so a newer one replaces it.
@@ -413,11 +420,9 @@ impl Spor {
     // ── Opening ──────────────────────────────────────────────────────────────
 
     pub(crate) fn open_repo(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        let opened = support::repo_root(dir).and_then(|root| {
-            // Every git call in spor::git runs in the working directory.
-            std::env::set_current_dir(&root).map_err(|e| e.to_string())?;
-            Snapshot::load(&root)
-        });
+        // Every git call runs in the snapshot's root, never the process's
+        // working directory, so nothing here changes directory.
+        let opened = support::repo_root(dir).and_then(|root| Snapshot::load(&root));
         match opened {
             Ok(snapshot) => {
                 support::remember_repo(&snapshot.root);
@@ -697,7 +702,7 @@ impl Spor {
         let files = self
             .repo
             .as_ref()
-            .map(|r| repo::uncommitted_files(&r.changes))
+            .map(|r| repo::uncommitted_files(&r.git, &r.changes))
             .unwrap_or_default();
         self.changes_diff
             .update(cx, |state, cx| state.set_files(files, cx));
@@ -934,11 +939,21 @@ impl Spor {
     }
 
     fn fetch_prs(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.repo.as_ref().map(|r| r.root.clone()) else {
+            return;
+        };
         self._pr_task = cx.spawn(async move |this, cx| {
             let prs = cx
-                .background_spawn(async { remote::fetch_prs().unwrap_or_default() })
+                .background_spawn({
+                    let root = root.clone();
+                    async move { remote::fetch_prs_in(&root).unwrap_or_default() }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                // Another repository was opened while this one's PRs loaded.
+                if this.repo.as_ref().map(|r| &r.root) != Some(&root) {
+                    return;
+                }
                 this.prs = prs
                     .into_iter()
                     .map(|p| (p.head_branch.clone(), p))
@@ -966,14 +981,15 @@ impl Spor {
             cx.notify();
             return;
         }
+        let git = self.git();
         self._commit_task = cx.spawn(async move |this, cx| {
             let (details, files) = cx
                 .background_spawn({
                     let hash = hash.clone();
                     async move {
                         (
-                            git::commit_details(&hash).unwrap_or_default(),
-                            repo::commit_files(&hash, &parents),
+                            git.commit_details(&hash).unwrap_or_default(),
+                            repo::commit_files(&git, &hash, &parents),
                         )
                     }
                 })
@@ -1032,7 +1048,7 @@ impl Spor {
     ) {
         if change.included() {
             let staged = change.staged_entries();
-            if let Err(e) = staged.iter().try_for_each(git::unstage) {
+            if let Err(e) = staged.iter().try_for_each(|e| self.git().unstage(e)) {
                 return self.error(format!("Couldn't unstage: {}", first_line(&e)), window, cx);
             }
             self.undo.push((
@@ -1040,7 +1056,7 @@ impl Spor {
                 Undo::Stage(vec![change.path.clone()]),
             ));
         } else {
-            if let Err(e) = git::stage(&change.path) {
+            if let Err(e) = self.git().stage(&change.path) {
                 return self.error(format!("Couldn't stage: {}", first_line(&e)), window, cx);
             }
             self.undo.push((
@@ -1078,7 +1094,7 @@ impl Spor {
                 .filter(|c| !c.included())
                 .map(|c| c.path.clone())
                 .collect();
-            let r = paths.iter().try_for_each(|p| git::stage(p));
+            let r = paths.iter().try_for_each(|p| self.git().stage(p));
             if r.is_ok() && !paths.is_empty() {
                 let entries = paths
                     .into_iter()
@@ -1094,7 +1110,7 @@ impl Spor {
         } else {
             let entries: Vec<StatusEntry> =
                 changes.iter().flat_map(|c| c.staged_entries()).collect();
-            let r = entries.iter().try_for_each(git::unstage);
+            let r = entries.iter().try_for_each(|e| self.git().unstage(e));
             if r.is_ok() && !entries.is_empty() {
                 let paths = entries.iter().map(|e| e.path.clone()).collect();
                 self.undo.push(("unstage all".into(), Undo::Stage(paths)));
@@ -1117,14 +1133,14 @@ impl Spor {
     ) {
         let mut restore = Vec::new();
         for change in changes.iter().filter(|c| c.unstaged) {
-            let before = std::fs::read(&change.path).ok();
+            let before = std::fs::read(self.git().path(&change.path)).ok();
             let result = if change.untracked {
-                git::remove_untracked(&change.path)
+                self.git().remove_untracked(&change.path)
             } else {
-                git::discard_worktree(&change.path)
+                self.git().discard_worktree(&change.path)
             };
             match result {
-                Ok(()) => restore.push((change.path.clone(), before)),
+                Ok(()) => restore.push((self.git().path(&change.path), before)),
                 Err(e) => {
                     self.error(format!("Couldn't discard: {}", first_line(&e)), window, cx);
                     break;
@@ -1133,10 +1149,7 @@ impl Spor {
         }
         if !restore.is_empty() {
             let text = match restore.as_slice() {
-                [(path, _)] => format!(
-                    "Discarded changes to {}",
-                    path.rsplit('/').next().unwrap_or(path)
-                ),
+                [(path, _)] => format!("Discarded changes to {}", file_name(path)),
                 many => format!("Discarded changes to {}", plural(many.len(), "file")),
             };
             self.did(text, Undo::Restore(restore), window, cx);
@@ -1150,9 +1163,9 @@ impl Spor {
         if message.is_empty() || staged == 0 {
             return;
         }
-        match git::commit(&message) {
+        match self.git().commit(&message) {
             Ok(()) => {
-                let hash = git::head_sha().unwrap_or_default();
+                let hash = self.git().head_sha().unwrap_or_default();
                 self.message
                     .update(cx, |state, cx| state.set_value("", window, cx));
                 let summary = first_line(&message).to_string();
@@ -1175,10 +1188,7 @@ impl Spor {
         };
         let done = match &action {
             Undo::Restore(files) if files.len() == 1 => {
-                format!(
-                    "Restored {}",
-                    files[0].0.rsplit('/').next().unwrap_or(&files[0].0)
-                )
+                format!("Restored {}", file_name(&files[0].0))
             }
             Undo::Restore(files) => format!("Restored {}", plural(files.len(), "file")),
             Undo::Uncommit { .. } => "Commit undone — its changes are staged again".into(),
@@ -1192,7 +1202,7 @@ impl Spor {
                     .into_iter()
                     .try_for_each(|(path, contents)| match contents {
                         Some(bytes) => {
-                            if let Some(dir) = Path::new(&path).parent() {
+                            if let Some(dir) = path.parent() {
                                 let _ = std::fs::create_dir_all(dir);
                             }
                             std::fs::write(&path, bytes).map_err(|e| e.to_string())
@@ -1200,13 +1210,13 @@ impl Spor {
                         None => std::fs::remove_file(&path).map_err(|e| e.to_string()),
                     })
             }
-            Undo::Stage(paths) => paths.iter().try_for_each(|p| git::stage(p)),
-            Undo::Unstage(entries) => entries.iter().try_for_each(git::unstage),
+            Undo::Stage(paths) => paths.iter().try_for_each(|p| self.git().stage(p)),
+            Undo::Unstage(entries) => entries.iter().try_for_each(|e| self.git().unstage(e)),
             Undo::Uncommit { hash, message } => {
-                if git::head_sha().ok().as_deref() != Some(hash.as_str()) {
+                if self.git().head_sha().ok().as_deref() != Some(hash.as_str()) {
                     Err("the branch has moved on since that commit".into())
                 } else {
-                    git::uncommit().map(|()| {
+                    self.git().uncommit().map(|()| {
                         self.message
                             .update(cx, |state, cx| state.set_value(message, window, cx));
                         self.tab = Tab::Changes;
@@ -1219,10 +1229,10 @@ impl Spor {
                 if current.as_deref() != Some(branch.as_str()) {
                     Err(format!("switch back to {branch} first"))
                 } else {
-                    git::reset_keep(&before)
+                    self.git().reset_keep(&before)
                 }
             }
-            Undo::Tag { name, target } => git::restore_tag(&name, &target),
+            Undo::Tag { name, target } => self.git().restore_tag(&name, &target),
         };
         match result {
             Ok(()) => {
@@ -1244,7 +1254,7 @@ impl Spor {
             .and_then(|r| r.without_remote(name))
             .unwrap_or(name)
             .to_string();
-        match git::checkout_branch(&target) {
+        match self.git().checkout_branch(&target) {
             Ok(()) => {
                 self.ok(format!("Switched to {target}"), window, cx);
                 self.reload(window, cx);
@@ -1299,7 +1309,11 @@ impl Spor {
     }
 
     fn stash_and_switch(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
-        match git::stash_push().and_then(|_| git::checkout_branch(target)) {
+        match self
+            .git()
+            .stash_push()
+            .and_then(|_| self.git().checkout_branch(target))
+        {
             Ok(()) => {
                 self.ok(
                     format!("Stashed your changes and switched to {target}"),
@@ -1313,7 +1327,7 @@ impl Spor {
     }
 
     pub(crate) fn stash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match git::stash_push() {
+        match self.git().stash_push() {
             Ok(()) => {
                 self.ok("Changes stashed", window, cx);
                 self.reload(window, cx);
@@ -1328,7 +1342,7 @@ impl Spor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match git::stash_pop_at(index) {
+        match self.git().stash_pop_at(index) {
             Ok(()) => {
                 self.ok("Stashed changes restored", window, cx);
                 self.tab = Tab::Changes;
@@ -1399,7 +1413,7 @@ impl Spor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match git::create_branch_at(name, sha) {
+        match self.git().create_branch_at(name, sha) {
             Ok(()) => {
                 self.ok(format!("Created and switched to {name}"), window, cx);
                 self.reload(window, cx);
@@ -1494,7 +1508,7 @@ impl Spor {
         let Some(root) = self.repo.as_ref().map(|r| r.root.clone()) else {
             return;
         };
-        match git::push_args() {
+        match self.git().push_args() {
             Ok(args) => self.run_job("Push", window, cx, move || {
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
                 support::git_network(&root, &args).map(|_| "Pushed".into())
@@ -1559,8 +1573,10 @@ impl Spor {
 
     /// Delete a local tag — immediately, but undoably.
     pub(crate) fn delete_tag(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let deleted =
-            git::tag_target(name).and_then(|target| git::delete_tag(name).map(|()| target));
+        let deleted = self
+            .git()
+            .tag_target(name)
+            .and_then(|target| self.git().delete_tag(name).map(|()| target));
         match deleted {
             Ok(target) => {
                 self.did(
@@ -1743,15 +1759,15 @@ impl Spor {
                     cx,
                 );
             }
-            if let Err(e) = git::checkout_branch(target) {
+            if let Err(e) = self.git().checkout_branch(target) {
                 self.reload(window, cx);
                 return self.error(format!("Couldn't switch: {}", first_line(&e)), window, cx);
             }
         }
-        let before = git::head_sha().unwrap_or_default();
+        let before = self.git().head_sha().unwrap_or_default();
         let shown = repo.without_remote(source).unwrap_or(source).to_string();
-        match git::merge(source) {
-            Ok(()) => {
+        match self.git().merge(source) {
+            Ok(git::Outcome::Done) => {
                 let undo = Undo::Merge {
                     branch: target.to_string(),
                     before,
@@ -1759,7 +1775,7 @@ impl Spor {
                 self.did(format!("Merged {shown} into {target}"), undo, window, cx);
                 self.tab = Tab::History;
             }
-            Err(_) if git::merge_in_progress() => {
+            Ok(git::Outcome::Conflicts(_)) => {
                 self.tab = Tab::Changes;
                 let spor = cx.entity().downgrade();
                 window.push_notification(
@@ -1772,7 +1788,7 @@ impl Spor {
                         Button::new("abort-merge").label("Abort Merge").small().ghost().on_click(
                             move |_, window, cx| {
                                 let _ = spor.update(cx, |this, cx| {
-                                    match git::merge_abort() {
+                                    match this.git().abort_operation() {
                                         Ok(()) => this.info("Merge aborted", window, cx),
                                         Err(e) => this.error(
                                             format!("Couldn't abort: {}", first_line(&e)),
@@ -1809,7 +1825,7 @@ impl Spor {
                 cx,
             );
         }
-        let Some(info) = remote::detect() else {
+        let Some(info) = remote::detect_in(&repo.root) else {
             return self.error("Couldn't detect the remote host", window, cx);
         };
         cx.open_url(&remote::compare_url(&info, base, head));
@@ -1820,10 +1836,13 @@ impl Spor {
         let Some(head) = repo.tracking.branch.clone() else {
             return self.info("Switch to a branch first", window, cx);
         };
-        let Some(info) = remote::detect() else {
+        let Some(info) = remote::detect_in(&repo.root) else {
             return self.error("Couldn't detect the remote host", window, cx);
         };
-        let base = git::default_base_branch().unwrap_or_else(|| "main".into());
+        let base = self
+            .git()
+            .default_base_branch()
+            .unwrap_or_else(|| "main".into());
         if base == head {
             return self.info(
                 format!("You're on {base} — switch to a feature branch first"),
@@ -1915,6 +1934,14 @@ impl Spor {
         self.layout.save();
         self.dock.get_or_insert(DockPanel::Git);
         cx.notify();
+    }
+
+    /// The open repository's git. With none open, commands fail harmlessly.
+    pub(crate) fn git(&self) -> git::Repo {
+        self.repo
+            .as_ref()
+            .map(|r| r.git.clone())
+            .unwrap_or_else(|| git::Repo::new(PathBuf::new()))
     }
 
     pub(crate) fn weak(cx: &Context<Self>) -> WeakEntity<Self> {
