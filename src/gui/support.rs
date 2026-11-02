@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use super::askpass;
+
 const MAX_RECENT: usize = 10;
 
 /// Apps launched from Finder/Dock inherit launchd's bare PATH
@@ -116,36 +118,101 @@ pub fn first_line(e: &str) -> &str {
 }
 
 /// git prints hints around the real error; keep the last "fatal:"/"error:"
-/// line, minus its prefix.
+/// line, minus its prefix. When that line only says the remote couldn't be
+/// reached, report the reason ssh printed before it instead.
 pub fn git_error(stderr: &str) -> String {
-    let line = stderr
+    let lines: Vec<&str> = stderr
         .lines()
-        .rev()
-        .find(|l| l.starts_with("fatal:") || l.starts_with("error:"))
-        .or_else(|| stderr.lines().find(|l| !l.trim().is_empty()))
-        .unwrap_or("unknown error");
-    line.trim_start_matches("fatal: ")
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let last = lines
+        .iter()
+        .rposition(|l| l.starts_with("fatal:") || l.starts_with("error:"));
+    let mut line = match last {
+        Some(ix) => lines[ix],
+        None => lines.first().copied().unwrap_or("unknown error"),
+    };
+    if is_remote_boilerplate(line) {
+        let before = &lines[..last.unwrap_or(lines.len())];
+        if let Some(cause) = before
+            .iter()
+            .rev()
+            .find(|l| !is_remote_boilerplate(l) && !l.starts_with("hint:"))
+        {
+            line = cause;
+        }
+    }
+    let line = line
+        .trim_start_matches("fatal: ")
         .trim_start_matches("error: ")
-        .trim()
-        .to_string()
+        .trim();
+    if line.contains("Permission denied (publickey") {
+        return format!("{line} The remote didn't accept your SSH key.");
+    }
+    line.to_string()
+}
+
+/// What git says whenever the transport fails, whatever the cause.
+fn is_remote_boilerplate(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    [
+        "could not read from remote repository",
+        "please make sure you have the correct access rights",
+        "and the repository exists",
+        "the remote end hung up unexpectedly",
+        "could not fetch ",
+    ]
+    .iter()
+    .any(|s| lower.contains(s))
 }
 
 /// ssh must never wait on a terminal prompt we can't show; fail fast
 /// instead. Respects a user-set command.
-pub fn ssh_command() -> String {
+fn batch_ssh_command() -> String {
     std::env::var("GIT_SSH_COMMAND").unwrap_or_else(|_| "ssh -o BatchMode=yes".into())
 }
 
-/// Run a network git command with prompts disabled. Returns stdout.
+/// Run a network git command the user asked for. A passphrase, password or
+/// new-host question from ssh or git opens a dialog (`askpass`). Returns
+/// stdout.
 pub fn git_network(root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .current_dir(root)
+    let mut cmd = network_command(root, args);
+    match askpass::env() {
+        Some(env) => {
+            askpass::take_cancelled();
+            cmd.envs(env);
+        }
+        None => {
+            cmd.env("GIT_SSH_COMMAND", batch_ssh_command());
+        }
+    }
+    let result = run_network(cmd);
+    if result.is_err() && askpass::take_cancelled() {
+        return Err("Cancelled".into());
+    }
+    result
+}
+
+/// Run a network git command nobody is waiting on (the background fetch).
+/// It never asks anything; without stored credentials it just fails.
+pub fn git_network_quiet(root: &Path, args: &[&str]) -> Result<String, String> {
+    let mut cmd = network_command(root, args);
+    cmd.env("GIT_SSH_COMMAND", batch_ssh_command());
+    run_network(cmd)
+}
+
+fn network_command(root: &Path, args: &[&str]) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(root)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_SSH_COMMAND", ssh_command())
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("Couldn't run git: {e}"))?;
+        .stdin(std::process::Stdio::null());
+    cmd
+}
+
+fn run_network(mut cmd: Command) -> Result<String, String> {
+    let out = cmd.output().map_err(|e| format!("Couldn't run git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -178,5 +245,39 @@ pub fn relative_time(timestamp: i64) -> String {
         604_800..=2_591_999 => ago(dt / 604_800, "week"),
         2_592_000..=31_535_999 => ago(dt / 2_592_000, "month"),
         _ => ago(dt / 31_536_000, "year"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::git_error;
+
+    #[test]
+    fn git_error_reports_why_ssh_failed() {
+        let stderr = "git@github.com: Permission denied (publickey).\r\n\
+                      fatal: Could not read from remote repository.\n\n\
+                      Please make sure you have the correct access rights\n\
+                      and the repository exists.\n\
+                      error: could not fetch origin\n";
+        assert_eq!(
+            git_error(stderr),
+            "git@github.com: Permission denied (publickey). The remote didn't accept your SSH key."
+        );
+        let stderr = "Host key verification failed.\n\
+                      fatal: Could not read from remote repository.\n\n\
+                      Please make sure you have the correct access rights\n\
+                      and the repository exists.\n";
+        assert_eq!(git_error(stderr), "Host key verification failed.");
+    }
+
+    #[test]
+    fn git_error_keeps_specific_errors() {
+        let stderr = "hint: Diverging branches can't be fast-forwarded.\n\
+                      fatal: Not possible to fast-forward, aborting.\n";
+        assert_eq!(git_error(stderr), "Not possible to fast-forward, aborting.");
+        assert_eq!(
+            git_error("fatal: Could not read from remote repository.\n"),
+            "Could not read from remote repository."
+        );
     }
 }
