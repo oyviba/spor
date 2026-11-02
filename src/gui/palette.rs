@@ -1,5 +1,6 @@
-//! ⌘P: one search field over the repository's pull requests and the app's
-//! commands (with their shortcuts), and the table of those commands.
+//! ⌘P: one search field over the repository's pull requests (picking one
+//! opens it in the Pull Requests tab) and the app's commands (with their
+//! shortcuts), and the table of those commands.
 //!
 //! Both are driven by [`SHORTCUTS`], so a new action shows up in the palette
 //! and the shortcut list from one entry. Its keys are its defaults unless
@@ -151,6 +152,12 @@ pub const SHORTCUTS: &[Shortcut] = &[
     cmd("View", "Show History", &["secondary-shift-h"], || {
         Box::new(ShowHistory)
     }),
+    cmd("View", "Show Pull Requests", &["secondary-shift-p"], || {
+        Box::new(ShowPullRequests)
+    }),
+    cmd("View", "Show Actions", &["secondary-shift-a"], || {
+        Box::new(ShowActions)
+    }),
     cmd("View", "Show Git Panel", &["secondary-shift-g"], || {
         Box::new(ShowGitPanel)
     }),
@@ -243,7 +250,7 @@ pub enum PrSearch {
 /// What a palette row does when picked.
 #[derive(Clone)]
 enum Pick {
-    Url(String),
+    Pull(u64),
     Run(usize),
     Nothing,
 }
@@ -394,7 +401,7 @@ impl Render for Palette {
                     .take(100);
                 for pr in shown {
                     prs = prs.item(pr_item(pr));
-                    pr_picks.push(Pick::Url(pr.url.clone()));
+                    pr_picks.push(Pick::Pull(pr.number));
                 }
                 if pr_picks.is_empty() && query.is_empty() {
                     prs = prs.item(note_item(
@@ -406,7 +413,7 @@ impl Render for Palette {
         }
         // The list arrives after the palette opens; start on its first PR
         // rather than wherever the highlight fell meanwhile.
-        if !self.highlighted_first && matches!(pr_picks.first(), Some(Pick::Url(_))) {
+        if !self.highlighted_first && matches!(pr_picks.first(), Some(Pick::Pull(_))) {
             self.highlighted_first = true;
             let state = self.state.clone();
             window.defer(cx, move |window, cx| {
@@ -452,6 +459,7 @@ impl Render for Palette {
         let picks: Rc<Vec<Vec<Pick>>> = Rc::new(groups.iter().map(|(_, p)| p.clone()).collect());
         let palette = cx.entity().downgrade();
         let root_focus = self.root_focus.clone();
+        let spor = self.spor.clone();
         let mut command = Command::new(&self.state)
             .filterable(false)
             .bordered(false)
@@ -472,9 +480,9 @@ impl Render for Palette {
                 };
                 match pick.clone() {
                     Pick::Nothing => {}
-                    Pick::Url(url) => {
+                    Pick::Pull(number) => {
                         window.close_dialog(cx);
-                        cx.open_url(&url);
+                        let _ = spor.update(cx, |this, cx| this.show_pull(number, cx));
                     }
                     Pick::Run(ix) => {
                         window.close_dialog(cx);

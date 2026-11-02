@@ -229,7 +229,7 @@ fn parse_pr_line(line: &str) -> Option<PrInfo> {
 /// Fold per-check conclusions into one state. GitHub mixes two vocabularies
 /// (CheckRun conclusions and commit-status states); any failure-ish word makes
 /// the whole rollup Failing, otherwise any pending-ish word makes it Pending.
-fn rollup_checks(list: &str) -> ChecksState {
+pub(crate) fn rollup_checks(list: &str) -> ChecksState {
     if list.is_empty() {
         return ChecksState::None;
     }
