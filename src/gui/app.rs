@@ -3,6 +3,7 @@
 //! the status bar), a center pane with Changes and History tabs, and a
 //! status bar. Everything git-related the views trigger lives here.
 
+use super::askpass;
 use super::assets::icon;
 use super::history_options::HistoryOptions;
 use super::hub::Hub;
@@ -26,8 +27,10 @@ use gpui_kit::{
 };
 use spor::git::{self, CommitDetails, StatusEntry};
 use spor::remote::{self, PrInfo};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 /// How often the open repository is fetched in the background, so the app
@@ -245,6 +248,8 @@ pub struct Spor {
     /// The search field above the branch list.
     pub(crate) branch_filter: Entity<InputState>,
     workspace_name: Entity<InputState>,
+    /// The passphrase or password field of an askpass dialog.
+    credential: Entity<InputState>,
     pub(crate) history_scroll: UniformListScrollHandle,
     pub(crate) history_focus: FocusHandle,
     /// Holds focus when nothing else does, so app shortcuts always fire.
@@ -275,6 +280,7 @@ pub struct Spor {
     _fetch_task: Task<()>,
     _commit_task: Task<()>,
     _poll_task: Task<()>,
+    _askpass_task: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -296,6 +302,7 @@ impl Spor {
             cx.new(|cx| InputState::new(window, cx).placeholder("Search branches and tags"));
         let workspace_name =
             cx.new(|cx| InputState::new(window, cx).placeholder("Work, Side projects, …"));
+        let credential = cx.new(|cx| InputState::new(window, cx));
         let history_focus = cx.focus_handle().tab_stop(true);
         let root_focus = cx.focus_handle();
         root_focus.focus(window, cx);
@@ -327,6 +334,7 @@ impl Spor {
             branch_name,
             branch_filter,
             workspace_name,
+            credential,
             history_scroll: UniformListScrollHandle::new(),
             history_focus,
             root_focus,
@@ -349,6 +357,7 @@ impl Spor {
             _fetch_task: Task::ready(()),
             _commit_task: Task::ready(()),
             _poll_task: Task::ready(()),
+            _askpass_task: Task::ready(()),
             _subscriptions: subscriptions,
         };
         let initial = initial.or_else(|| this.workspaces.current().landing().cloned());
@@ -356,6 +365,7 @@ impl Spor {
             this.open_repo(&dir, window, cx);
         }
         this.start_polling(window, cx);
+        this.start_askpass(window, cx);
         this.start_auto_fetch(window, cx);
         this.start_hub_polling(window, cx);
         this.refresh_repo_heads(cx);
@@ -727,6 +737,99 @@ impl Spor {
         });
     }
 
+    /// Show a dialog whenever ssh or git asks something during a job: a
+    /// key's passphrase, an HTTPS username or password, or whether to trust
+    /// a host it hasn't seen.
+    fn start_askpass(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._askpass_task = cx.spawn_in(window, async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(150))
+                .await;
+            if let Some(request) = askpass::next_request() {
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        this.ask_credential(request, window, cx)
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+    }
+
+    fn ask_credential(
+        &mut self,
+        request: askpass::Request,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let confirm = request.is_confirmation();
+        let secret = request.is_secret();
+        let lower = request.prompt.to_ascii_lowercase();
+        let (title, action) = if confirm {
+            ("Connect to an Unknown Host?", "Connect")
+        } else if lower.contains("passphrase") {
+            ("SSH Key Passphrase", "Continue")
+        } else if lower.starts_with("username") {
+            ("Username", "Continue")
+        } else {
+            ("Password", "Continue")
+        };
+        let prompt: SharedString = request.prompt.clone().into();
+        let input = self.credential.clone();
+        input.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+            state.set_masked(secret, window, cx);
+        });
+        // The dialog's callbacks share it; whatever closes the dialog
+        // without an answer drops it, which tells ssh "cancelled".
+        let pending = Rc::new(RefCell::new(Some(request)));
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let input_for_ok = input.clone();
+            let pending_ok = pending.clone();
+            let pending_cancel = pending.clone();
+            if !confirm {
+                input.read(cx).focus_handle(cx).focus(window, cx);
+            }
+            let body = gpui_kit::component::v_flex().gap_2().child(
+                gpui_kit::div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(prompt.clone()),
+            );
+            let body = if confirm {
+                body
+            } else {
+                body.child(gpui_kit::component::input::Input::new(&input))
+            };
+            dialog
+                .title(title)
+                .w(gpui_kit::px(460.))
+                .overlay_closable(false)
+                .child(body)
+                .footer(dialog_footer("askpass", action))
+                .on_ok(move |_, window, cx| {
+                    let answer = if confirm {
+                        "yes".to_string()
+                    } else {
+                        input_for_ok.read(cx).value().to_string()
+                    };
+                    input_for_ok.update(cx, |state, cx| state.set_value("", window, cx));
+                    if let Some(request) = pending_ok.borrow_mut().take() {
+                        request.answer(Some(answer));
+                    }
+                    true
+                })
+                .on_cancel(move |_, _, _| {
+                    if let Some(request) = pending_cancel.borrow_mut().take() {
+                        request.answer(None);
+                    }
+                    true
+                })
+        });
+    }
+
     /// Fetch the open repository quietly now and then, so behind counts are
     /// real and the app can say when there's something to pull. Failures
     /// (offline, no credentials helper) stay silent; Sync reports them.
@@ -749,7 +852,7 @@ impl Spor {
                 });
                 let _ = cx
                     .background_spawn(async move {
-                        support::git_network(&root, &["fetch", "--all", "--prune"])
+                        support::git_network_quiet(&root, &["fetch", "--all", "--prune"])
                     })
                     .await;
                 let _ = this.update(cx, |this, _| this.auto_fetching = false);

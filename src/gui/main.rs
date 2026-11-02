@@ -10,6 +10,7 @@
 //! a status bar that toggles the panels.
 
 mod app;
+mod askpass;
 mod assets;
 mod branches;
 mod changes_view;
@@ -36,6 +37,8 @@ use gpui_kit::component::TitleBar;
 use gpui_kit::{px, size, AppContext as _, WindowBounds, WindowOptions};
 
 fn main() {
+    // Started by git or ssh to ask for a passphrase: answer and exit.
+    askpass::run_helper_if_invoked();
     support::fix_path_for_gui_launch();
     let initial = support::initial_repo();
 
