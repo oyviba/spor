@@ -29,6 +29,8 @@ mod runs;
 mod support;
 mod theme;
 mod theme_editor;
+#[cfg(all(test, feature = "ui-tests"))]
+mod ui_tests;
 mod welcome;
 mod workspaces;
 

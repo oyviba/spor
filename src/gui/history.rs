@@ -8,7 +8,7 @@ use super::app::*;
 use super::assets::icon;
 use super::changes_view::empty_state;
 use super::graph::{self, GraphStyle, MainLane};
-use super::history_options::{Density, HistoryOptions, LaneWidth};
+use super::history_options::{Column, Density, HistoryOptions, LaneWidth};
 use super::support::{plural, relative_time};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
@@ -22,18 +22,22 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     canvas, div, prelude::FluentBuilder as _, px, uniform_list, AnyElement, App, AppContext as _,
-    ClickEvent, Context, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    ClickEvent, Context, DragMoveEvent, EmptyView, Hsla, InteractiveElement as _, IntoElement,
+    MouseButton, MouseUpEvent, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window,
 };
 use spor::graph::GraphRow;
 use spor::remote::{ChecksState, PrInfo};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-const AUTHOR_W: f32 = 150.0;
-const DATE_W: f32 = 110.0;
-const SHA_W: f32 = 70.0;
-const BRANCH_W: f32 = 190.0;
+/// The History header's right padding, which the right-hand columns sit
+/// against when their widths are worked out from the pointer.
+const HEADER_PAD_RIGHT: f32 = 12.0;
+
+/// A History column's edge being dragged to resize it.
+#[derive(Clone, Copy)]
+struct ColumnDrag(Column);
 
 /// One label on a commit row: a branch (local, on a remote, or both) or a tag.
 #[derive(Clone)]
@@ -230,29 +234,69 @@ impl Spor {
             ..style
         };
 
+        let widths = opts.widths;
+        let (branch_w, author_w, date_w, sha_w) = (
+            px(widths.branch),
+            px(widths.author),
+            px(widths.date),
+            px(widths.sha),
+        );
+        let mut header_cell = |on: bool, column: Column, width, label: &'static str| {
+            on.then(|| {
+                div()
+                    .relative()
+                    .w(width)
+                    .flex_none()
+                    .child(label)
+                    .child(self.column_handle(column, cx))
+            })
+        };
+        let branch_th = header_cell(opts.branch_column, Column::Branch, branch_w, "Branch / Tag");
+        let author_th = header_cell(opts.author, Column::Author, author_w, "Author");
+        let date_th = header_cell(opts.date, Column::Date, date_w, "Date");
+        let sha_th = header_cell(opts.sha, Column::Sha, sha_w, "Commit");
         let header = h_flex()
+            .id("history-header")
             .relative()
             .h(px(26.))
             .flex_none()
-            .pr_3()
+            .pr(px(HEADER_PAD_RIGHT))
             .border_b_1()
             .border_color(theme.border)
             .text_xs()
             .text_color(theme.muted_foreground)
+            .on_drag_move(
+                cx.listener(move |this, event: &DragMoveEvent<ColumnDrag>, _, cx| {
+                    let ColumnDrag(column) = *event.drag(cx);
+                    let x = f32::from(event.event.position.x);
+                    let left = f32::from(event.bounds.left());
+                    let right = f32::from(event.bounds.right()) - HEADER_PAD_RIGHT;
+                    let o = this.history_options;
+                    // Each column's edge follows the pointer: the branch
+                    // column's right edge, the others' left edges, measured
+                    // past whatever sits between them and the header's side.
+                    let shown = |on: bool, w: f32| if on { w } else { 0. };
+                    let width = match column {
+                        Column::Branch => x - left - f32::from(graph_w),
+                        Column::Author => {
+                            right - shown(o.date, o.widths.date) - shown(o.sha, o.widths.sha) - x
+                        }
+                        Column::Date => right - shown(o.sha, o.widths.sha) - x,
+                        Column::Sha => right - x,
+                    };
+                    let before = o.widths;
+                    this.history_options.widths.set(column, width);
+                    if this.history_options.widths != before {
+                        cx.notify();
+                    }
+                }),
+            )
             .child(div().w(graph_w).flex_none())
-            .when(opts.branch_column, |this| {
-                this.child(div().w(px(BRANCH_W)).flex_none().child("Branch / Tag"))
-            })
+            .children(branch_th)
             .child(div().flex_1().child("Description"))
-            .when(opts.author, |this| {
-                this.child(div().w(px(AUTHOR_W)).flex_none().child("Author"))
-            })
-            .when(opts.date, |this| {
-                this.child(div().w(px(DATE_W)).flex_none().child("Date"))
-            })
-            .when(opts.sha, |this| {
-                this.child(div().w(px(SHA_W)).flex_none().child("Commit"))
-            })
+            .children(author_th)
+            .children(date_th)
+            .children(sha_th)
             .child(
                 div()
                     .absolute()
@@ -285,7 +329,7 @@ impl Spor {
                         let more = tags.len().saturating_sub(1);
                         let names: Vec<String> = tags.iter().map(|t| t.name.clone()).collect();
                         h_flex()
-                            .w(px(BRANCH_W))
+                            .w(branch_w)
                             .flex_none()
                             .pr_2()
                             .gap_1()
@@ -394,7 +438,7 @@ impl Spor {
                         .when(opts.author, |this| {
                             this.child(
                                 div()
-                                    .w(px(AUTHOR_W))
+                                    .w(author_w)
                                     .flex_none()
                                     .truncate()
                                     .pr_2()
@@ -406,7 +450,7 @@ impl Spor {
                         .when(opts.date, |this| {
                             this.child(
                                 div()
-                                    .w(px(DATE_W))
+                                    .w(date_w)
                                     .flex_none()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
@@ -416,7 +460,7 @@ impl Spor {
                         .when(opts.sha, |this| {
                             this.child(
                                 div()
-                                    .w(px(SHA_W))
+                                    .w(sha_w)
                                     .flex_none()
                                     .text_xs()
                                     .font_family(theme.mono_font_family.clone())
@@ -535,6 +579,37 @@ impl Spor {
                         })
                     })
             })
+    }
+
+    /// The grab strip on a column's inner edge (the branch column's right,
+    /// the others' left): drag to resize, double-click to reset.
+    fn column_handle(&self, column: Column, cx: &mut Context<Self>) -> impl IntoElement {
+        let save = |this: &mut Self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>| {
+            this.history_options.save()
+        };
+        div()
+            .id(SharedString::from(format!("column-handle-{column:?}")))
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .w(px(7.))
+            .map(|this| match column {
+                Column::Branch => this.right(px(-3.)),
+                _ => this.left(px(-4.)),
+            })
+            .cursor_col_resize()
+            .on_drag(ColumnDrag(column), |_, _, _, cx| cx.new(|_| EmptyView))
+            .on_mouse_up(MouseButton::Left, cx.listener(save))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(save))
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if event.click_count() >= 2 {
+                    let default = HistoryOptions::default().widths.get(column);
+                    this.history_options.widths.set(column, default);
+                    this.history_options.save();
+                    cx.notify();
+                }
+            }))
+            .debug_selector(move || format!("column-handle-{column:?}"))
     }
 
     fn update_history_options(&mut self, set: fn(&mut HistoryOptions), cx: &mut Context<Self>) {

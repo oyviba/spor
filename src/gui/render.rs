@@ -3,6 +3,7 @@
 
 use super::app::*;
 use super::assets::icon;
+use super::repos_panel::{REPOS_MAX_WIDTH, REPOS_MIN_WIDTH, REPOS_WIDTH};
 use super::support::plural;
 use super::theme::Appearance;
 use gpui_kit::component::{
@@ -148,6 +149,19 @@ impl Render for Spor {
         } else {
             self.render_welcome(window, cx)
         };
+        // The repository list gets a draggable edge; the rail stays fixed.
+        let main = match repos {
+            Some(repos) => h_resizable("spor-repos")
+                .child(
+                    resizable_panel()
+                        .size(px(REPOS_WIDTH))
+                        .size_range(px(REPOS_MIN_WIDTH)..px(REPOS_MAX_WIDTH))
+                        .child(repos),
+                )
+                .child(resizable_panel().child(main))
+                .into_any_element(),
+            None => main,
+        };
         root.child(self.render_title_bar(window, cx))
             .child(
                 h_flex()
@@ -155,7 +169,6 @@ impl Render for Spor {
                     .min_h_0()
                     .items_start()
                     .child(rail)
-                    .children(repos)
                     .child(div().flex_1().min_w_0().h_full().child(main)),
             )
             .when(self.repo.is_some(), |this| {

@@ -19,6 +19,9 @@ use gpui_kit::{
 use std::path::PathBuf;
 
 pub const REPOS_WIDTH: f32 = 220.;
+/// How far the repository list's edge can be dragged.
+pub const REPOS_MIN_WIDTH: f32 = 160.;
+pub const REPOS_MAX_WIDTH: f32 = 420.;
 
 impl Spor {
     pub(crate) fn render_repos_panel(
@@ -214,16 +217,13 @@ impl Spor {
                 .min_h_0()
                 .overflow_y_scroll()
                 .child(v_flex().py_1().gap_0p5().children(rows))
+                .debug_selector(|| "repository-list".into())
                 .into_any_element()
         };
 
         v_flex()
-            .flex_none()
-            .w(px(REPOS_WIDTH))
-            .h_full()
+            .size_full()
             .bg(theme.sidebar)
-            .border_r_1()
-            .border_color(theme.border)
             .child(header)
             .child(list)
             .into_any_element()
