@@ -35,6 +35,8 @@ enum Kind {
     Remote,
     Tag,
     Stash(usize),
+    /// A linked working tree; the item's key is its path.
+    Worktree,
 }
 
 impl Spor {
@@ -140,11 +142,7 @@ impl Spor {
                     .iter()
                     .enumerate()
                     .map(|(i, msg)| {
-                        // "WIP on main: abc123 subject" → "subject"
-                        let label = msg
-                            .split_once(": ")
-                            .map(|(_, rest)| rest.split_once(' ').map_or(rest, |(_, s)| s))
-                            .unwrap_or(msg);
+                        let label = stash_label(msg);
                         Item {
                             key: format!("stash@{{{i}}}"),
                             label: label.to_string(),
@@ -153,6 +151,29 @@ impl Spor {
                             trailing: format!("stash@{{{i}}}"),
                             kind: Kind::Stash(i),
                         }
+                    })
+                    .collect(),
+            ));
+        }
+
+        if !repo.worktrees.is_empty() {
+            sections.push((
+                "Worktrees".into(),
+                repo.worktrees
+                    .iter()
+                    .map(|w| Item {
+                        key: w.path.to_string_lossy().into_owned(),
+                        label: w.branch.clone().unwrap_or_else(|| {
+                            format!("detached {}", &w.head[..w.head.len().min(7)])
+                        }),
+                        icon: icon::FOLDER_GIT,
+                        current: false,
+                        trailing: w
+                            .path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        kind: Kind::Worktree,
                     })
                     .collect(),
             ));
@@ -169,6 +190,7 @@ impl Spor {
 
         let spor = Self::weak(cx);
         let remote_names: Rc<[String]> = repo.remotes.iter().cloned().collect();
+        let current: Rc<Option<String>> = Rc::new(repo.tracking.branch.clone());
         let mut list = v_flex().py_1();
         if filtering && sections.is_empty() {
             list = list.child(
@@ -199,6 +221,7 @@ impl Spor {
                     item,
                     selected,
                     remote_names.clone(),
+                    current.clone(),
                     spor.clone(),
                     cx,
                 ));
@@ -260,6 +283,18 @@ impl Spor {
     }
 }
 
+/// "WIP on main: abc123 subject" → "subject"; a stash saved with a
+/// message, "On main: message" → "message".
+fn stash_label(msg: &str) -> &str {
+    match msg.split_once(": ") {
+        Some((head, rest)) if head.starts_with("WIP on ") => {
+            rest.split_once(' ').map_or(rest, |(_, subject)| subject)
+        }
+        Some((_, rest)) => rest,
+        None => msg,
+    }
+}
+
 /// Every word of the search appears in the item's name — `origin/fix`
 /// finds `fix-login` on origin, `login fix` finds `fix/login`.
 fn matches(item: &Item, query: &str) -> bool {
@@ -271,6 +306,7 @@ fn render_item(
     item: Item,
     selected: bool,
     remotes: Rc<[String]>,
+    current: Rc<Option<String>>,
     spor: gpui_kit::WeakEntity<Spor>,
     cx: &mut App,
 ) -> AnyElement {
@@ -288,6 +324,10 @@ fn render_item(
             let _ = spor.update(cx, |this, cx| match item.kind {
                 Kind::Stash(i) if event.click_count() >= 2 => this.apply_stash(i, window, cx),
                 Kind::Stash(_) => {}
+                Kind::Worktree if event.click_count() >= 2 => {
+                    this.open_repo(std::path::Path::new(&item.key), window, cx)
+                }
+                Kind::Worktree => {}
                 Kind::Local | Kind::Remote if event.click_count() >= 2 && !item.current => {
                     this.checkout(&item.key, window, cx)
                 }
@@ -344,18 +384,64 @@ fn render_item(
             };
             let item = menu_item.clone();
             match item.kind {
-                Kind::Stash(i) => menu.item(act(
-                    "Apply and Remove".into(),
-                    Rc::new(move |this, w, cx| this.apply_stash(i, w, cx)),
-                )),
+                Kind::Stash(i) => menu
+                    .item(act(
+                        "Apply and Remove".into(),
+                        Rc::new(move |this, w, cx| this.apply_stash(i, w, cx)),
+                    ))
+                    .item(act(
+                        "Apply and Keep".into(),
+                        Rc::new(move |this, w, cx| this.apply_stash_keep(i, w, cx)),
+                    ))
+                    .separator()
+                    .item(act(
+                        "Delete Stash".into(),
+                        Rc::new(move |this, w, cx| this.drop_stash(i, w, cx)),
+                    )),
+                Kind::Worktree => {
+                    let (open, remove, copy) =
+                        (item.key.clone(), item.key.clone(), item.key.clone());
+                    menu.item(act(
+                        "Open".into(),
+                        Rc::new(move |this, w, cx| {
+                            this.open_repo(std::path::Path::new(&open), w, cx)
+                        }),
+                    ))
+                    .item(act(
+                        "Copy Path".into(),
+                        Rc::new(move |this, w, cx| this.copy(copy.clone(), "Path", w, cx)),
+                    ))
+                    .separator()
+                    .item(act(
+                        "Remove Working Tree…".into(),
+                        Rc::new(move |this, w, cx| {
+                            this.remove_worktree(remove.clone().into(), w, cx)
+                        }),
+                    ))
+                }
                 kind => {
                     let mut menu = menu;
-                    if matches!(kind, Kind::Local | Kind::Remote) && !item.current {
+                    let branch = matches!(kind, Kind::Local | Kind::Remote);
+                    if branch && !item.current {
                         let key = item.key.clone();
                         menu = menu.item(act(
                             format!("Check Out {}", item.label),
                             Rc::new(move |this, w, cx| this.checkout(&key, w, cx)),
                         ));
+                        if let Some(current) = current.as_ref() {
+                            let (merge, rebase) = (item.key.clone(), item.key.clone());
+                            menu = menu
+                                .item(act(
+                                    format!("Merge {} into {current}", item.label),
+                                    Rc::new(move |this, w, cx| {
+                                        this.merge_into_current(&merge, w, cx)
+                                    }),
+                                ))
+                                .item(act(
+                                    format!("Rebase {current} onto {}", item.label),
+                                    Rc::new(move |this, w, cx| this.rebase_onto(&rebase, w, cx)),
+                                ));
+                        }
                     }
                     let key = item.key.clone();
                     let reveal = item.key.clone();
@@ -382,6 +468,28 @@ fn render_item(
                         "Copy Name".into(),
                         Rc::new(move |this, w, cx| this.copy(label.clone(), "Name", w, cx)),
                     ))
+                    .when(kind == Kind::Local, |menu| {
+                        let (rename, delete) = (item.key.clone(), item.key.clone());
+                        let menu = menu.separator().item(act(
+                            "Rename…".into(),
+                            Rc::new(move |this, w, cx| this.rename_branch(&rename, w, cx)),
+                        ));
+                        if item.current {
+                            menu
+                        } else {
+                            menu.item(act(
+                                "Delete Branch".into(),
+                                Rc::new(move |this, w, cx| this.delete_branch(&delete, w, cx)),
+                            ))
+                        }
+                    })
+                    .when(kind == Kind::Remote, |menu| {
+                        let full = item.key.clone();
+                        menu.separator().item(act(
+                            "Delete from Remote…".into(),
+                            Rc::new(move |this, w, cx| this.delete_remote_branch(&full, w, cx)),
+                        ))
+                    })
                     .when(kind == Kind::Tag, |menu| {
                         let name = item.label.clone();
                         let mut menu = menu.separator().item(act(
@@ -406,4 +514,17 @@ fn render_item(
             }
         })
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn stash_labels() {
+        assert_eq!(super::stash_label("WIP on main: abc123 Fix it"), "Fix it");
+        assert_eq!(
+            super::stash_label("On main: half-done edits"),
+            "half-done edits"
+        );
+        assert_eq!(super::stash_label("odd"), "odd");
+    }
 }

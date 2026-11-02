@@ -24,6 +24,8 @@ use std::rc::Rc;
 enum Row {
     Header(&'static str, usize),
     Entry(Change),
+    /// A file with unresolved conflicts: clicking opens the resolver.
+    Conflict(Change),
 }
 
 /// The color Zed gives a file name for its status.
@@ -90,9 +92,15 @@ impl Spor {
         let has_remote = !repo.remotes.is_empty();
         // A partly staged file stays under Unstaged, with a mixed checkbox:
         // clicking it stages the rest.
+        let (conflicts, changes_left): (Vec<Change>, Vec<Change>) =
+            changes.iter().cloned().partition(|c| c.conflicted);
         let (staged_rows, unstaged_rows): (Vec<Change>, Vec<Change>) =
-            changes.iter().cloned().partition(|c| c.included());
+            changes_left.into_iter().partition(|c| c.included());
         let mut rows = Vec::new();
+        if !conflicts.is_empty() {
+            rows.push(Row::Header("Conflicts", conflicts.len()));
+            rows.extend(conflicts.into_iter().map(Row::Conflict));
+        }
         if !staged_rows.is_empty() {
             rows.push(Row::Header("Staged", staged_rows.len()));
             rows.extend(staged_rows.into_iter().map(Row::Entry));
@@ -107,6 +115,11 @@ impl Spor {
         let job = self.job;
         let sync_label = self.sync_label();
         let behind = repo.tracking.behind;
+        let amend = self.amend;
+        let has_commits = !repo.rows.is_empty();
+        // Amending a commit that's already on the remote rewrites it there
+        // too once pushed (with force).
+        let amend_published = repo.tracking.upstream.is_some() && repo.tracking.ahead == 0;
 
         let header = h_flex()
             .h(px(36.))
@@ -160,6 +173,10 @@ impl Spor {
                         menu.item(item("Fetch", Rc::new(|this, w, cx| this.fetch(w, cx))))
                             .item(item("Pull", Rc::new(|this, w, cx| this.pull(w, cx))))
                             .item(item("Push", Rc::new(|this, w, cx| this.push(w, cx))))
+                            .item(item(
+                                "Pull with Rebase",
+                                Rc::new(|this, w, cx| this.pull_rebase(w, cx)),
+                            ))
                             .separator()
                             .item(item(
                                 "Open Pull Request",
@@ -167,8 +184,8 @@ impl Spor {
                             ))
                             .separator()
                             .item(item(
-                                "Stash All Changes",
-                                Rc::new(|this, w, cx| this.stash(w, cx)),
+                                "Stash Changes…",
+                                Rc::new(|this, w, cx| this.stash_with_message(w, cx)),
                             ))
                             .item(item(
                                 "Discard All Changes",
@@ -217,11 +234,12 @@ impl Spor {
                 .into_any_element()
         };
 
-        let can_commit = staged > 0 && !message_empty;
-        let commit_label = match staged {
-            0 => "Commit".to_string(),
-            1 => "Commit 1 File".to_string(),
-            n => format!("Commit {n} Files"),
+        let can_commit = !message_empty && (staged > 0 || amend);
+        let commit_label = match (amend, staged) {
+            (true, _) => "Amend Last Commit".to_string(),
+            (false, 0) => "Commit".to_string(),
+            (false, 1) => "Commit 1 File".to_string(),
+            (false, n) => format!("Commit {n} Files"),
         };
         let footer = v_flex()
             .flex_none()
@@ -256,13 +274,31 @@ impl Spor {
                         )
                     })
                     .child(div().flex_1())
+                    .when(has_commits, |this| {
+                        this.child(
+                            gpui_kit::component::checkbox::Checkbox::new("amend")
+                                .label("Amend")
+                                .checked(amend)
+                                .small()
+                                .tooltip(if amend_published {
+                                    "The last commit is already pushed — amending it means a force push"
+                                } else {
+                                    "Replace the last commit with this message and what's staged"
+                                })
+                                .on_click(cx.listener(|this, _: &bool, window, cx| {
+                                    this.toggle_amend(window, cx)
+                                })),
+                        )
+                    })
                     .child(
                         Button::new("commit")
                             .primary()
                             .small()
                             .label(commit_label)
                             .disabled(!can_commit)
-                            .tooltip(if staged == 0 {
+                            .tooltip(if amend {
+                                "Replace the last commit (⌘↩) — ⌘Z puts it back"
+                            } else if staged == 0 {
                                 "Click files to stage them for the commit"
                             } else if message_empty {
                                 "Write a commit message first"
@@ -297,6 +333,7 @@ fn render_row(row: &Row, ix: usize, spor: gpui_kit::WeakEntity<Spor>, cx: &mut A
             .child(div().font_medium().child(*title))
             .child(div().opacity(0.7).child(count.to_string()))
             .into_any_element(),
+        Row::Conflict(change) => render_conflict(change, spor, cx),
         Row::Entry(change) => {
             let (name, dir) = match change.path.rsplit_once('/') {
                 Some((dir, name)) => (name.to_string(), dir.to_string()),
@@ -400,6 +437,7 @@ fn render_row(row: &Row, ix: usize, spor: gpui_kit::WeakEntity<Spor>, cx: &mut A
                     let (c1, c2, c3) = (change.clone(), change.clone(), change.clone());
                     let path = change.path.clone();
                     let show_path = path.clone();
+                    let history_path = path.clone();
                     let mut menu = menu
                         .item(act(
                             if change.included() {
@@ -421,6 +459,14 @@ fn render_row(row: &Row, ix: usize, spor: gpui_kit::WeakEntity<Spor>, cx: &mut A
                             }),
                         ));
                     }
+                    if !change.untracked {
+                        menu = menu.item(act(
+                            "Show File History".into(),
+                            Rc::new(move |this, w, cx| {
+                                this.show_file_history(&history_path, w, cx)
+                            }),
+                        ));
+                    }
                     let copy_path = path.clone();
                     menu.separator()
                         .item(act(
@@ -439,4 +485,93 @@ fn render_row(row: &Row, ix: usize, spor: gpui_kit::WeakEntity<Spor>, cx: &mut A
                 .into_any_element()
         }
     }
+}
+
+fn render_conflict(change: &Change, spor: gpui_kit::WeakEntity<Spor>, cx: &mut App) -> AnyElement {
+    let theme = cx.theme().clone();
+    let (name, dir) = match change.path.rsplit_once('/') {
+        Some((dir, name)) => (name.to_string(), dir.to_string()),
+        None => (change.path.clone(), String::new()),
+    };
+    let open = {
+        let spor = spor.clone();
+        let path = change.path.clone();
+        move |_: &gpui_kit::ClickEvent, window: &mut Window, cx: &mut App| {
+            let _ = spor.update(cx, |this, cx| this.open_conflict(&path, window, cx));
+        }
+    };
+    let menu_path = change.path.clone();
+    h_flex()
+        .id(SharedString::from(format!("git-conflict-{}", change.path)))
+        .w_full()
+        .h(px(26.))
+        .px_3()
+        .gap_2()
+        .text_sm()
+        .cursor_pointer()
+        .hover(|this| this.bg(theme.list_hover))
+        .on_click(open)
+        .child(
+            Icon::empty()
+                .path(icon::GIT_MERGE)
+                .small()
+                .text_color(theme.red),
+        )
+        .child(
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1p5()
+                .child(div().flex_none().text_color(theme.red).child(name))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(dir),
+                ),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_xs()
+                .font_family(theme.mono_font_family.clone())
+                .text_color(theme.red)
+                .child("!"),
+        )
+        .context_menu(move |menu, _, _| {
+            let act = |label: &'static str, f: SporAction| {
+                let spor = spor.clone();
+                PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                    let f = f.clone();
+                    let _ = spor.update(cx, |this, cx| f(this, window, cx));
+                })
+            };
+            let p = menu_path.clone();
+            let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p);
+            menu.item(act(
+                "Resolve Conflicts…",
+                Rc::new(move |this, w, cx| this.open_conflict(&p1, w, cx)),
+            ))
+            .separator()
+            .item(act(
+                "Use Current Version",
+                Rc::new(move |this, w, cx| {
+                    this.resolve_file(&p2, spor::git::ConflictSide::Ours, w, cx)
+                }),
+            ))
+            .item(act(
+                "Use Incoming Version",
+                Rc::new(move |this, w, cx| {
+                    this.resolve_file(&p3, spor::git::ConflictSide::Theirs, w, cx)
+                }),
+            ))
+            .separator()
+            .item(act(
+                "Mark Resolved",
+                Rc::new(move |this, w, cx| this.mark_resolved(&p4, w, cx)),
+            ))
+        })
+        .into_any_element()
 }

@@ -9,6 +9,7 @@
 //! Uncommitted Changes and History tabs (and the PR or run you opened), and
 //! a status bar that toggles the panels.
 
+mod actions;
 mod app;
 mod askpass;
 mod assets;

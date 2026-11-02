@@ -129,6 +129,10 @@ pub struct Snapshot {
     pub tracking: TrackingInfo,
     pub remotes: Vec<String>,
     pub branches: Vec<Branch>,
+    /// A merge, rebase, cherry-pick or revert stopped half-way.
+    pub operation: Option<git::Operation>,
+    /// Linked working trees besides this one.
+    pub worktrees: Vec<git::Worktree>,
     /// Stash entries, newest first, as their messages.
     pub stashes: Vec<String>,
     /// The branch PRs target: origin's HEAD, else main/master/trunk.
@@ -173,6 +177,13 @@ impl Snapshot {
         branches.sort_by_key(|b| b.name.to_lowercase());
         Ok(Self {
             root: root.to_path_buf(),
+            operation: git.operation(),
+            worktrees: git
+                .worktrees()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|w| !same_dir(&w.path, root))
+                .collect(),
             name,
             rows,
             ref_rows,
@@ -185,6 +196,11 @@ impl Snapshot {
             default_branch: git.default_base_branch(),
             git,
         })
+    }
+
+    /// Files with unresolved conflicts.
+    pub fn conflicted(&self) -> Vec<&Change> {
+        self.changes.iter().filter(|c| c.conflicted).collect()
     }
 
     pub fn head_row(&self) -> Option<usize> {
@@ -216,6 +232,28 @@ impl Snapshot {
         let (remote, rest) = name.split_once('/')?;
         self.remotes.iter().any(|r| r == remote).then_some(rest)
     }
+}
+
+/// Do two paths name the same directory (one may be a symlink, as /tmp is
+/// on macOS)?
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// One side of the uncommitted changes, for the Unstaged and Staged views.
+pub fn side_files(git: &git::Repo, kind: git::DiffKind, changes: &[Change]) -> Vec<DiffFile> {
+    let untracked: Vec<String> = changes
+        .iter()
+        .filter(|c| c.untracked)
+        .map(|c| c.path.clone())
+        .collect();
+    git.patch(kind, &untracked)
+        .ok()
+        .and_then(|patch| DiffFile::parse(&patch).ok())
+        .unwrap_or_default()
 }
 
 /// Everything uncommitted, parsed into diff files for display.

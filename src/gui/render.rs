@@ -121,7 +121,50 @@ impl Render for Spor {
             .on_action(cx.listener(|this, _: &OpenPullRequest, window, cx| {
                 this.open_pull_request(window, cx)
             }))
-            .on_action(cx.listener(|this, _: &StashChanges, window, cx| this.stash(window, cx)));
+            .on_action(
+                cx.listener(|this, _: &StashChanges, window, cx| {
+                    this.stash_with_message(window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &SearchCommits, window, cx| this.focus_search(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &PullRebase, window, cx| this.pull_rebase(window, cx)))
+            .on_action(cx.listener(|this, _: &ContinueOperation, window, cx| {
+                this.continue_operation(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &AbortOperation, window, cx| {
+                    this.abort_operation(window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &ToggleAmend, window, cx| this.toggle_amend(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NewTag, window, cx| {
+                if let Some(sha) = this.selected_sha() {
+                    this.new_tag(sha, window, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &CherryPickSelected, window, cx| {
+                if let Some(sha) = this.selected_sha() {
+                    this.cherry_pick(&sha, window, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &RevertSelected, window, cx| {
+                if let Some(sha) = this.selected_sha() {
+                    this.revert(&sha, window, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &StageLines, window, cx| {
+                this.apply_selected_lines(spor::git::LineAction::Stage, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &UnstageLines, window, cx| {
+                this.apply_selected_lines(spor::git::LineAction::Unstage, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DiscardLines, window, cx| {
+                this.apply_selected_lines(spor::git::LineAction::Discard, window, cx)
+            }));
         macro_rules! workspace_keys {
             ($root:expr, $($action:ident => $ix:expr),*) => {
                 $root$(.on_action(cx.listener(|this, _: &$action, window, cx| {
@@ -523,13 +566,14 @@ impl Spor {
                 || Some("Run".to_string()),
                 |d| Some(format!("{} #{}", d.run.workflow, d.run.number)),
             ),
-            _ => None,
+            // A rebase being planned keeps its tab until it's run or cancelled.
+            _ => self.rebase.as_ref().map(|d| format!("Rebase {}", d.branch)),
         }
         .map(|label| {
-            let path = if self.tab == Tab::Pull {
-                icon::GIT_PULL_REQUEST
-            } else {
-                icon::ACTIONS
+            let path = match self.tab {
+                Tab::Pull => icon::GIT_PULL_REQUEST,
+                Tab::Run => icon::ACTIONS,
+                _ => icon::GIT_BRANCH,
             };
             let label: String = if label.chars().count() > 48 {
                 label.chars().take(47).chain(['…']).collect()
@@ -543,14 +587,17 @@ impl Spor {
                         .xsmall()
                         .icon(IconName::Close)
                         .tooltip("Close")
-                        .on_click(cx.listener(|this, _, _, cx| this.close_page(cx))),
+                        .on_click(cx.listener(|this, _, _, cx| match this.tab {
+                            Tab::Pull | Tab::Run => this.close_page(cx),
+                            _ => this.close_rebase(cx),
+                        })),
                 ),
             )
         });
         let selected = match self.tab {
             Tab::Changes => 0,
             Tab::History => 1,
-            Tab::Pull | Tab::Run => 2,
+            Tab::Pull | Tab::Run | Tab::Rebase => 2,
         };
         let tabs = TabBar::new("center-tabs")
             .child(
@@ -572,19 +619,25 @@ impl Spor {
                         this.tab = Tab::History;
                         this.history_focus.focus(window, cx);
                     }
+                    2 if this.rebase.is_some() && !matches!(this.tab, Tab::Pull | Tab::Run) => {
+                        this.tab = Tab::Rebase
+                    }
                     _ => {}
                 }
                 cx.notify();
             }));
+        let banner = self.render_operation_banner(cx);
         v_flex()
             .size_full()
             .min_w_0()
             .child(tabs)
+            .children(banner)
             .child(div().flex_1().min_h_0().child(match self.tab {
                 Tab::Changes => self.render_changes(window, cx),
                 Tab::History => self.render_history(window, cx),
                 Tab::Pull => self.render_pull_page(window, cx),
                 Tab::Run => self.render_run_page(window, cx),
+                Tab::Rebase => self.render_rebase(window, cx),
             }))
             .into_any_element()
     }

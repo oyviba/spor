@@ -401,6 +401,14 @@ impl Repo {
         self.succeeds(&["merge-base", "--is-ancestor", ancestor, descendant])
     }
 
+    /// Are there merge commits on HEAD after `base`? Rewriting that range
+    /// would flatten them.
+    pub fn has_merges_since(&self, base: &str) -> bool {
+        let range = format!("{base}..HEAD");
+        self.run_ok(&["rev-list", "--merges", "-n1", &range])
+            .is_ok_and(|out| !out.trim().is_empty())
+    }
+
     /// Commits on HEAD that `base` doesn't have, oldest first — what a
     /// rebase onto `base` would replay.
     pub fn commits_since(&self, base: &str) -> Result<Vec<Commit>, String> {
@@ -464,12 +472,24 @@ impl Repo {
 
     /// One side of the uncommitted changes: index → working tree (with
     /// untracked files as new), or HEAD → index.
+    /// Files with conflicts are left out: git shows them in its combined
+    /// format, which isn't a patch that can be applied.
     pub fn patch(&self, kind: DiffKind, untracked: &[String]) -> Result<String, String> {
         let mut args = vec!["diff"];
         args.extend(PATCH_FLAGS);
         match kind {
             DiffKind::Unstaged => {
+                let excludes: Vec<String> = self
+                    .conflicts()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|p| format!(":(exclude,literal){p}"))
+                    .collect();
                 args.push("--");
+                if !excludes.is_empty() {
+                    args.push(".");
+                    args.extend(excludes.iter().map(String::as_str));
+                }
                 let mut patch = self.run_ok(&args)?;
                 patch.push_str(&self.untracked_patch(untracked));
                 Ok(patch)

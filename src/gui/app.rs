@@ -3,6 +3,7 @@
 //! the status bar), a center pane with Changes and History tabs, and a
 //! status bar. Everything git-related the views trigger lives here.
 
+use super::actions::{ChangesMode, RebaseDraft};
 use super::askpass;
 use super::assets::icon;
 use super::history_options::HistoryOptions;
@@ -14,7 +15,7 @@ use super::theme::{self, Appearance};
 use super::workspaces::Workspaces;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
-    diff::{DiffMode, DiffState},
+    diff::{DiffEvent, DiffMode, DiffState},
     input::{InputState, TextareaState},
     notification::Notification,
     ActiveTheme as _, Sizable as _, WindowExt as _,
@@ -25,7 +26,7 @@ use gpui_kit::{
     PathPromptOptions, ScrollStrategy, SharedString, StatefulInteractiveElement as _, Styled as _,
     Subscription, Task, UniformListScrollHandle, WeakEntity, Window,
 };
-use spor::git::{self, CommitDetails, StatusEntry};
+use spor::git::{self, AppliedPatch, CommitDetails, ResetMode, StatusEntry};
 use spor::remote::{self, PrInfo};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -70,6 +71,19 @@ actions!(
         Push,
         OpenPullRequest,
         StashChanges,
+        SearchCommits,
+        NextMatch,
+        PreviousMatch,
+        PullRebase,
+        ContinueOperation,
+        AbortOperation,
+        ToggleAmend,
+        NewTag,
+        CherryPickSelected,
+        RevertSelected,
+        StageLines,
+        UnstageLines,
+        DiscardLines,
         Workspace1,
         Workspace2,
         Workspace3,
@@ -111,6 +125,9 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-7", Workspace7, Some("Spor")),
         KeyBinding::new("secondary-8", Workspace8, Some("Spor")),
         KeyBinding::new("secondary-9", Workspace9, Some("Spor")),
+        // Step through History's search matches from the search field.
+        KeyBinding::new("enter", NextMatch, Some("HistorySearch > Input")),
+        KeyBinding::new("shift-enter", PreviousMatch, Some("HistorySearch > Input")),
     ]);
     super::keymap::init(cx);
 }
@@ -123,6 +140,8 @@ pub enum Tab {
     Pull,
     /// An Actions run opened from the dock or a PR's checks.
     Run,
+    /// An interactive rebase being planned.
+    Rebase,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -196,11 +215,35 @@ pub enum Undo {
         hash: String,
         message: String,
     },
-    /// Move `branch` back to where it was before a merge.
-    Merge {
+    /// Move `branch` back to where it was before a merge, rebase,
+    /// cherry-pick, revert or reset.
+    Reset {
         branch: String,
         before: String,
+        mode: ResetMode,
+        /// What the notification says once it's done, e.g. "undone".
+        label: String,
     },
+    /// Put back the commit an amend replaced.
+    Amend {
+        before: String,
+        after: String,
+    },
+    /// Take back lines staged, unstaged or discarded.
+    Patch(AppliedPatch),
+    /// Recreate a deleted branch.
+    Branch {
+        name: String,
+        sha: String,
+    },
+    Rename {
+        old: String,
+        new: String,
+    },
+    /// Delete a tag that was just created.
+    NewTag(String),
+    /// Put a deleted stash back.
+    Stash(git::Stash),
     /// Put a deleted tag back where it pointed.
     Tag {
         name: String,
@@ -278,7 +321,30 @@ pub struct Spor {
     /// the same remote refs at once make one of them fail.
     auto_fetching: bool,
     pub(crate) appearance: Appearance,
-    undo: Vec<(String, Undo)>,
+    pub(crate) undo: Vec<(String, Undo)>,
+    /// The next commit replaces the last one.
+    pub(crate) amend: bool,
+    pub(crate) changes_mode: ChangesMode,
+    /// The lines last selected in the Changes diff. The diff forgets its
+    /// selection as soon as anything else is clicked — the Stage Lines
+    /// button included — so it's kept here until the diff reloads.
+    pub(crate) line_selection: Option<gpui_kit::component::diff::DiffLineRange>,
+    /// The conflicted file being resolved in the Changes tab, if any.
+    pub(crate) conflict_path: Option<String>,
+    pub(crate) conflict_diff: Entity<DiffState>,
+    /// An interactive rebase being planned, and its commits as they were.
+    pub(crate) rebase: Option<RebaseDraft>,
+    pub(crate) rebase_original: Vec<String>,
+    pub(crate) rebase_message: Entity<TextareaState>,
+    /// A second, free-text field for dialogs (tag and stash messages).
+    pub(crate) note: Entity<InputState>,
+    pub(crate) history_search: Entity<InputState>,
+    pub(crate) search_query: String,
+    pub(crate) search_hits: std::collections::HashSet<String>,
+    pub(crate) _search_task: Task<()>,
+    /// A rewrite stopped on conflicts: what to say and where to undo to
+    /// once it's continued to the end.
+    pub(crate) pending_rewrite: Option<(String, (String, String))>,
     fingerprint: Option<String>,
     _job_task: Task<()>,
     _pr_task: Task<()>,
@@ -310,6 +376,17 @@ impl Spor {
         let workspace_name =
             cx.new(|cx| InputState::new(window, cx).placeholder("Work, Side projects, …"));
         let credential = cx.new(|cx| InputState::new(window, cx));
+        let conflict_diff = cx.new(|cx| DiffState::new([], cx).with_mode(diff_mode));
+        let rebase_message = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("Commit message")
+                .auto_grow(3, 8)
+        });
+        let note = cx.new(|cx| InputState::new(window, cx).placeholder("Message (optional)"));
+        let history_search = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Search commits — message, author, SHA or path:file")
+        });
         let history_focus = cx.focus_handle().tab_stop(true);
         let root_focus = cx.focus_handle();
         root_focus.focus(window, cx);
@@ -323,6 +400,20 @@ impl Spor {
             }),
             cx.observe(&message, |_, _, cx| cx.notify()),
             cx.observe(&branch_filter, |_, _, cx| cx.notify()),
+            cx.observe(&history_search, |this, _, cx| this.run_search(cx)),
+            cx.observe(&rebase_message, |this, _, cx| this.sync_rebase_message(cx)),
+            // Selections and conflict choices change which buttons apply.
+            cx.observe(&changes_diff, |_, _, cx| cx.notify()),
+            cx.subscribe(&changes_diff, |this, _, event: &DiffEvent, cx| {
+                match event {
+                    DiffEvent::SelectionChanged(Some(range)) | DiffEvent::SelectionEnded(range) => {
+                        this.line_selection = Some(range.clone())
+                    }
+                    _ => {}
+                }
+                cx.notify();
+            }),
+            cx.observe(&conflict_diff, |_, _, cx| cx.notify()),
         ];
 
         let mut this = Self {
@@ -356,6 +447,20 @@ impl Spor {
             auto_fetching: false,
             appearance,
             undo: Vec::new(),
+            amend: false,
+            changes_mode: ChangesMode::All,
+            line_selection: None,
+            conflict_path: None,
+            conflict_diff,
+            rebase: None,
+            rebase_original: Vec::new(),
+            rebase_message,
+            note,
+            history_search,
+            search_query: String::new(),
+            search_hits: Default::default(),
+            _search_task: Task::ready(()),
+            pending_rewrite: None,
             fingerprint: None,
             _job_task: Task::ready(()),
             _pr_task: Task::ready(()),
@@ -394,7 +499,13 @@ impl Spor {
     }
 
     /// Record an undoable action and say what happened, with an Undo button.
-    fn did(&mut self, text: String, undo: Undo, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn did(
+        &mut self,
+        text: String,
+        undo: Undo,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.undo.push((text.clone(), undo));
         if self.undo.len() > 50 {
             self.undo.remove(0);
@@ -438,6 +549,17 @@ impl Spor {
                 self.commit = None;
                 self.selected = None;
                 self.prs.clear();
+                self.amend = false;
+                self.conflict_path = None;
+                self.rebase = None;
+                self.pending_rewrite = None;
+                self.search_query.clear();
+                self.search_hits.clear();
+                self.history_search
+                    .update(cx, |state, cx| state.set_value("", window, cx));
+                if self.tab == Tab::Rebase {
+                    self.tab = Tab::History;
+                }
                 self.message
                     .update(cx, |state, cx| state.set_value("", window, cx));
                 self.tab = if dirty { Tab::Changes } else { Tab::History };
@@ -698,11 +820,19 @@ impl Spor {
         cx.notify();
     }
 
-    fn load_changes_diff(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn load_changes_diff(&mut self, cx: &mut Context<Self>) {
+        let mode = self.changes_mode;
+        self.line_selection = None;
         let files = self
             .repo
             .as_ref()
-            .map(|r| repo::uncommitted_files(&r.git, &r.changes))
+            .map(|r| match mode {
+                ChangesMode::All => repo::uncommitted_files(&r.git, &r.changes),
+                ChangesMode::Unstaged => {
+                    repo::side_files(&r.git, git::DiffKind::Unstaged, &r.changes)
+                }
+                ChangesMode::Staged => repo::side_files(&r.git, git::DiffKind::Staged, &r.changes),
+            })
             .unwrap_or_default();
         self.changes_diff
             .update(cx, |state, cx| state.set_files(files, cx));
@@ -1074,6 +1204,7 @@ impl Spor {
     /// Scroll Uncommitted Changes to a file's diff.
     pub(crate) fn show_change(&mut self, path: &str, cx: &mut Context<Self>) {
         self.tab = Tab::Changes;
+        self.conflict_path = None;
         self.changes_diff
             .update(cx, |state, cx| state.scroll_to_file(path, cx));
         cx.notify();
@@ -1160,6 +1291,9 @@ impl Spor {
     pub(crate) fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let message = self.message.read(cx).value().trim().to_string();
         let staged = self.repo.as_ref().map_or(0, |r| r.staged_count());
+        if self.amend {
+            return self.amend_commit(message, window, cx);
+        }
         if message.is_empty() || staged == 0 {
             return;
         }
@@ -1181,6 +1315,49 @@ impl Spor {
         }
     }
 
+    fn amend_commit(&mut self, message: String, window: &mut Window, cx: &mut Context<Self>) {
+        if message.is_empty() {
+            return;
+        }
+        let before = self.git().head_sha().unwrap_or_default();
+        match self.git().amend(Some(&message)) {
+            Ok(()) => {
+                let after = self.git().head_sha().unwrap_or_default();
+                self.amend = false;
+                self.message
+                    .update(cx, |state, cx| state.set_value("", window, cx));
+                self.did(
+                    format!("Amended “{}”", first_line(&message)),
+                    Undo::Amend { before, after },
+                    window,
+                    cx,
+                );
+                self.reload(window, cx);
+            }
+            Err(e) => self.error(format!("Amend failed: {}", first_line(&e)), window, cx),
+        }
+    }
+
+    /// Turn amending the last commit on or off. Turning it on starts the
+    /// message from the last commit's.
+    pub(crate) fn toggle_amend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.repo.as_ref().is_none_or(|r| r.rows.is_empty()) {
+            return;
+        }
+        self.amend = !self.amend;
+        let current = self.message.read(cx).value().trim().to_string();
+        if self.amend && current.is_empty() {
+            let last = self.git().head_message().unwrap_or_default();
+            self.message
+                .update(cx, |state, cx| state.set_value(last, window, cx));
+        } else if !self.amend && Some(current) == self.git().head_message().ok() {
+            self.message
+                .update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        self.dock = Some(DockPanel::Git);
+        cx.notify();
+    }
+
     /// Take back the most recent undoable action.
     pub(crate) fn undo_last(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((label, action)) = self.undo.pop() else {
@@ -1192,7 +1369,20 @@ impl Spor {
             }
             Undo::Restore(files) => format!("Restored {}", plural(files.len(), "file")),
             Undo::Uncommit { .. } => "Commit undone — its changes are staged again".into(),
-            Undo::Merge { branch, .. } => format!("Merge into {branch} undone"),
+            Undo::Reset {
+                branch,
+                label: note,
+                ..
+            } if note == "undone" => {
+                format!("Undid “{label}” — {branch} is back where it was")
+            }
+            Undo::Reset { label: note, .. } => note.clone(),
+            Undo::Amend { .. } => "Amend undone — the commit is back as it was".into(),
+            Undo::Patch(p) if !p.cached => "Discarded lines restored".into(),
+            Undo::Branch { name, .. } => format!("Restored branch {name}"),
+            Undo::Rename { old, .. } => format!("Renamed back to {old}"),
+            Undo::NewTag(name) => format!("Deleted tag {name}"),
+            Undo::Stash(_) => "Stash restored".into(),
             Undo::Tag { name, .. } => format!("Restored tag {name}"),
             _ => format!("Undid {label}"),
         };
@@ -1224,14 +1414,31 @@ impl Spor {
                     })
                 }
             }
-            Undo::Merge { branch, before } => {
+            Undo::Reset {
+                branch,
+                before,
+                mode,
+                ..
+            } => {
                 let current = self.repo.as_ref().and_then(|r| r.tracking.branch.clone());
                 if current.as_deref() != Some(branch.as_str()) {
                     Err(format!("switch back to {branch} first"))
                 } else {
-                    self.git().reset_keep(&before)
+                    self.git().reset(&before, mode)
                 }
             }
+            Undo::Amend { before, after } => {
+                if self.git().head_sha().ok().as_deref() != Some(after.as_str()) {
+                    Err("the branch has moved on since that amend".into())
+                } else {
+                    self.git().reset(&before, ResetMode::Soft)
+                }
+            }
+            Undo::Patch(p) => self.git().unapply(&p),
+            Undo::Branch { name, sha } => self.git().restore_branch(&name, &sha),
+            Undo::Rename { old, new } => self.git().rename_branch(&new, &old),
+            Undo::NewTag(name) => self.git().delete_tag(&name),
+            Undo::Stash(stash) => self.git().restore_stash(&stash),
             Undo::Tag { name, target } => self.git().restore_tag(&name, &target),
         };
         match result {
@@ -1323,16 +1530,6 @@ impl Spor {
                 self.reload(window, cx);
             }
             Err(e) => self.error(format!("Couldn't switch: {}", first_line(&e)), window, cx),
-        }
-    }
-
-    pub(crate) fn stash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.git().stash_push() {
-            Ok(()) => {
-                self.ok("Changes stashed", window, cx);
-                self.reload(window, cx);
-            }
-            Err(e) => self.error(format!("Couldn't stash: {}", first_line(&e)), window, cx),
         }
     }
 
@@ -1521,7 +1718,7 @@ impl Spor {
     /// so credentials come from a helper (the keychain, ssh-agent) and git
     /// fails rather than hanging. A background fetch already under way
     /// finishes first.
-    fn run_job(
+    pub(crate) fn run_job(
         &mut self,
         label: &'static str,
         window: &mut Window,
@@ -1555,11 +1752,34 @@ impl Spor {
                         // rewrite published history.
                         if matches!(label, "Sync" | "Push") {
                             this.undo.retain(|(_, u)| {
-                                !matches!(u, Undo::Uncommit { .. } | Undo::Merge { .. })
+                                !matches!(
+                                    u,
+                                    Undo::Uncommit { .. } | Undo::Reset { .. } | Undo::Amend { .. }
+                                )
                             });
                             window.remove_notification::<UndoNote>(cx);
                         }
                         this.ok(msg, window, cx);
+                    }
+                    Err(e) if e.contains("have diverged") => {
+                        let spor = cx.entity().downgrade();
+                        window.push_notification(
+                            Notification::warning(e)
+                                .autohide(false)
+                                .action(move |_, _, _| {
+                                    let spor = spor.clone();
+                                    Button::new("pull-rebase")
+                                        .label("Pull with Rebase")
+                                        .small()
+                                        .ghost()
+                                        .on_click(move |_, window, cx| {
+                                            let _ = spor.update(cx, |this, cx| {
+                                                this.pull_rebase(window, cx)
+                                            });
+                                        })
+                                }),
+                            cx,
+                        );
                     }
                     Err(e) => this.error(format!("{label} failed: {e}"), window, cx),
                 }
@@ -1768,9 +1988,11 @@ impl Spor {
         let shown = repo.without_remote(source).unwrap_or(source).to_string();
         match self.git().merge(source) {
             Ok(git::Outcome::Done) => {
-                let undo = Undo::Merge {
+                let undo = Undo::Reset {
                     branch: target.to_string(),
                     before,
+                    mode: ResetMode::Keep,
+                    label: format!("Merge into {target} undone"),
                 };
                 self.did(format!("Merged {shown} into {target}"), undo, window, cx);
                 self.tab = Tab::History;

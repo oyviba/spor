@@ -260,6 +260,7 @@ fn merge_conflict_resolve_and_continue() {
     assert_eq!(f.repo.continue_operation().unwrap(), Outcome::Done);
     assert_eq!(f.repo.operation(), None);
     assert_eq!(f.repo.parents("HEAD").unwrap().len(), 2);
+    assert!(f.repo.has_merges_since("HEAD~1"));
 }
 
 #[test]
@@ -330,6 +331,7 @@ fn interactive_rebase_rewrites_history() {
     let two = f.commit_file("two.txt", "2\n", "two");
     let three = f.commit_file("three.txt", "3\n", "three");
     let four = f.commit_file("four.txt", "4\n", "four");
+    assert!(!f.repo.has_merges_since(&base));
     let since = f.repo.commits_since(&base).unwrap();
     assert_eq!(since.len(), 4);
     assert_eq!(since[0].subject, "one");
@@ -461,4 +463,19 @@ impl WriteForTest for Repo {
     fn write_file_for_test(&self) {
         std::fs::write(self.path("dirty.txt"), "x\n").unwrap();
     }
+}
+
+#[test]
+fn unstaged_patch_leaves_out_conflicted_files() {
+    let f = fixture();
+    f.commit_file("other.txt", "1\n", "other");
+    conflicting_branches(&f);
+    assert!(matches!(
+        f.repo.merge("other").unwrap(),
+        Outcome::Conflicts(_)
+    ));
+    f.write("other.txt", "2\n");
+    let patch = f.repo.patch(DiffKind::Unstaged, &[]).unwrap();
+    assert!(patch.contains("other.txt"));
+    assert!(!patch.contains("f.txt"));
 }

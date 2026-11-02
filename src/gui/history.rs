@@ -14,11 +14,12 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     diff::Diff,
     h_flex,
+    input::Input,
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
     scroll::Scrollbar,
     tooltip::Tooltip,
-    v_flex, ActiveTheme as _, Icon, Sizable as _, StyledExt as _,
+    v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
 };
 use gpui_kit::{
     canvas, div, prelude::FluentBuilder as _, px, uniform_list, AnyElement, App, AppContext as _,
@@ -219,6 +220,11 @@ impl Spor {
         let graph_w = graph::width(repo.max_lanes, opts.lane_width.px());
         let selected = self.selected;
         let spor = Self::weak(cx);
+        let current_branch = Rc::new(repo.tracking.branch.clone());
+        // While searching, rows that don't match fade back.
+        let searching = !self.search_query.is_empty();
+        let hits = Rc::new(self.search_hits.clone());
+        let search_bar = self.render_search_bar(cx);
         let style = GraphStyle {
             background: theme.background,
             head: theme.primary,
@@ -280,6 +286,8 @@ impl Spor {
                     let menu_spor = spor.clone();
                     let drop_spor = spor.clone();
                     let menu_row = row.clone();
+                    let menu_branch = current_branch.clone();
+                    let dimmed = searching && !hits.contains(&row.commit.hash);
                     let hash = row.commit.hash.clone();
                     let labels = if opts.branch_column {
                         let more = tags.len().saturating_sub(1);
@@ -335,6 +343,7 @@ impl Spor {
                         .w_full()
                         .pr_3()
                         .text_sm()
+                        .when(dimmed, |this| this.opacity(0.35))
                         .when(is_selected, |this| this.bg(theme.list_active))
                         .when(!is_selected, |this| {
                             this.hover(|this| this.bg(theme.list_hover))
@@ -424,8 +433,15 @@ impl Spor {
                                     .child(row.commit.short.clone()),
                             )
                         })
-                        .context_menu(move |menu, _, _| {
-                            commit_menu(menu, &menu_row, menu_spor.clone())
+                        .context_menu(move |menu, window, cx| {
+                            commit_menu(
+                                menu,
+                                &menu_row,
+                                menu_branch.as_deref(),
+                                menu_spor.clone(),
+                                window,
+                                cx,
+                            )
                         })
                         .into_any_element()
                 })
@@ -436,6 +452,7 @@ impl Spor {
 
         v_flex()
             .size_full()
+            .child(search_bar)
             .child(header)
             .child(
                 div()
@@ -448,6 +465,79 @@ impl Spor {
                     .child(list)
                     .child(Scrollbar::vertical(&self.history_scroll)),
             )
+            .into_any_element()
+    }
+
+    /// The search field over the commit list, with the match count and
+    /// buttons to step through matches.
+    fn render_search_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let searching = !self.search_query.is_empty();
+        let matches = self.search_rows();
+        let position = self
+            .selected
+            .and_then(|s| matches.iter().position(|&m| m == s))
+            .map(|p| p + 1);
+        h_flex()
+            .h(px(34.))
+            .flex_none()
+            .px_2()
+            .gap_1()
+            .border_b_1()
+            .border_color(theme.border)
+            .key_context("HistorySearch")
+            .on_action(cx.listener(|this, _: &NextMatch, _, cx| this.next_match(1, cx)))
+            .on_action(cx.listener(|this, _: &PreviousMatch, _, cx| this.next_match(-1, cx)))
+            .child(
+                div().flex_1().child(
+                    Input::new(&self.history_search)
+                        .small()
+                        .prefix(
+                            Icon::new(IconName::Search)
+                                .xsmall()
+                                .text_color(theme.muted_foreground),
+                        )
+                        .cleanable(true),
+                ),
+            )
+            .when(searching, |this| {
+                this.child(
+                    div()
+                        .flex_none()
+                        .px_1()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(match (matches.len(), position) {
+                            (0, _) => "No matches".to_string(),
+                            (n, Some(p)) => format!("{p} of {n}"),
+                            (n, None) => plural(n, "match"),
+                        }),
+                )
+                .child(
+                    Button::new("search-prev")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::ChevronUp)
+                        .tooltip("Previous match (⇧↩)")
+                        .on_click(cx.listener(|this, _, _, cx| this.next_match(-1, cx))),
+                )
+                .child(
+                    Button::new("search-next")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::ChevronDown)
+                        .tooltip("Next match (↩)")
+                        .on_click(cx.listener(|this, _, _, cx| this.next_match(1, cx))),
+                )
+                .child(
+                    Button::new("search-clear")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Close)
+                        .tooltip("Clear search")
+                        .on_click(cx.listener(|this, _, w, cx| this.clear_search(w, cx))),
+                )
+            })
             .into_any_element()
     }
 
@@ -761,7 +851,10 @@ fn avatar_color(name: &str) -> Hsla {
 fn commit_menu(
     menu: gpui_kit::component::menu::PopupMenu,
     row: &GraphRow,
+    current: Option<&str>,
     spor: gpui_kit::WeakEntity<Spor>,
+    window: &mut Window,
+    cx: &mut Context<gpui_kit::component::menu::PopupMenu>,
 ) -> gpui_kit::component::menu::PopupMenu {
     type Act = Rc<dyn Fn(&mut Spor, &mut Window, &mut Context<Spor>)>;
     let act = |label: String, f: Act| {
@@ -772,6 +865,7 @@ fn commit_menu(
         })
     };
     let mut menu = menu;
+    let is_head = row.commit.head_ref.is_some();
     for r in row
         .commit
         .refs
@@ -787,16 +881,79 @@ fn commit_menu(
             Rc::new(move |this, w, cx| this.checkout(&name, w, cx)),
         ));
     }
-    let (hash, sha, subject) = (
-        row.commit.hash.clone(),
-        row.commit.hash.clone(),
-        row.commit.subject.clone(),
-    );
+    let hash = row.commit.hash.clone();
+    let h = |f: fn(&mut Spor, &str, &mut Window, &mut Context<Spor>)| -> Act {
+        let hash = hash.clone();
+        Rc::new(move |this, w, cx| f(this, &hash, w, cx))
+    };
+    if !is_head {
+        menu = menu.item(act(
+            "Check Out This Commit".into(),
+            h(|this, sha, w, cx| this.checkout_commit(sha, w, cx)),
+        ));
+    }
     menu = menu
         .item(act(
             "New Branch from Here…".into(),
-            Rc::new(move |this, w, cx| this.new_branch(Some(hash.clone()), w, cx)),
+            h(|this, sha, w, cx| this.new_branch(Some(sha.to_string()), w, cx)),
         ))
+        .item(act(
+            "New Tag Here…".into(),
+            h(|this, sha, w, cx| this.new_tag(sha.to_string(), w, cx)),
+        ));
+    if let Some(branch) = current {
+        menu = menu.separator();
+        if !is_head {
+            menu = menu
+                .item(act(
+                    format!("Cherry-pick onto {branch}"),
+                    h(|this, sha, w, cx| this.cherry_pick(sha, w, cx)),
+                ))
+                .item(act(
+                    format!("Rebase {branch} onto Here"),
+                    h(|this, sha, w, cx| this.rebase_onto(sha, w, cx)),
+                ));
+        }
+        menu = menu
+            .item(act(
+                "Revert Commit".into(),
+                h(|this, sha, w, cx| this.revert(sha, w, cx)),
+            ))
+            .item(act(
+                format!("Rewrite {branch} After Here…"),
+                h(|this, sha, w, cx| this.start_interactive_rebase(sha, w, cx)),
+            ));
+        if !is_head {
+            let branch = branch.to_string();
+            let hash = hash.clone();
+            let spor = spor.clone();
+            menu = menu.submenu(
+                format!("Reset {branch} to Here"),
+                window,
+                cx,
+                move |mut menu, _, _| {
+                    for (mode, label) in [
+                        (spor::git::ResetMode::Soft, "Soft — keep the changes staged"),
+                        (
+                            spor::git::ResetMode::Mixed,
+                            "Mixed — keep the changes, unstaged",
+                        ),
+                        (spor::git::ResetMode::Hard, "Hard — throw the changes away…"),
+                    ] {
+                        let (spor, hash) = (spor.clone(), hash.clone());
+                        menu =
+                            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                                let _ = spor
+                                    .update(cx, |this, cx| this.reset_to(&hash, mode, window, cx));
+                            }));
+                    }
+                    menu
+                },
+            );
+        }
+    }
+    let (sha, subject) = (row.commit.hash.clone(), row.commit.subject.clone());
+    menu = menu
         .separator()
         .item(act(
             "Copy Commit SHA".into(),
