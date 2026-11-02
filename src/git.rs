@@ -49,9 +49,13 @@ pub struct TrackingInfo {
     pub detached: bool,
 }
 
+/// Reads never take the index lock to refresh stat info, so they can't make
+/// a pull or commit running alongside fail with "index.lock: File exists".
+/// Writes still take every lock they need.
 fn run(args: &[&str]) -> Result<Output, String> {
     Command::new("git")
         .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .map_err(|e| format!("failed to run git: {e}"))
 }
