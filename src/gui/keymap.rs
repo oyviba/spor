@@ -513,7 +513,7 @@ impl Render for ShortcutsView {
                         this.child(
                             Button::new("reset-all-shortcuts")
                                 .ghost()
-                                .xsmall()
+                                .small()
                                 .label("Reset All")
                                 .on_click(cx.listener(|this, _, _, cx| this.reset_all(cx))),
                         )

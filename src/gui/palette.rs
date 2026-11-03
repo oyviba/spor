@@ -203,10 +203,10 @@ pub const SHORTCUTS: &[Shortcut] = &[
     cmd("View", "Search Commits", &["secondary-f"], || {
         Box::new(SearchCommits)
     }),
-    cmd("View", "Toggle Dock", &["secondary-b"], || {
+    cmd("View", "Toggle Sidebar", &["secondary-b"], || {
         Box::new(ToggleDock)
     }),
-    cmd("View", "Move Dock to the Other Side", &[], || {
+    cmd("View", "Move Sidebar to the Other Side", &[], || {
         Box::new(ToggleDockSide)
     }),
     cmd(

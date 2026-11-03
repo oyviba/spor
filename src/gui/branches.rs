@@ -233,17 +233,17 @@ impl Spor {
             .bg(theme.sidebar)
             .child(
                 h_flex()
-                    .h(px(36.))
+                    .h(px(44.))
                     .flex_none()
                     .px_3()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(div().text_sm().font_medium().child("Branches"))
+                    .child(div().text_sm().font_semibold().child("Branches"))
                     .child(div().flex_1())
                     .child(
                         gpui_kit::component::button::Button::new("new-branch")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::Plus)
                             .tooltip("New Branch… (⌘⇧N)")
                             .on_click(

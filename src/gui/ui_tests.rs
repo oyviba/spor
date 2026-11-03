@@ -5,7 +5,7 @@
 //! directory, and the tests take turns, because opening a repository changes
 //! the process's working directory.
 
-use super::app::{Spor, Tab, ToggleRepositories};
+use super::app::{DockPanel, Spor, Tab, ToggleRepositories};
 use super::history_options::{Column, HistoryOptions};
 use super::repos_panel::{REPOS_MIN_WIDTH, REPOS_WIDTH};
 use super::{app, support, theme};
@@ -212,7 +212,7 @@ fn history_columns_resize_by_dragging_and_reset_on_double_click(cx: &mut TestApp
     let repo = scratch_repo();
     let (mut cx, spor) = open(cx, &repo);
     spor.update(&mut cx, |spor, cx| {
-        spor.tab = Tab::History;
+        spor.set_tab(Tab::History);
         spor.history_options = HistoryOptions::default();
         cx.notify();
     });
@@ -245,4 +245,33 @@ fn history_columns_resize_by_dragging_and_reset_on_double_click(cx: &mut TestApp
     let reset = spor.read_with(&cx, |spor, _| spor.history_options.widths);
     assert_eq!(reset.author, before.author);
     assert_eq!(reset.branch, Column::Branch.range().1, "only that column");
+}
+
+#[gpui_kit::test]
+fn the_rail_switches_sidebar_and_center_together(cx: &mut TestAppContext) {
+    let _lock = isolate();
+    let repo = scratch_repo();
+    let (mut cx, spor) = open(cx, &repo);
+    let state = |cx: &mut VisualTestContext| spor.read_with(cx, |spor, _| (spor.tab, spor.dock));
+    assert_eq!(state(&mut cx), (Tab::Changes, Some(DockPanel::Git)));
+
+    // History brings its branch list along.
+    let history = bounds_of(&mut cx, "nav-history").center();
+    cx.simulate_click(history, Modifiers::none());
+    redraw(&mut cx);
+    assert_eq!(state(&mut cx), (Tab::History, Some(DockPanel::Branches)));
+
+    // Clicking the open section again hides the sidebar, keeping the view.
+    let history = bounds_of(&mut cx, "nav-history").center();
+    cx.simulate_click(history, Modifiers::none());
+    redraw(&mut cx);
+    assert_eq!(state(&mut cx), (Tab::History, None));
+
+    // A shortcut to a view brings its panel back with the sidebar shown.
+    cx.dispatch_action(app::ToggleDock);
+    redraw(&mut cx);
+    assert_eq!(state(&mut cx), (Tab::History, Some(DockPanel::Branches)));
+    cx.dispatch_action(app::ShowChanges);
+    redraw(&mut cx);
+    assert_eq!(state(&mut cx), (Tab::Changes, Some(DockPanel::Git)));
 }

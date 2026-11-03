@@ -1,21 +1,19 @@
-//! The window frame: title bar, the workspace rail and repository list, the
-//! dock + center split (the dock on either side), and the status bar.
+//! The window frame: title bar, the navigation rail and repository list,
+//! and the sidebar + center split (the sidebar on either side). The rail
+//! picks a section; its panel fills the sidebar and its view the center.
 
 use super::app::*;
 use super::assets::icon;
+use super::changes_view::empty_state;
 use super::repos_panel::{REPOS_MAX_WIDTH, REPOS_MIN_WIDTH, REPOS_WIDTH};
 use super::support::plural;
-use super::theme::Appearance;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     diff::DiffMode,
     h_flex,
     menu::{DropdownMenu as _, PopupMenuItem},
     resizable::{h_resizable, resizable_panel},
-    spinner::Spinner,
-    status_bar::StatusBar,
-    tab::{Tab as TabItem, TabBar},
-    v_flex, ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, TitleBar,
+    v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
 };
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, AnyElement, Context, ExternalPaths, Focusable as _,
@@ -39,7 +37,7 @@ impl Render for Spor {
             .on_action(cx.listener(|this, _: &ToggleDock, _, cx| {
                 this.dock = match this.dock {
                     Some(_) => None,
-                    None => Some(DockPanel::Git),
+                    None => Some(this.tab.panel()),
                 };
                 cx.notify();
             }))
@@ -48,15 +46,15 @@ impl Render for Spor {
                 cx.listener(|this, _: &ToggleRepositories, _, cx| this.toggle_repositories(cx)),
             )
             .on_action(cx.listener(|this, _: &ShowGitPanel, _, cx| {
-                this.dock = Some(DockPanel::Git);
+                this.set_dock(DockPanel::Git);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ShowBranches, _, cx| {
-                this.dock = Some(DockPanel::Branches);
+                this.set_dock(DockPanel::Branches);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &SearchBranches, window, cx| {
-                this.dock = Some(DockPanel::Branches);
+                this.set_dock(DockPanel::Branches);
                 this.branch_filter
                     .read(cx)
                     .focus_handle(cx)
@@ -64,11 +62,11 @@ impl Render for Spor {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ShowChanges, _, cx| {
-                this.tab = Tab::Changes;
+                this.set_tab(Tab::Changes);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ShowHistory, window, cx| {
-                this.tab = Tab::History;
+                this.set_tab(Tab::History);
                 this.history_focus.focus(window, cx);
                 cx.notify();
             }))
@@ -195,6 +193,11 @@ impl Render for Spor {
             self.render_welcome(window, cx)
         };
         // The repository list gets a draggable edge; the rail stays fixed.
+        let main = div()
+            .size_full()
+            .bg(cx.theme().background)
+            .child(main)
+            .into_any_element();
         let main = match repos {
             Some(repos) => h_resizable("spor-repos")
                 .child(
@@ -207,18 +210,14 @@ impl Render for Spor {
                 .into_any_element(),
             None => main,
         };
-        root.child(self.render_title_bar(window, cx))
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .items_start()
-                    .child(rail)
-                    .child(div().flex_1().min_w_0().h_full().child(main)),
-            )
-            .when(self.repo.is_some(), |this| {
-                this.child(self.render_status_bar(window, cx))
-            })
+        root.child(self.render_title_bar(window, cx)).child(
+            h_flex()
+                .flex_1()
+                .min_h_0()
+                .items_start()
+                .child(rail)
+                .child(div().flex_1().min_w_0().h_full().child(main)),
+        )
     }
 }
 
@@ -271,8 +270,9 @@ impl Spor {
             .filter(|b| b.is_remote)
             .map(|b| b.name.clone())
             .collect();
-        let appearance = self.appearance;
         let behind = repo.tracking.behind;
+        let ahead = repo.tracking.ahead;
+        let has_remote = !repo.remotes.is_empty();
         let upstream = repo
             .tracking
             .upstream
@@ -354,55 +354,6 @@ impl Spor {
                             },
                         ),
                     );
-                    let theme_spor = spor.clone();
-                    menu = menu.separator().submenu(
-                        "Appearance",
-                        window,
-                        cx,
-                        move |mut menu, _, _| {
-                            for (mode, label) in [
-                                (Appearance::System, "Match System"),
-                                (Appearance::Light, "Light"),
-                                (Appearance::Dark, "Dark"),
-                            ] {
-                                let spor = theme_spor.clone();
-                                menu = menu.item(
-                                    PopupMenuItem::new(label)
-                                        .checked(appearance == mode)
-                                        .on_click(move |_, window, cx| {
-                                            let _ = spor.update(cx, |this, cx| {
-                                                this.set_appearance(mode, window, cx)
-                                            });
-                                        }),
-                                );
-                            }
-                            let editor = theme_spor.clone();
-                            menu.separator()
-                                .item(PopupMenuItem::new("Edit Theme…").on_click(
-                                    move |_, window, cx| {
-                                        let _ = editor.update(cx, |this, cx| {
-                                            this.open_theme_editor(window, cx)
-                                        });
-                                    },
-                                ))
-                        },
-                    );
-                    let palette = spor.clone();
-                    let shortcuts = spor.clone();
-                    menu = menu
-                        .separator()
-                        .item(PopupMenuItem::new("Search Pull Requests… (⌘P)").on_click(
-                            move |_, window, cx| {
-                                let _ =
-                                    palette.update(cx, |this, cx| this.open_palette(window, cx));
-                            },
-                        ))
-                        .item(PopupMenuItem::new("Keyboard Shortcuts (⌘/)").on_click(
-                            move |_, window, cx| {
-                                let _ = shortcuts
-                                    .update(cx, |this, cx| this.open_shortcuts(window, cx));
-                            },
-                        ));
                     let close = spor.clone();
                     menu.separator()
                         .item(PopupMenuItem::new("Close Repository").on_click(
@@ -487,22 +438,6 @@ impl Spor {
                     )
                     .child(branch_menu)
                     .child(div().flex_1())
-                    // Hard to miss: the branch is behind its upstream.
-                    .when(behind > 0, |this| {
-                        this.child(
-                            Button::new("title-pull")
-                                .info()
-                                .small()
-                                .icon(IconName::ArrowDown)
-                                .label(sync_label)
-                                .loading(job.is_some())
-                                .tooltip(format!(
-                                    "{upstream} has {} you don't have yet (⌘⇧S)",
-                                    plural(behind, "commit")
-                                ))
-                                .on_click(cx.listener(|this, _, window, cx| this.sync(window, cx))),
-                        )
-                    })
                     .when_some(pr, |this, pr| {
                         let spor = spor.clone();
                         let number = pr.number;
@@ -516,6 +451,41 @@ impl Spor {
                                 .on_click(move |_, _, cx| {
                                     let _ = spor.update(cx, |this, cx| this.show_pull(number, cx));
                                 }),
+                        )
+                    })
+                    // One button for the remote, always in the same place;
+                    // it stands out when there's something to pull or push.
+                    .when(has_remote, |this| {
+                        let sync = Button::new("title-sync");
+                        let sync = if behind > 0 || ahead > 0 {
+                            sync.primary()
+                        } else {
+                            sync.outline()
+                        };
+                        this.child(
+                            sync.small()
+                                .px_3()
+                                .icon(if behind > 0 {
+                                    Icon::new(IconName::ArrowDown)
+                                } else if ahead > 0 {
+                                    Icon::new(IconName::ArrowUp)
+                                } else {
+                                    Icon::empty().path(icon::SYNC)
+                                })
+                                .label(match job {
+                                    Some(job) => format!("{job}ing…"),
+                                    None => sync_label,
+                                })
+                                .loading(job.is_some())
+                                .tooltip(if behind > 0 {
+                                    format!(
+                                        "{upstream} has {} you don't have yet (⌘⇧S)",
+                                        plural(behind, "commit")
+                                    )
+                                } else {
+                                    "Fetch, then pull or push as needed (⌘⇧S)".to_string()
+                                })
+                                .on_click(cx.listener(|this, _, window, cx| this.sync(window, cx))),
                         )
                     }),
             )
@@ -558,22 +528,11 @@ impl Spor {
     }
 
     fn render_center(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let changes = self.repo.as_ref().map_or(0, |r| r.changes.len());
-        let changes_label = if changes > 0 {
-            format!("Uncommitted Changes ({changes})")
-        } else {
-            "Uncommitted Changes".to_string()
-        };
-        let tab_icon = |path: &'static str| {
-            div().pl_3().child(
-                Icon::empty()
-                    .path(path)
-                    .small()
-                    .text_color(cx.theme().muted_foreground),
-            )
-        };
-        // An open pull request or run gets a third tab while it's open.
+        let section = self.section();
+        let theme = cx.theme().clone();
+        // A page opened in a section gets a slim bar to close it by.
         let page = match self.tab {
+            _ if self.tab.panel() != section => None,
             Tab::Pull => self.hub.pull_detail.ready().map_or_else(
                 || self.hub.pull.map(|n| format!("#{n}")),
                 |d| Some(format!("#{} {}", d.pull.number, d.pull.title)),
@@ -582,242 +541,96 @@ impl Spor {
                 || Some("Run".to_string()),
                 |d| Some(format!("{} #{}", d.run.workflow, d.run.number)),
             ),
-            Tab::Task => self
-                .agents
-                .open_task()
-                .map(|v| format!("Task: {}", v.task.title())),
-            // A rebase being planned keeps its tab until it's run or cancelled.
-            _ => self.rebase.as_ref().map(|d| format!("Rebase {}", d.branch)),
+            Tab::Task => self.agents.open_task().map(|v| v.task.title().to_string()),
+            _ => None,
         }
         .map(|label| {
-            let path = match self.tab {
-                Tab::Pull => icon::GIT_PULL_REQUEST,
-                Tab::Run => icon::ACTIONS,
-                Tab::Task => icon::BOT,
-                _ => icon::GIT_BRANCH,
+            let (path, parent) = match self.tab {
+                Tab::Pull => (icon::GIT_PULL_REQUEST, "Pull Requests"),
+                Tab::Run => (icon::ACTIONS, "Actions"),
+                _ => (icon::BOT, "Agents"),
             };
-            let label: String = if label.chars().count() > 48 {
-                label.chars().take(47).chain(['…']).collect()
-            } else {
-                label
-            };
-            TabItem::new().label(label).prefix(tab_icon(path)).suffix(
-                div().pr_1().child(
+            h_flex()
+                .h(px(40.))
+                .flex_none()
+                .pl_4()
+                .pr_2()
+                .gap_2()
+                .border_b_1()
+                .border_color(theme.border)
+                .text_sm()
+                .child(
+                    Icon::empty()
+                        .path(path)
+                        .small()
+                        .text_color(theme.muted_foreground),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(theme.muted_foreground)
+                        .child(parent),
+                )
+                .child(div().text_color(theme.muted_foreground).child("/"))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_medium()
+                        .child(label),
+                )
+                .child(
                     Button::new("close-page")
                         .ghost()
-                        .xsmall()
+                        .small()
                         .icon(IconName::Close)
                         .tooltip("Close")
                         .on_click(cx.listener(|this, _, _, cx| match this.tab {
-                            Tab::Pull | Tab::Run => this.close_page(cx),
                             Tab::Task => this.close_task_page(cx),
-                            _ => this.close_rebase(cx),
+                            _ => this.close_page(cx),
                         })),
-                ),
-            )
+                )
         });
-        let selected = match self.tab {
-            Tab::Changes => 0,
-            Tab::History => 1,
-            Tab::Pull | Tab::Run | Tab::Rebase | Tab::Task => 2,
-        };
-        let tabs = TabBar::new("center-tabs")
-            .child(
-                TabItem::new()
-                    .label(changes_label)
-                    .prefix(tab_icon(icon::FILE_DIFF)),
-            )
-            .child(
-                TabItem::new()
-                    .label("History")
-                    .prefix(tab_icon(icon::CLOCK)),
-            )
-            .children(page)
-            .selected_index(selected)
-            .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                match ix {
-                    0 => this.tab = Tab::Changes,
-                    1 => {
-                        this.tab = Tab::History;
-                        this.history_focus.focus(window, cx);
-                    }
-                    2 if this.rebase.is_some()
-                        && !matches!(this.tab, Tab::Pull | Tab::Run | Tab::Task) =>
-                    {
-                        this.tab = Tab::Rebase
-                    }
-                    _ => {}
-                }
-                cx.notify();
-            }));
         let banner = self.render_operation_banner(cx);
-        v_flex()
-            .size_full()
-            .min_w_0()
-            .child(tabs)
-            .children(banner)
-            .child(div().flex_1().min_h_0().child(match self.tab {
+        let content = if self.tab.panel() != section {
+            // The section's list is open, but nothing from it is yet.
+            match section {
+                DockPanel::PullRequests => empty_state(
+                    icon::GIT_PULL_REQUEST,
+                    "No pull request open",
+                    "Pick one from the list to see its checks, files and conversation",
+                    cx,
+                ),
+                DockPanel::Actions => empty_state(
+                    icon::ACTIONS,
+                    "No run open",
+                    "Pick a run from the list to follow its jobs and logs",
+                    cx,
+                ),
+                _ => empty_state(
+                    icon::BOT,
+                    "No task open",
+                    "Pick a task from the list, or start a new one (⌘⇧T)",
+                    cx,
+                ),
+            }
+        } else {
+            match self.tab {
                 Tab::Changes => self.render_changes(window, cx),
                 Tab::History => self.render_history(window, cx),
                 Tab::Pull => self.render_pull_page(window, cx),
                 Tab::Run => self.render_run_page(window, cx),
                 Tab::Rebase => self.render_rebase(window, cx),
                 Tab::Task => self.render_task_page(cx),
-            }))
-            .into_any_element()
-    }
-
-    fn render_status_bar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let Some(repo) = &self.repo else {
-            return div().into_any_element();
+            }
         };
-        let muted = cx.theme().muted_foreground;
-        let dock = self.dock;
-        let t = &repo.tracking;
-        let ahead = (t.ahead > 0).then(|| format!("↑{}", t.ahead));
-        let behind = (t.behind > 0).then(|| format!("↓{} to pull", t.behind));
-        let blue = cx.theme().blue;
-        let branch = t.branch.clone().unwrap_or_else(|| "detached".into());
-        let commits = plural(repo.rows.len(), "commit");
-        let mode = self.diff_mode;
-        let job = self.job;
-        let show_repos = self.layout.show_repos;
-        let dock_side = self.layout.dock_side;
-
-        let dock_button =
-            |id: &'static str, path: &'static str, panel: DockPanel, tip: &'static str| {
-                Button::new(id)
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::empty().path(path))
-                    .selected(dock == Some(panel))
-                    .tooltip(tip)
-                    .on_click(cx.listener(move |this, _, _, cx| match panel {
-                        _ if this.dock == Some(panel) => {
-                            this.dock = None;
-                            cx.notify();
-                        }
-                        DockPanel::PullRequests => this.show_pulls(cx),
-                        DockPanel::Actions => this.show_runs(cx),
-                        DockPanel::Agents => this.show_agents(cx),
-                        _ => {
-                            this.dock = Some(panel);
-                            cx.notify();
-                        }
-                    }))
-            };
-
-        StatusBar::new()
-            .left(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("toggle-repositories")
-                            .ghost()
-                            .xsmall()
-                            .icon(Icon::empty().path(icon::FOLDER_GIT))
-                            .selected(show_repos)
-                            .tooltip("Repositories (⌘⇧E)")
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_repositories(cx))),
-                    )
-                    .child(dock_button(
-                        "dock-git",
-                        icon::GIT_COMPARE,
-                        DockPanel::Git,
-                        "Git Panel",
-                    ))
-                    .child(dock_button(
-                        "dock-branches",
-                        icon::GIT_BRANCH,
-                        DockPanel::Branches,
-                        "Branches",
-                    ))
-                    .child(dock_button(
-                        "dock-pulls",
-                        icon::GIT_PULL_REQUEST,
-                        DockPanel::PullRequests,
-                        "Pull Requests (⌘⇧P)",
-                    ))
-                    .child(dock_button(
-                        "dock-actions",
-                        icon::ACTIONS,
-                        DockPanel::Actions,
-                        "Actions (⌘⇧A)",
-                    ))
-                    .child(dock_button(
-                        "dock-agents",
-                        icon::BOT,
-                        DockPanel::Agents,
-                        "Agents (⌘⇧I)",
-                    ))
-                    .child(
-                        Button::new("dock-side")
-                            .ghost()
-                            .xsmall()
-                            .icon(match dock_side {
-                                DockSide::Left => IconName::PanelLeft,
-                                DockSide::Right => IconName::PanelRight,
-                            })
-                            .tooltip(match dock_side {
-                                DockSide::Left => "Move Panel to the Right",
-                                DockSide::Right => "Move Panel to the Left",
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_dock_side(cx))),
-                    )
-                    .child(
-                        h_flex()
-                            .ml_2()
-                            .gap_1()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(Icon::empty().path(icon::GIT_BRANCH).xsmall())
-                            .child(branch)
-                            .children(ahead),
-                    )
-                    .when_some(behind, |this, behind| {
-                        this.child(
-                            Button::new("status-pull")
-                                .ghost()
-                                .xsmall()
-                                .label(behind)
-                                .text_color(blue)
-                                .tooltip("Pull the new commits (⌘⇧S)")
-                                .on_click(cx.listener(|this, _, window, cx| this.sync(window, cx))),
-                        )
-                    }),
-            )
-            .right(
-                h_flex()
-                    .gap_3()
-                    .text_xs()
-                    .text_color(muted)
-                    .when_some(job, |this, job| {
-                        this.child(
-                            h_flex()
-                                .gap_1()
-                                .child(Spinner::new().xsmall())
-                                .child(format!("{job}ing…")),
-                        )
-                    })
-                    .child(commits)
-                    .child(
-                        Button::new("diff-mode")
-                            .ghost()
-                            .xsmall()
-                            .label(match mode {
-                                DiffMode::Unified => "Unified",
-                                _ => "Split",
-                            })
-                            .tooltip("Toggle unified / side-by-side diffs")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let next = match this.diff_mode {
-                                    DiffMode::Unified => DiffMode::Split,
-                                    _ => DiffMode::Unified,
-                                };
-                                this.set_diff_mode(next, cx);
-                            })),
-                    ),
-            )
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .children(page)
+            .children(banner)
+            .child(div().flex_1().min_h_0().child(content))
             .into_any_element()
     }
 }

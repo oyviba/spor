@@ -53,8 +53,29 @@ pub fn repo(dir: &Path) -> Result<Repo, String> {
     })
 }
 
+/// Newer `gh` refuses to print a response with terminal escape sequences
+/// in it (a job log's colors, say) unless told it may.
+const ALLOW_ESCAPES: &str = "--allow-escape-sequences";
+
+/// Whether `gh` failed only because the response had escape sequences.
+fn wants_escape_flag(err: &str) -> bool {
+    err.contains(ALLOW_ESCAPES)
+}
+
 /// Run `gh` against `repo` and return its output, or its first error line.
 fn gh(dir: &Path, repo: &Repo, args: &[&str]) -> Result<String, String> {
+    match run_gh(dir, repo, args, false) {
+        // Ask again with the flag (older `gh` doesn't know it, so it's only
+        // passed when asked for), and take the escapes out ourselves: what
+        // comes back is shown as text, never sent to a terminal.
+        Err(e) if wants_escape_flag(&e) => run_gh(dir, repo, args, true)
+            .map(|out| strip_ansi(&out))
+            .map_err(|_| e),
+        result => result,
+    }
+}
+
+fn run_gh(dir: &Path, repo: &Repo, args: &[&str], allow_escapes: bool) -> Result<String, String> {
     let mut cmd = Command::new("gh");
     cmd.current_dir(dir).args(args);
     // `gh api` takes the host separately; everything else takes -R.
@@ -62,6 +83,9 @@ fn gh(dir: &Path, repo: &Repo, args: &[&str]) -> Result<String, String> {
         cmd.args(["--hostname", &repo.host]);
     } else {
         cmd.args(["-R", &repo.selector()]);
+    }
+    if allow_escapes {
+        cmd.arg(ALLOW_ESCAPES);
     }
     let out = cmd.output().map_err(|e| format!("Couldn't run gh: {e}"))?;
     if !out.status.success() {
@@ -669,16 +693,50 @@ fn parse_runs(out: &str) -> Vec<Run> {
         .collect()
 }
 
-/// The most recent workflow runs, newest first; only `branch`'s if given.
-pub fn list_runs(dir: &Path, branch: Option<&str>) -> Result<Vec<Run>, String> {
+/// The most recent workflow runs, newest first; only `branch`'s and only
+/// `workflow`'s (by name) if given. Filtering here rather than after the
+/// fact keeps a quiet workflow from being crowded out of the list by a busy
+/// one.
+pub fn list_runs(
+    dir: &Path,
+    branch: Option<&str>,
+    workflow: Option<&str>,
+) -> Result<Vec<Run>, String> {
     let repo = repo(dir)?;
     let jq = format!(".[] | {RUN_JQ}");
     let mut args = vec!["run", "list", "--limit", "60", "--json", RUN_FIELDS];
     if let Some(branch) = branch {
         args.extend(["--branch", branch]);
     }
+    if let Some(workflow) = workflow {
+        args.extend(["--workflow", workflow]);
+    }
     args.extend(["--jq", &jq]);
     Ok(parse_runs(&gh(dir, &repo, &args)?))
+}
+
+/// The names of the repository's active workflows, sorted.
+pub fn list_workflows(dir: &Path) -> Result<Vec<String>, String> {
+    let repo = repo(dir)?;
+    let out = gh(
+        dir,
+        &repo,
+        &["workflow", "list", "--json", "name", "--jq", ".[].name"],
+    )?;
+    Ok(workflow_names(out.lines()))
+}
+
+/// Distinct, sorted workflow names from `names`, blanks dropped.
+pub fn workflow_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut names: Vec<String> = names
+        .into_iter()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(String::from)
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup();
+    names
 }
 
 /// One step of a job.
@@ -815,23 +873,42 @@ pub struct LogLine {
     pub text: String,
 }
 
-/// Remove ANSI escape sequences (`ESC [ … letter`).
+/// Remove terminal escape sequences: colors and cursor moves
+/// (`ESC [ … letter`), titles and links (`ESC ] … BEL` or `ESC ] … ESC \`),
+/// character set picks (`ESC ( B`) and two-character ones (`ESC letter`).
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
                 for c in chars.by_ref() {
-                    if c.is_ascii_alphabetic() {
+                    if c.is_ascii_alphabetic() || c == '~' {
                         break;
                     }
                 }
             }
-            continue;
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\u{7}' {
+                        break;
+                    }
+                    if c == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            // Character set picks take one more: `ESC ( B`.
+            Some('(' | ')' | '*' | '+') => {
+                chars.next();
+            }
+            _ => {}
         }
-        out.push(c);
     }
     out
 }
@@ -900,6 +977,29 @@ pub fn job_log(dir: &Path, job_id: u64) -> Result<Vec<LogLine>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_every_kind_of_escape() {
+        let raw =
+            "\u{1b}[1;31merror\u{1b}[0m \u{1b}]8;;https://x\u{7}link\u{1b}]8;;\u{1b}\\ \u{1b}(Bok";
+        assert_eq!(strip_ansi(raw), "error link ok");
+    }
+
+    #[test]
+    fn retries_only_when_gh_asks_for_escapes() {
+        assert!(wants_escape_flag(
+            "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway"
+        ));
+        assert!(!wants_escape_flag("HTTP 404: Not Found"));
+    }
+
+    #[test]
+    fn workflow_names_are_distinct_and_sorted() {
+        assert_eq!(
+            workflow_names(["release", "CI", "", "  ", "CI", "Deploy"]),
+            ["CI", "Deploy", "release"]
+        );
+    }
 
     #[test]
     fn unescape_tsv() {

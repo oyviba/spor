@@ -1,5 +1,5 @@
-//! Actions: recent workflow runs in the dock (every branch, or just the
-//! checked-out one), and the open run in the center — what it ran for,
+//! Actions: recent workflow runs in the sidebar (every branch or just the
+//! checked-out one; every workflow or just one), and the open run in the center — what it ran for,
 //! re-run and cancel, its jobs with their steps, and the selected job's log.
 
 use super::app::*;
@@ -14,7 +14,8 @@ use gpui_kit::component::{
     menu::{DropdownMenu as _, PopupMenuItem},
     resizable::{h_resizable, resizable_panel},
     tag::Tag,
-    v_flex, ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
+    v_flex, ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+    StyledExt as _,
 };
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, uniform_list, AnyElement, Context,
@@ -45,8 +46,8 @@ fn run_took(run: &Run, now: i64) -> String {
 }
 
 impl Spor {
-    /// The dock panel: recent workflow runs on every branch or the
-    /// checked-out one. Picking one opens it in the center.
+    /// The sidebar panel: recent workflow runs, narrowed to the checked-out
+    /// branch or one workflow from the header's menus. Picking one opens it in the center.
     pub(crate) fn render_run_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let this_branch = self.hub.runs_this_branch;
@@ -57,11 +58,46 @@ impl Spor {
         let spor = Self::weak(cx);
 
         let scope = match (&branch, this_branch) {
-            (Some(b), true) => format!("Runs on {b}"),
-            _ => "Runs on All Branches".to_string(),
+            (Some(b), true) => b.clone(),
+            _ => "All Branches".to_string(),
         };
+        let workflow = self.hub.runs_workflow.clone();
+        let workflows = self.hub.workflows.clone();
+        let filtered = workflow.is_some() || this_branch;
+        let workflow_spor = spor.clone();
+        let workflow_menu = Button::new("runs-workflow")
+            .ghost()
+            .small()
+            .max_w(px(170.))
+            .icon(Icon::empty().path(icon::ACTIONS))
+            .label(workflow.clone().unwrap_or_else(|| "All Workflows".into()))
+            .selected(workflow.is_some())
+            .dropdown_caret(true)
+            .dropdown_menu(move |mut menu, _, _| {
+                let item = |label: String, pick: Option<String>| {
+                    let spor = workflow_spor.clone();
+                    PopupMenuItem::new(label)
+                        .checked(pick == workflow)
+                        .on_click(move |_, _, cx| {
+                            let pick = pick.clone();
+                            let _ = spor.update(cx, |this, cx| this.set_runs_workflow(pick, cx));
+                        })
+                };
+                menu = menu
+                    .scrollable(true)
+                    .max_h(px(420.))
+                    .min_w(px(200.))
+                    .item(item("All Workflows".into(), None));
+                if !workflows.is_empty() {
+                    menu = menu.separator();
+                }
+                for name in workflows.iter() {
+                    menu = menu.item(item(name.clone(), Some(name.clone())));
+                }
+                menu
+            });
         let header = h_flex()
-            .h(px(36.))
+            .h(px(44.))
             .flex_none()
             .px_2()
             .gap_1()
@@ -70,8 +106,11 @@ impl Spor {
             .child(
                 Button::new("runs-scope")
                     .ghost()
-                    .xsmall()
+                    .small()
+                    .max_w(px(130.))
+                    .icon(Icon::empty().path(icon::GIT_BRANCH))
                     .label(scope)
+                    .selected(this_branch)
                     .dropdown_caret(true)
                     .dropdown_menu(move |menu, _, _| {
                         let all = spor.clone();
@@ -99,11 +138,12 @@ impl Spor {
                         }
                     }),
             )
+            .child(workflow_menu)
             .child(div().flex_1())
             .child(
                 Button::new("runs-refresh")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .icon(Icon::empty().path(icon::REFRESH))
                     .loading(refreshing)
                     .tooltip("Refresh")
@@ -113,6 +153,12 @@ impl Spor {
         let body = match &self.hub.runs {
             Load::Idle | Load::Loading => pending_state(Some("Loading workflow runs…"), None, cx),
             Load::Failed(e) => pending_state(None, Some(e), cx),
+            Load::Ready(list) if list.is_empty() && filtered => empty_state(
+                icon::ACTIONS,
+                "No runs match",
+                "Pick another workflow or branch from the menus above",
+                cx,
+            ),
             Load::Ready(list) if list.is_empty() => empty_state(
                 icon::ACTIONS,
                 "No workflow runs",
@@ -135,6 +181,7 @@ impl Spor {
 
         v_flex()
             .size_full()
+            .bg(theme.sidebar)
             .child(header)
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
@@ -434,7 +481,7 @@ impl Spor {
         };
         let url = job.url.clone();
         let header = h_flex()
-            .h(px(32.))
+            .h(px(40.))
             .flex_none()
             .px_3()
             .gap_2()
@@ -454,7 +501,7 @@ impl Spor {
                 this.child(
                     Button::new("job-web")
                         .ghost()
-                        .xsmall()
+                        .small()
                         .icon(Icon::empty().path(icon::EXTERNAL_LINK))
                         .tooltip("Open this job on GitHub")
                         .on_click(move |_, _, cx| cx.open_url(&url)),

@@ -438,7 +438,7 @@ impl Spor {
     }
 
     pub(crate) fn show_agents(&mut self, cx: &mut Context<Self>) {
-        self.dock = Some(DockPanel::Agents);
+        self.set_dock(DockPanel::Agents);
         self.refresh_tasks(cx);
         cx.notify();
     }
@@ -461,7 +461,7 @@ impl Spor {
         } else {
             TaskPane::Changes
         };
-        self.tab = Tab::Task;
+        self.set_tab(Tab::Task);
         self.load_task_diff(cx);
         self.refresh_tasks(cx);
         cx.notify();
@@ -470,7 +470,7 @@ impl Spor {
     pub(crate) fn close_task_page(&mut self, cx: &mut Context<Self>) {
         self.agents.open = None;
         if self.tab == Tab::Task {
-            self.tab = Tab::History;
+            self.set_tab(Tab::History);
         }
         cx.notify();
     }
@@ -1045,7 +1045,7 @@ impl Spor {
                     window,
                     cx,
                 );
-                self.tab = Tab::History;
+                self.set_tab(Tab::History);
             }
             Err(e) => self.error(first_line(&e).to_string(), window, cx),
         }
@@ -1277,17 +1277,17 @@ impl Spor {
             .bg(theme.sidebar)
             .child(
                 h_flex()
-                    .h(px(36.))
+                    .h(px(44.))
                     .flex_none()
                     .px_3()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(div().text_sm().font_medium().child("Agents"))
+                    .child(div().text_sm().font_semibold().child("Agents"))
                     .child(div().flex_1())
                     .child(
                         Button::new("new-task")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::Plus)
                             .tooltip("New Agent Task… (⌘⇧T)")
                             .on_click(cx.listener(|this, _, w, cx| this.new_task(w, cx))),
@@ -1295,7 +1295,7 @@ impl Spor {
                     .child(
                         Button::new("agents-menu")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(Icon::empty().path(icon::ELLIPSIS))
                             .dropdown_menu(move |menu, _, _| {
                                 let spor = menu_spor.clone();
@@ -1426,7 +1426,7 @@ impl Spor {
                             this.child(
                                 Button::new("task-ask-rebase")
                                     .outline()
-                                    .xsmall()
+                                    .small()
                                     .label("Ask Agent to Rebase")
                                     .tooltip("The agent rebases onto the base and resolves the conflicts")
                                     .on_click(cx.listener(move |this, _, w, cx| {
@@ -1555,7 +1555,7 @@ impl Spor {
             );
         let tabs = h_flex()
             .flex_none()
-            .h(px(32.))
+            .h(px(40.))
             .px_3()
             .gap_1()
             .border_b_1()
@@ -1563,7 +1563,7 @@ impl Spor {
             .child(
                 Button::new("pane-transcript")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .label(if self.agents.comments.is_empty() {
                         "Transcript".to_string()
                     } else {
@@ -1578,7 +1578,7 @@ impl Spor {
             .child(
                 Button::new("pane-changes")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .label(if stats.files > 0 {
                         format!("Changes · {}", plural(stats.files, "file"))
                     } else {
@@ -1595,7 +1595,7 @@ impl Spor {
                 this.child(
                     Button::new("comment-lines")
                         .outline()
-                        .xsmall()
+                        .small()
                         .label("Comment on Lines…")
                         .disabled(self.agents.selection.is_none())
                         .tooltip("Select lines in the diff, then say what should change; it's sent with your next feedback")
@@ -1723,7 +1723,7 @@ impl Spor {
                     .child(
                         Button::new(("remove-comment", ix))
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::Close)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if ix < this.agents.comments.len() {

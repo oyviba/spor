@@ -176,7 +176,7 @@ impl Spor {
             },
             Ok(Outcome::Conflicts(files)) => {
                 self.pending_rewrite = start.map(|s| (done, s));
-                self.tab = Tab::Changes;
+                self.set_tab(Tab::Changes);
                 self.dock = Some(DockPanel::Git);
                 window.push_notification(
                     Notification::warning(format!(
@@ -504,7 +504,7 @@ impl Spor {
                 self.conflict_diff
                     .update(cx, |state, cx| state.set_files([file], cx));
                 self.conflict_path = Some(path.to_string());
-                self.tab = Tab::Changes;
+                self.set_tab(Tab::Changes);
                 cx.notify();
             }
             Ok(_) => self.info(
@@ -580,7 +580,7 @@ impl Spor {
         Some(
             h_flex()
                 .flex_none()
-                .h(px(36.))
+                .h(px(40.))
                 .px_3()
                 .gap_2()
                 .bg(theme.warning.opacity(0.12))
@@ -598,7 +598,7 @@ impl Spor {
                     this.child(
                         Button::new("op-skip")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .label("Skip Commit")
                             .tooltip("Leave out the commit it stopped on")
                             .on_click(cx.listener(|this, _, w, cx| this.skip_commit(w, cx))),
@@ -607,7 +607,7 @@ impl Spor {
                 .child(
                     Button::new("op-abort")
                         .ghost()
-                        .xsmall()
+                        .small()
                         .label("Abort")
                         .tooltip("Put everything back as it was before")
                         .on_click(cx.listener(|this, _, w, cx| this.abort_operation(w, cx))),
@@ -615,7 +615,7 @@ impl Spor {
                 .child(
                     Button::new("op-continue")
                         .primary()
-                        .xsmall()
+                        .small()
                         .label("Continue")
                         .disabled(conflicts > 0)
                         .tooltip(if conflicts > 0 {
@@ -982,7 +982,7 @@ impl Spor {
         match self.git().stash_apply_at(index) {
             Ok(()) => {
                 self.ok("Stash applied — it's kept too", window, cx);
-                self.tab = Tab::Changes;
+                self.set_tab(Tab::Changes);
             }
             Err(e) => self.error(
                 format!("Couldn't apply the stash: {}", first_line(&e)),
@@ -1068,7 +1068,7 @@ impl Spor {
 
     /// Focus History's search field.
     pub(crate) fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.tab = Tab::History;
+        self.set_tab(Tab::History);
         let input = self.history_search.clone();
         input.read(cx).focus_handle(cx).focus(window, cx);
         cx.notify();
@@ -1084,7 +1084,7 @@ impl Spor {
         let query = format!("path:{path}");
         self.history_search
             .update(cx, |state, cx| state.set_value(query, window, cx));
-        self.tab = Tab::History;
+        self.set_tab(Tab::History);
         self.run_search(cx);
     }
 
@@ -1227,7 +1227,7 @@ impl Spor {
             .map(|d| d.steps.iter().map(|s| s.hash.clone()).collect())
             .unwrap_or_default();
         self.select_step(0, window, cx);
-        self.tab = Tab::Rebase;
+        self.set_tab(Tab::Rebase);
         cx.notify();
     }
 
@@ -1294,7 +1294,7 @@ impl Spor {
     pub(crate) fn close_rebase(&mut self, cx: &mut Context<Self>) {
         self.rebase = None;
         if self.tab == Tab::Rebase {
-            self.tab = Tab::History;
+            self.set_tab(Tab::History);
         }
         cx.notify();
     }
@@ -1321,7 +1321,7 @@ impl Spor {
         let result = self.git().rebase_interactive(&base, &plan);
         if result.is_ok() {
             self.rebase = None;
-            self.tab = Tab::History;
+            self.set_tab(Tab::History);
         }
         self.finish_rewrite(format!("Rewrote {branch}"), start, result, window, cx);
     }
@@ -1367,7 +1367,7 @@ impl Spor {
                 .child(
                     Button::new(("step-action", ix))
                         .outline()
-                        .xsmall()
+                        .small()
                         .w(px(84.))
                         .label(action.label())
                         .dropdown_caret(true)
@@ -1415,7 +1415,7 @@ impl Spor {
                 .child(
                     Button::new(("step-up", ix))
                         .ghost()
-                        .xsmall()
+                        .small()
                         .icon(IconName::ChevronUp)
                         .disabled(ix == 0)
                         .tooltip("Move earlier")
@@ -1426,7 +1426,7 @@ impl Spor {
                 .child(
                     Button::new(("step-down", ix))
                         .ghost()
-                        .xsmall()
+                        .small()
                         .icon(IconName::ChevronDown)
                         .disabled(ix + 1 == count)
                         .tooltip("Move later")

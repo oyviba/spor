@@ -66,13 +66,17 @@ pub struct Hub {
     pub comment: Entity<TextareaState>,
     /// Actions shows only the checked-out branch's runs.
     pub runs_this_branch: bool,
+    /// Actions shows only this workflow's runs.
+    pub runs_workflow: Option<String>,
+    /// The repository's workflows, for the filter menu.
+    pub workflows: Rc<Vec<String>>,
     pub runs: Load<Rc<Vec<Run>>>,
     pub run: Option<u64>,
     pub run_detail: Load<Rc<RunDetail>>,
     /// The PR the open run was reached from, for its Back button.
     pub run_back: Option<u64>,
     /// Where closing the PR or run page goes back to.
-    return_to: Tab,
+    pub(crate) return_to: Tab,
     pub job: Option<u64>,
     pub log: Load<Rc<Vec<LogLine>>>,
     log_for: Option<u64>,
@@ -107,6 +111,8 @@ impl Hub {
                     .auto_grow(3, 12)
             }),
             runs_this_branch: false,
+            runs_workflow: None,
+            workflows: Rc::default(),
             runs: Load::Idle,
             run: None,
             run_detail: Load::Idle,
@@ -141,6 +147,8 @@ impl Hub {
         self.pull_diff
             .update(cx, |state, cx| state.set_files([], cx));
         self.runs = Load::Idle;
+        self.runs_workflow = None;
+        self.workflows = Rc::default();
         self.run = None;
         self.run_detail = Load::Idle;
         self.run_back = None;
@@ -231,18 +239,18 @@ impl Spor {
         if matches!(self.tab, Tab::Changes | Tab::History) {
             self.hub.return_to = self.tab;
         }
-        self.tab = page;
+        self.set_tab(page);
     }
 
     /// Close the PR or run page.
     pub(crate) fn close_page(&mut self, cx: &mut Context<Self>) {
-        self.tab = self.hub.return_to;
+        self.set_tab(self.hub.return_to);
         cx.notify();
     }
 
     /// Show the pull request list in the dock.
     pub(crate) fn show_pulls(&mut self, cx: &mut Context<Self>) {
-        self.dock = Some(DockPanel::PullRequests);
+        self.set_dock(DockPanel::PullRequests);
         self.hub_repo_changed(cx);
         if self.hub.pulls.needs_load() {
             self.load_pulls(cx);
@@ -519,7 +527,7 @@ impl Spor {
 
     /// Show the Actions run list in the dock.
     pub(crate) fn show_runs(&mut self, cx: &mut Context<Self>) {
-        self.dock = Some(DockPanel::Actions);
+        self.set_dock(DockPanel::Actions);
         self.hub_repo_changed(cx);
         if self.hub.runs.needs_load() {
             self.load_runs(cx);
@@ -553,6 +561,17 @@ impl Spor {
         cx.notify();
     }
 
+    /// Show only `workflow`'s runs, or every workflow's with None.
+    pub(crate) fn set_runs_workflow(&mut self, workflow: Option<String>, cx: &mut Context<Self>) {
+        if self.hub.runs_workflow == workflow {
+            return;
+        }
+        self.hub.runs_workflow = workflow;
+        self.hub.runs = Load::Loading;
+        self.load_runs(cx);
+        cx.notify();
+    }
+
     pub(crate) fn load_runs(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.hub_root() else { return };
         let branch = self
@@ -561,20 +580,43 @@ impl Spor {
             .then(|| self.repo.as_ref()?.tracking.branch.clone())
             .flatten();
         let this_branch = self.hub.runs_this_branch;
+        let workflow = self.hub.runs_workflow.clone();
+        // The workflow list is fetched once per repository.
+        let want_workflows = self.hub.workflows.is_empty();
         if self.hub.runs.ready().is_none() {
             self.hub.runs = Load::Loading;
         }
         self.hub._runs_task = cx.spawn(async move |this, cx| {
-            let result = cx
+            let (result, workflows) = cx
                 .background_spawn({
                     let root = root.clone();
-                    async move { github::list_runs(&root, branch.as_deref()) }
+                    let workflow = workflow.clone();
+                    async move {
+                        let runs = github::list_runs(&root, branch.as_deref(), workflow.as_deref());
+                        let workflows = want_workflows
+                            .then(|| github::list_workflows(&root).ok())
+                            .flatten();
+                        (runs, workflows)
+                    }
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.hub.root.as_ref() != Some(&root) || this.hub.runs_this_branch != this_branch
+                if this.hub.root.as_ref() != Some(&root)
+                    || this.hub.runs_this_branch != this_branch
+                    || this.hub.runs_workflow != workflow
                 {
                     return;
+                }
+                // Workflows seen in runs count too, in case listing them
+                // failed or one was renamed since.
+                let seen: Vec<String> = match &result {
+                    Ok(list) => list.iter().map(|r| r.workflow.clone()).collect(),
+                    Err(_) => Vec::new(),
+                };
+                let known = workflows.unwrap_or_else(|| this.hub.workflows.to_vec());
+                let merged = github::workflow_names(known.iter().chain(&seen).map(String::as_str));
+                if merged != *this.hub.workflows {
+                    this.hub.workflows = Rc::new(merged);
                 }
                 match result {
                     Ok(list) => this.hub.runs = Load::Ready(Rc::new(list)),

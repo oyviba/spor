@@ -523,7 +523,7 @@ impl Spor {
             .and_then(|s| matches.iter().position(|&m| m == s))
             .map(|p| p + 1);
         h_flex()
-            .h(px(34.))
+            .h(px(40.))
             .flex_none()
             .px_2()
             .gap_1()
@@ -560,7 +560,7 @@ impl Spor {
                 .child(
                     Button::new("search-prev")
                         .ghost()
-                        .xsmall()
+                        .small()
                         .icon(IconName::ChevronUp)
                         .tooltip("Previous match (⇧↩)")
                         .on_click(cx.listener(|this, _, _, cx| this.next_match(-1, cx))),
@@ -568,7 +568,7 @@ impl Spor {
                 .child(
                     Button::new("search-next")
                         .ghost()
-                        .xsmall()
+                        .small()
                         .icon(IconName::ChevronDown)
                         .tooltip("Next match (↩)")
                         .on_click(cx.listener(|this, _, _, cx| this.next_match(1, cx))),
@@ -576,7 +576,7 @@ impl Spor {
                 .child(
                     Button::new("search-clear")
                         .ghost()
-                        .xsmall()
+                        .small()
                         .icon(IconName::Close)
                         .tooltip("Clear search")
                         .on_click(cx.listener(|this, _, w, cx| this.clear_search(w, cx))),
@@ -591,7 +591,7 @@ impl Spor {
         let opts = self.history_options;
         Button::new("history-options")
             .ghost()
-            .xsmall()
+            .small()
             .icon(Icon::empty().path(icon::SETTINGS))
             .tooltip("Graph Options")
             .dropdown_menu(move |menu, window, cx| {
@@ -791,7 +791,7 @@ impl Spor {
                     .child(
                         Button::new("copy-sha")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .label(short)
                             .icon(Icon::empty().path(icon::COPY))
                             .tooltip("Copy commit SHA")
@@ -802,7 +802,7 @@ impl Spor {
                     .children(parents.into_iter().map(|(ix, short)| {
                         Button::new(SharedString::from(format!("parent-{short}")))
                             .ghost()
-                            .xsmall()
+                            .small()
                             .label(format!("parent {short}"))
                             .on_click(cx.listener(move |this, _, _, cx| this.select_commit(ix, cx)))
                     }))

@@ -85,31 +85,39 @@ cargo test --features ui-tests
 
 The layout follows Zed's:
 
-- **Workspace rail** — like Slack, the strip on the far left switches
-  between workspaces such as *Work* and *Side projects* (⌘1–⌘9, ⌘⇧W for a
-  new one; right-click to rename or delete). Each workspace has its own
-  repositories and reopens the one you last had open in it. Opening a
-  repository adds it to the current workspace, or jumps to the workspace it
-  already belongs to; the repository menu in the title bar switches between
-  a workspace's repositories, moves one to another workspace or removes it
-- **Repositories** — the workspace's repositories in a sidebar beside the
-  rail (⌘⇧E hides it, drag its edge to resize); each shows its current branch, and a blue `↓3`
+- **Navigation rail** — one strip down the left edge. On top, like Slack,
+  your workspaces such as *Work* and *Side projects* (⌘1–⌘9; right-click
+  to rename, delete or add one). Each workspace has its own repositories
+  and reopens the one you last had open in it. Opening a repository adds it
+  to the current workspace, or jumps to the workspace it already belongs
+  to; the repository menu in the title bar switches between a workspace's
+  repositories, moves one to another workspace or removes it. Below them,
+  one labeled button per section — **Changes** (with a count of changed
+  files), **History**, **Pulls**, **Actions** and **Agents**. A section
+  opens its list in the sidebar and its view in the center together;
+  clicking the open one again hides the sidebar (⌘B). At the foot of the
+  rail, the repository list and **Settings**: appearance and theme, unified
+  or side-by-side diffs, which side the sidebar sits on, the command
+  palette and keyboard shortcuts
+- **Repositories** — the workspace's repositories in a list beside the
+  rail (the folder button at the foot of the rail or ⌘⇧E shows it, drag its
+  edge to resize); each shows its current branch, and a blue `↓3`
   when it has commits to pull (the open one also its change count). Hover
   for where it lives; click to switch, right-click to reveal or remove one
-- **Title bar** — repository and branch pickers, and the branch's PR
-- **Dock** — on the right by default; the status bar button moves it to the
-  left. It holds the **git panel** (⌘⇧G): changed files split into Staged
-  and Unstaged — click a file to move it across (and see its diff), so a
-  commit takes exactly the files you pick — a commit message editor
-  (⌘↩ commits), and one **Sync** button
-  that fetches, then pulls or pushes as needed (or publishes a new branch);
-  or the **branch list** (⌘⇧B) with local and remote branches, tags and
-  stashes — click to show a branch in History, double-click to check it out.
-  The search field on top (⌘⇧F) narrows it as you type. Right-click a tag
-  to delete it (⌘Z brings it back) or delete it from a remote too.
-  ⌘B hides the dock
-- **Center tabs** — **Uncommitted Changes** (⌘⇧C), every changed file in one
-  scrolling, syntax-highlighted diff; **History** (⌘⇧H), the commit graph
+- **Title bar** — repository and branch pickers, the branch's PR, and one
+  **Sync** button that fetches, then pulls or pushes as needed (or
+  publishes a new branch). It reads *Pull 3*, *Push 1* or *Fetch*, and
+  turns blue when there's something to pull or push (⌘⇧S)
+- **Changes** — the sidebar holds the **git panel** (⌘⇧G): changed files
+  split into Staged and Unstaged — click a file to move it across (and see
+  its diff), so a commit takes exactly the files you pick — and a commit
+  message editor (⌘↩ commits). The center shows every changed file in one
+  scrolling, syntax-highlighted diff (⌘⇧C)
+- **History** — the sidebar holds the **branch list** (⌘⇧B) with local and
+  remote branches, tags and stashes — click to show a branch in History,
+  double-click to check it out. The search field on top (⌘⇧F) narrows it
+  as you type. Right-click a tag to delete it (⌘Z brings it back) or delete
+  it from a remote too. The center (⌘⇧H) is the commit graph
   over the selected commit's message and diff (`j`/`k` or arrows move,
   `Return` checks out). Branches and tags get their own column: a laptop
   marks a local branch, a cloud a branch on the remote (one label when it's
@@ -118,12 +126,13 @@ The layout follows Zed's:
   column's edge in the header to resize it (double-click resets). **Drag a
   branch** onto another branch's row to merge it there (⌘Z undoes) or open
   a pull request between the two
-- **Pull requests and Actions** — two more dock panels (⌘⇧P, ⌘⇧A, or the
-  status bar). **Pull Requests** lists the repository's PRs with their CI
-  and review state; the menu on top picks *Open*, *Yours*, *Review
-  Requested* or *Closed*. **Actions** lists recent workflow runs, on every
-  branch or the checked-out one. Picking one opens it in the center as a
-  third tab, which closes with its ×:
+- **Pulls and Actions** — (⌘⇧P, ⌘⇧A) **Pull Requests** lists the
+  repository's PRs with their CI and review state; the menu on top picks
+  *Open*, *Yours*, *Review Requested* or *Closed*. **Actions** lists recent
+  workflow runs, on every branch or the checked-out one, and of every
+  workflow or just one (*CI*, *Release*, … from the menu beside it). Picking one opens
+  it in the center, under a bar that closes it with its ×; coming back to
+  the section reopens the last one:
   - a **pull request** is one page: its checks (failing ones listed,
     passing ones folded away; an Actions check opens its run), a row that
     opens the diff, then the description, reviews and comments as Markdown
@@ -137,9 +146,6 @@ The layout follows Zed's:
 
   What's on screen refreshes every few seconds while something on it is
   running; GitHub serves a job's log once the job finishes
-- **Status bar** — dock toggles, the branch with ahead counts and a
-  clickable *↓3 to pull*,
-  background jobs, and unified / split diffs
 - **Undo instead of confirmations** — discarding changes, staging and
   committing happen immediately and can be taken back with ⌘Z or the Undo
   button in the notification (a commit stops being undoable once pushed).
@@ -149,7 +155,7 @@ The layout follows Zed's:
 
 **More than staging and committing:**
 
-- **Lines, not just files** — the Changes tab shows *All* changes, or only
+- **Lines, not just files** — the Changes view shows *All* changes, or only
   the *Unstaged* or *Staged* ones. Drag over line numbers there and Stage,
   Unstage or Discard just those lines
 - **Amend** — tick Amend under the commit message to replace the last
@@ -157,7 +163,7 @@ The layout follows Zed's:
 - **History's right-click menu** — cherry-pick a commit onto the branch,
   revert it, rebase onto it, reset the branch to it (soft, mixed or hard),
   check it out, or tag it. *Rewrite … After Here* plans an interactive
-  rebase in a tab of its own: reorder commits, reword, squash, fix up or
+  rebase in a view of its own: reorder commits, reword, squash, fix up or
   drop them, then Rewrite History
 - **Conflicts** — when a merge, rebase, cherry-pick or revert stops on
   conflicts, a bar over the center says so with Continue, Skip and Abort,
@@ -240,8 +246,8 @@ comes next is in [docs/agents.md](docs/agents.md).
 
 **Knowing when to pull** — the open repository is fetched quietly in the
 background every few minutes. When its upstream has new commits, a
-notification says so (with a Pull button), a *Pull 3* button appears in the
-title bar, and the Sync button, status bar and sidebar light up until you
+notification says so (with a Pull button), and the title bar's Sync button
+turns into a blue *Pull 3* and the repository list lights up until you
 pull.
 
 Sync runs in the background. The app has no terminal, so credentials must
@@ -335,17 +341,17 @@ Mac app (`spor-app`, `--features gui`):
 
 - `src/gui/app.rs` — the `Spor` view: state, git actions, undo, sync
 - `src/gui/workspaces.rs` — workspaces and their repositories, persisted
-- `src/gui/render.rs` — window frame: title bar, dock + center, status bar
-- `src/gui/rail.rs` — the workspace rail
+- `src/gui/render.rs` — window frame: title bar, sidebar + center
+- `src/gui/rail.rs` — the navigation rail: workspaces, sections, settings
 - `src/gui/repos_panel.rs` — the repository sidebar
-- `src/gui/git_panel.rs`, `branches.rs` — the git and branch dock panels
-- `src/gui/changes_view.rs`, `history.rs` — the two center tabs
+- `src/gui/git_panel.rs`, `branches.rs` — the git and branch sidebar panels
+- `src/gui/changes_view.rs`, `history.rs` — the Changes and History views
 - `src/gui/agents.rs` — the Agents panel, the New Agent Task dialog and a
   task's page
 - `src/gui/actions.rs` — cherry-pick, revert, rebase, reset, conflicts,
   line staging, branch and stash management, tags, search, and the
-  interactive rebase tab
-- `src/gui/pulls.rs`, `runs.rs` — the Pull Requests and Actions dock panels
+  interactive rebase view
+- `src/gui/pulls.rs`, `runs.rs` — the Pull Requests and Actions sidebar panels
   and the PR and run pages they open
 - `src/gui/hub.rs` — what those have loaded and open, and the background
   `gh` calls behind them

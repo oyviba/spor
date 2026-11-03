@@ -147,7 +147,7 @@ impl Spor {
         let spor = Self::weak(cx);
 
         let header = h_flex()
-            .h(px(36.))
+            .h(px(44.))
             .flex_none()
             .px_2()
             .gap_1()
@@ -156,7 +156,7 @@ impl Spor {
             .child(
                 Button::new("pull-filter")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .label(format!("{} Pull Requests", filter.label()))
                     .dropdown_caret(true)
                     .dropdown_menu(move |mut menu, _, _| {
@@ -178,7 +178,7 @@ impl Spor {
             .child(
                 Button::new("pulls-refresh")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .icon(Icon::empty().path(icon::REFRESH))
                     .loading(refreshing)
                     .tooltip("Refresh")
@@ -210,6 +210,7 @@ impl Spor {
 
         v_flex()
             .size_full()
+            .bg(theme.sidebar)
             .child(header)
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
@@ -750,7 +751,7 @@ impl Spor {
     fn render_pull_files(&self, detail: &PullDetail, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let bar = h_flex()
-            .h(px(32.))
+            .h(px(40.))
             .flex_none()
             .px_2()
             .gap_3()
@@ -761,7 +762,7 @@ impl Spor {
             .child(
                 Button::new("pull-files-back")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .icon(IconName::ArrowLeft)
                     .label("Conversation")
                     .on_click(cx.listener(|this, _, _, cx| this.show_pull_files(false, cx))),
