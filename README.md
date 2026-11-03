@@ -129,7 +129,8 @@ The layout follows Zed's:
 - **Pulls and Actions** — (⌘⇧P, ⌘⇧A) **Pull Requests** lists the
   repository's PRs with their CI and review state; the menu on top picks
   *Open*, *Yours*, *Review Requested* or *Closed*. **Actions** lists recent
-  workflow runs, on every branch or the checked-out one. Picking one opens
+  workflow runs, on every branch or the checked-out one, and of every
+  workflow or just one (*CI*, *Release*, … from the menu beside it). Picking one opens
   it in the center, under a bar that closes it with its ×; coming back to
   the section reopens the last one:
   - a **pull request** is one page: its checks (failing ones listed,

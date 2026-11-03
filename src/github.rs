@@ -669,16 +669,50 @@ fn parse_runs(out: &str) -> Vec<Run> {
         .collect()
 }
 
-/// The most recent workflow runs, newest first; only `branch`'s if given.
-pub fn list_runs(dir: &Path, branch: Option<&str>) -> Result<Vec<Run>, String> {
+/// The most recent workflow runs, newest first; only `branch`'s and only
+/// `workflow`'s (by name) if given. Filtering here rather than after the
+/// fact keeps a quiet workflow from being crowded out of the list by a busy
+/// one.
+pub fn list_runs(
+    dir: &Path,
+    branch: Option<&str>,
+    workflow: Option<&str>,
+) -> Result<Vec<Run>, String> {
     let repo = repo(dir)?;
     let jq = format!(".[] | {RUN_JQ}");
     let mut args = vec!["run", "list", "--limit", "60", "--json", RUN_FIELDS];
     if let Some(branch) = branch {
         args.extend(["--branch", branch]);
     }
+    if let Some(workflow) = workflow {
+        args.extend(["--workflow", workflow]);
+    }
     args.extend(["--jq", &jq]);
     Ok(parse_runs(&gh(dir, &repo, &args)?))
+}
+
+/// The names of the repository's active workflows, sorted.
+pub fn list_workflows(dir: &Path) -> Result<Vec<String>, String> {
+    let repo = repo(dir)?;
+    let out = gh(
+        dir,
+        &repo,
+        &["workflow", "list", "--json", "name", "--jq", ".[].name"],
+    )?;
+    Ok(workflow_names(out.lines()))
+}
+
+/// Distinct, sorted workflow names from `names`, blanks dropped.
+pub fn workflow_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut names: Vec<String> = names
+        .into_iter()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(String::from)
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup();
+    names
 }
 
 /// One step of a job.
@@ -900,6 +934,14 @@ pub fn job_log(dir: &Path, job_id: u64) -> Result<Vec<LogLine>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workflow_names_are_distinct_and_sorted() {
+        assert_eq!(
+            workflow_names(["release", "CI", "", "  ", "CI", "Deploy"]),
+            ["CI", "Deploy", "release"]
+        );
+    }
 
     #[test]
     fn unescape_tsv() {
