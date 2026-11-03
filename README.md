@@ -11,6 +11,8 @@ dependency (`crossterm`); the app is opt-in behind the `gui` feature.
 - Timeline graph with `main` / `master` / `trunk` pinned to the leftmost lane
 - Color by branch prefix: all `feat/*` branches share a hue, all `bug/*` share another
 - Stage / unstage files, commit, push, pull
+- In the Mac app: stage single lines, amend, cherry-pick, revert, rebase and
+  rewrite history, resolve conflicts, and search commits
 - Live diff pane for the selected commit or file
 - Branch switching (checkout by selection, picker, create from commit)
 - Ahead/behind tracking vs upstream
@@ -140,7 +142,37 @@ The layout follows Zed's:
   background jobs, and unified / split diffs
 - **Undo instead of confirmations** — discarding changes, staging and
   committing happen immediately and can be taken back with ⌘Z or the Undo
-  button in the notification (a commit stops being undoable once pushed)
+  button in the notification (a commit stops being undoable once pushed).
+  So do amending, cherry-picks, reverts, rebases, resets and rewrites, and
+  deleting a branch, stash or tag; a hard reset, which throws work away,
+  asks first
+
+**More than staging and committing:**
+
+- **Lines, not just files** — the Changes tab shows *All* changes, or only
+  the *Unstaged* or *Staged* ones. Drag over line numbers there and Stage,
+  Unstage or Discard just those lines
+- **Amend** — tick Amend under the commit message to replace the last
+  commit; the message starts as the old one
+- **History's right-click menu** — cherry-pick a commit onto the branch,
+  revert it, rebase onto it, reset the branch to it (soft, mixed or hard),
+  check it out, or tag it. *Rewrite … After Here* plans an interactive
+  rebase in a tab of its own: reorder commits, reword, squash, fix up or
+  drop them, then Rewrite History
+- **Conflicts** — when a merge, rebase, cherry-pick or revert stops on
+  conflicts, a bar over the center says so with Continue, Skip and Abort,
+  and the git panel lists the conflicted files. Click one to pick the
+  current or incoming side of each conflict (or both), then Save and Mark
+  Resolved — or take one side for the whole file from its menu
+- **Branches** — right-click to merge into or rebase the checked-out
+  branch, rename, delete (undoable), or delete from the remote. Stashes
+  can be applied and kept, or deleted; *Stash Changes…* takes a message.
+  Linked worktrees get their own section
+- **Search** — ⌘F searches History by message, author or SHA; `path:file`
+  shows the commits that touched a file (also *Show File History* on a
+  file in the git panel). Matching rows stand out; ↩ and ⇧↩ step through
+- **Diverged branches** — when Sync finds local and remote commits, it
+  offers *Pull with Rebase*
 
 Open a repository with ⌘O, from the welcome page, by dropping a folder on
 the window, or by passing a path. Light and dark themes (based on One Light
@@ -168,6 +200,27 @@ already in use moves to the new command, and the list says which one lost
 it. Outside History a shortcut needs ⌘, ⌃ or ⌥ so it can't swallow typing;
 ⌘1–⌘9 stay reserved for workspaces. Changes apply at once and are saved
 in `keymap` in the config directory.
+
+**Agent tasks** (⌘⇧T, or the Agents panel, ⌘⇧I) — give a coding agent
+its own branch and folder so several can work at once without touching your
+checkout. A task is a prompt: spor creates `agent/<name>` from the
+checked-out branch, checks it out in `<repo>.spor/<name>` beside the
+repository, and hands you the command to start Claude Code there (*Copy
+Agent Command*, or open the folder in Terminal). Any agent works — run it
+in the folder. Its commits appear in History as they're made (a robot
+marks agent branches), and the task's page shows everything it changed
+against its base, uncommitted work included, refreshing as it goes. Then:
+
+- **Land** squashes it onto the base as one commit with the prompt as its
+  message and a `Spor-Task:` trailer (or *Land with a Merge Commit*). If
+  the base moved, the task is rebased first; if that conflicts, nothing
+  changes and spor says where. Its folder and branch are cleaned up
+- **Open Pull Request** publishes the branch and opens the host's page
+- **Discard** removes the folder and branch
+
+Landing and discarding can be undone with ⌘Z. Tasks are kept in
+`.git/spor/tasks/`, shared by every worktree and never committed. What
+comes next is in [docs/agents.md](docs/agents.md).
 
 **Knowing when to pull** — the open repository is fetched quietly in the
 background every few minutes. When its upstream has new commits, a
@@ -232,11 +285,22 @@ and always talk to the repository behind `origin`.
  ⎇ main ↑2 ↓1  │  ready  │  [j/k] move  [enter]/[o] checkout ...
 ```
 
+## What's next
+
+[docs/agents.md](docs/agents.md) is the plan for running several coding
+agents side by side in spor: each in its own branch and worktree, watched
+live in History, reviewed like a pull request, and landed in order.
+
 ## Design notes
 
 The core is a library (`src/lib.rs`) that knows nothing about how it's drawn:
 
-- `src/git.rs` — shells out to `git`, parses porcelain output
+- `src/git.rs` — a `Repo` handle that runs `git` in that repository's
+  directory (never the process's), and parses its output
+- `src/tasks.rs` — agent tasks: a prompt with its own branch and
+  worktree; creating, measuring, landing, discarding and restoring them
+- `src/patch.rs` — cuts a patch down to selected lines, for staging,
+  unstaging or discarding part of a file
 - `src/graph.rs` — lane assignment, with main pinned to lane 0
 - `src/color.rs` — HSL color families by branch prefix
 - `src/remote.rs` — remote host detection, compare URLs, PR badges via `gh`
@@ -257,6 +321,11 @@ Mac app (`spor-app`, `--features gui`):
 - `src/gui/repos_panel.rs` — the repository sidebar
 - `src/gui/git_panel.rs`, `branches.rs` — the git and branch dock panels
 - `src/gui/changes_view.rs`, `history.rs` — the two center tabs
+- `src/gui/agents.rs` — the Agents panel, the New Agent Task dialog and a
+  task's page
+- `src/gui/actions.rs` — cherry-pick, revert, rebase, reset, conflicts,
+  line staging, branch and stash management, tags, search, and the
+  interactive rebase tab
 - `src/gui/pulls.rs`, `runs.rs` — the Pull Requests and Actions dock panels
   and the PR and run pages they open
 - `src/gui/hub.rs` — what those have loaded and open, and the background

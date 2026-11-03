@@ -19,6 +19,12 @@ use graph::GraphRow;
 use remote::PrInfo;
 use ui::{Focus, Layout, RepoMeta};
 
+/// The repository the terminal UI was started in. It never changes
+/// directory, so every command can run in the working directory.
+fn git() -> git::Repo {
+    git::Repo::new(".")
+}
+
 /// Modal states that intercept key handling.
 enum Mode {
     Normal,
@@ -56,12 +62,12 @@ struct App {
 
 impl App {
     fn new() -> Result<Self, String> {
-        let commits = git::log_all(2000)?;
-        let chain: HashSet<String> = git::main_chain()?.into_iter().collect();
-        let remotes = git::remotes();
+        let commits = git().log_all(2000)?;
+        let chain: HashSet<String> = git().main_chain()?.into_iter().collect();
+        let remotes = git().remotes();
         let rows = graph::assign_lanes(&commits, &chain, &remotes);
-        let status = git::status().unwrap_or_default();
-        let tracking = git::tracking().unwrap_or_default();
+        let status = git().status().unwrap_or_default();
+        let tracking = git().tracking().unwrap_or_default();
         Ok(Self {
             rows,
             status,
@@ -84,17 +90,17 @@ impl App {
     }
 
     fn refresh(&mut self) {
-        self.remotes = git::remotes();
-        match git::log_all(2000) {
+        self.remotes = git().remotes();
+        match git().log_all(2000) {
             Ok(commits) => {
                 let chain: HashSet<String> =
-                    git::main_chain().unwrap_or_default().into_iter().collect();
+                    git().main_chain().unwrap_or_default().into_iter().collect();
                 self.rows = graph::assign_lanes(&commits, &chain, &self.remotes);
             }
             Err(e) => self.message = format!("log error: {e}"),
         }
-        self.status = git::status().unwrap_or_default();
-        self.tracking = git::tracking().unwrap_or_default();
+        self.status = git().status().unwrap_or_default();
+        self.tracking = git().tracking().unwrap_or_default();
         if self.graph_sel >= self.rows.len() && !self.rows.is_empty() {
             self.graph_sel = self.rows.len() - 1;
         }
@@ -146,12 +152,12 @@ impl App {
             Focus::Graph => self
                 .rows
                 .get(self.graph_sel)
-                .and_then(|r| git::diff_commit(&r.commit.hash).ok())
+                .and_then(|r| git().diff_commit(&r.commit.hash).ok())
                 .unwrap_or_default(),
             Focus::Status => self
                 .status
                 .get(self.status_sel)
-                .and_then(|e| git::diff_entry(e).ok())
+                .and_then(|e| git().diff_entry(e).ok())
                 .unwrap_or_default(),
         };
     }
@@ -514,9 +520,9 @@ fn handle_status_key(app: &mut App, key: KeyEvent, _layout: &Layout) {
         KeyCode::Char(' ') => {
             if let Some(entry) = app.status.get(app.status_sel).cloned() {
                 let result = if entry.status.is_staged() {
-                    git::unstage(&entry)
+                    git().unstage(&entry)
                 } else {
-                    git::stage(&entry.path)
+                    git().stage(&entry.path)
                 };
                 match result {
                     Ok(_) => {
@@ -566,7 +572,10 @@ fn do_pull(app: &mut App) {
 }
 
 fn do_push(app: &mut App) {
-    match git::push_args().and_then(|args| run_suspended("git", &args)) {
+    match git()
+        .push_args()
+        .and_then(|args| run_suspended("git", &args))
+    {
         Ok(()) => {
             app.message = "pushed".into();
             app.refresh();
@@ -577,8 +586,8 @@ fn do_push(app: &mut App) {
 
 fn discard_entry(app: &mut App, entry: &StatusEntry) {
     let result = match entry.status {
-        FileStatus::Untracked => git::remove_untracked(&entry.path),
-        _ => git::discard_worktree(&entry.path),
+        FileStatus::Untracked => git().remove_untracked(&entry.path),
+        _ => git().discard_worktree(&entry.path),
     };
     match result {
         Ok(_) => {
@@ -622,7 +631,7 @@ fn handle_commit_message_key(app: &mut App, key: KeyEvent) {
             if msg.trim().is_empty() {
                 app.message = "empty message, cancelled".into();
             } else {
-                match git::commit(&msg) {
+                match git().commit(&msg) {
                     Ok(_) => {
                         app.message = format!("committed: {msg}");
                         app.refresh();
@@ -660,7 +669,7 @@ fn handle_new_branch_key(app: &mut App, key: KeyEvent) {
             if name_owned.trim().is_empty() {
                 app.message = "empty name, cancelled".into();
             } else {
-                match git::create_branch_at(name_owned.trim(), &sha) {
+                match git().create_branch_at(name_owned.trim(), &sha) {
                     Ok(_) => {
                         app.message = format!("created and switched to {name_owned}");
                         app.refresh();
@@ -794,8 +803,8 @@ fn handle_stash_confirm_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('s') => {
             app.mode = Mode::Normal;
-            match git::stash_push() {
-                Ok(_) => match git::checkout_branch(&target) {
+            match git().stash_push() {
+                Ok(_) => match git().checkout_branch(&target) {
                     Ok(_) => {
                         app.message = format!("stashed and switched to {target}");
                         app.refresh();
@@ -819,7 +828,7 @@ fn handle_stash_confirm_key(app: &mut App, key: KeyEvent) {
 // ── Checkout logic ───────────────────────────────────────────────────────────
 
 fn open_branch_picker(app: &mut App) {
-    match git::list_branches() {
+    match git().list_branches() {
         Ok(mut branches) => {
             // Put current branch on top, then locals alphabetically, then remotes.
             branches.sort_by(|a, b| {
@@ -871,7 +880,7 @@ fn checkout_at_selection(app: &mut App) {
 
 /// Try to check out a branch. On dirty-tree conflict, enter stash-confirm mode.
 fn attempt_checkout(app: &mut App, name: &str) {
-    match git::checkout_branch(name) {
+    match git().checkout_branch(name) {
         Ok(_) => {
             app.message = format!("switched to {name}");
             app.refresh();
@@ -910,7 +919,7 @@ fn open_pull_request(app: &mut App) {
     };
 
     // 3. Need a target base branch — prefer the remote's HEAD, fall back to main.
-    let base = git::default_base_branch().unwrap_or_else(|| "main".into());
+    let base = git().default_base_branch().unwrap_or_else(|| "main".into());
     if base == head {
         app.message = format!("you're on {base} — switch to a feature branch first");
         return;

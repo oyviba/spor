@@ -180,12 +180,18 @@ const PR_LIST_JQ: &str = r#".[] | [(.number|tostring), .headRefName, (if .isDraf
 /// thread. Returns None when the host isn't GitHub or `gh` isn't installed;
 /// badges simply don't appear.
 pub fn fetch_prs() -> Option<Vec<PrInfo>> {
-    let info = detect()?;
+    fetch_prs_in(Path::new("."))
+}
+
+/// [`fetch_prs`] for the repository at `dir`.
+pub fn fetch_prs_in(dir: &Path) -> Option<Vec<PrInfo>> {
+    let info = detect_in(dir)?;
     if info.host != Host::GitHub {
         return None;
     }
     cli_tool(&info.host)?;
     let out = Command::new("gh")
+        .current_dir(dir)
         .args([
             "pr",
             "list",

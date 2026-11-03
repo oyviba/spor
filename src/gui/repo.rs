@@ -22,6 +22,8 @@ pub struct Change {
     pub untracked: bool,
     pub deleted: bool,
     pub added: bool,
+    /// Has unresolved merge conflicts.
+    pub conflicted: bool,
     /// The raw status entries, for staging/unstaging.
     pub entries: Vec<StatusEntry>,
 }
@@ -41,6 +43,7 @@ impl Change {
                         untracked: false,
                         deleted: false,
                         added: false,
+                        conflicted: false,
                         entries: Vec::new(),
                     });
                     out.len() - 1
@@ -65,6 +68,10 @@ impl Change {
                     c.unstaged = true;
                     c.untracked = true;
                     c.added = true;
+                }
+                FileStatus::Conflicted => {
+                    c.unstaged = true;
+                    c.conflicted = true;
                 }
             }
             if e.orig_path.is_some() {
@@ -92,7 +99,9 @@ impl Change {
 
     /// Single-letter status, as git and Zed show it.
     pub fn letter(&self) -> &'static str {
-        if self.untracked {
+        if self.conflicted {
+            "!"
+        } else if self.untracked {
             "U"
         } else if self.deleted {
             "D"
@@ -109,6 +118,8 @@ impl Change {
 #[derive(Clone)]
 pub struct Snapshot {
     pub root: PathBuf,
+    /// Runs git in `root`; clone it into background work.
+    pub git: git::Repo,
     pub name: String,
     pub rows: Vec<GraphRow>,
     /// Row index of each ref's tip, keyed by ref name (tags as `tag:NAME`).
@@ -118,6 +129,10 @@ pub struct Snapshot {
     pub tracking: TrackingInfo,
     pub remotes: Vec<String>,
     pub branches: Vec<Branch>,
+    /// A merge, rebase, cherry-pick or revert stopped half-way.
+    pub operation: Option<git::Operation>,
+    /// Linked working trees besides this one.
+    pub worktrees: Vec<git::Worktree>,
     /// Stash entries, newest first, as their messages.
     pub stashes: Vec<String>,
     /// The branch PRs target: origin's HEAD, else main/master/trunk.
@@ -125,16 +140,16 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// Read everything from the repository at `root`. Every git call in
-    /// `spor::git` runs in the working directory, so the caller sets that.
+    /// Read everything from the repository at `root`.
     pub fn load(root: &Path) -> Result<Self, String> {
+        let git = git::Repo::new(root);
         let name = root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.display().to_string());
-        let remotes = git::remotes();
-        let commits = git::log_all(LOG_LIMIT).unwrap_or_default();
-        let chain: HashSet<String> = git::main_chain().unwrap_or_default().into_iter().collect();
+        let remotes = git.remotes();
+        let commits = git.log_all(LOG_LIMIT).unwrap_or_default();
+        let chain: HashSet<String> = git.main_chain().unwrap_or_default().into_iter().collect();
         let rows = graph::assign_lanes(&commits, &chain, &remotes);
         let max_lanes = rows
             .iter()
@@ -156,23 +171,36 @@ impl Snapshot {
                 ref_rows.entry(key).or_insert(i);
             }
         }
-        let status = git::status()?;
-        let changes = Change::from_status(&status, &git::staged_new_files());
-        let mut branches = git::list_branches().unwrap_or_default();
+        let status = git.status()?;
+        let changes = Change::from_status(&status, &git.staged_new_files());
+        let mut branches = git.list_branches().unwrap_or_default();
         branches.sort_by_key(|b| b.name.to_lowercase());
         Ok(Self {
             root: root.to_path_buf(),
+            operation: git.operation(),
+            worktrees: git
+                .worktrees()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|w| !same_dir(&w.path, root))
+                .collect(),
             name,
             rows,
             ref_rows,
             max_lanes,
             changes,
-            tracking: git::tracking().unwrap_or_default(),
+            tracking: git.tracking().unwrap_or_default(),
             remotes,
             branches,
-            stashes: git::stash_list(),
-            default_branch: git::default_base_branch(),
+            stashes: git.stash_list(),
+            default_branch: git.default_base_branch(),
+            git,
         })
+    }
+
+    /// Files with unresolved conflicts.
+    pub fn conflicted(&self) -> Vec<&Change> {
+        self.changes.iter().filter(|c| c.conflicted).collect()
     }
 
     pub fn head_row(&self) -> Option<usize> {
@@ -206,22 +234,44 @@ impl Snapshot {
     }
 }
 
-/// Everything uncommitted, parsed into diff files for display.
-pub fn uncommitted_files(changes: &[Change]) -> Vec<DiffFile> {
+/// Do two paths name the same directory (one may be a symlink, as /tmp is
+/// on macOS)?
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// One side of the uncommitted changes, for the Unstaged and Staged views.
+pub fn side_files(git: &git::Repo, kind: git::DiffKind, changes: &[Change]) -> Vec<DiffFile> {
     let untracked: Vec<String> = changes
         .iter()
         .filter(|c| c.untracked)
         .map(|c| c.path.clone())
         .collect();
-    git::uncommitted_patch(&untracked)
+    git.patch(kind, &untracked)
+        .ok()
+        .and_then(|patch| DiffFile::parse(&patch).ok())
+        .unwrap_or_default()
+}
+
+/// Everything uncommitted, parsed into diff files for display.
+pub fn uncommitted_files(git: &git::Repo, changes: &[Change]) -> Vec<DiffFile> {
+    let untracked: Vec<String> = changes
+        .iter()
+        .filter(|c| c.untracked)
+        .map(|c| c.path.clone())
+        .collect();
+    git.uncommitted_patch(&untracked)
         .ok()
         .and_then(|patch| DiffFile::parse(&patch).ok())
         .unwrap_or_default()
 }
 
 /// What a commit changed, parsed for display.
-pub fn commit_files(hash: &str, parents: &[String]) -> Vec<DiffFile> {
-    git::commit_patch(hash, parents)
+pub fn commit_files(git: &git::Repo, hash: &str, parents: &[String]) -> Vec<DiffFile> {
+    git.commit_patch(hash, parents)
         .ok()
         .and_then(|patch| DiffFile::parse(&patch).ok())
         .unwrap_or_default()

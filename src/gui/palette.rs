@@ -141,7 +141,37 @@ pub const SHORTCUTS: &[Shortcut] = &[
     cmd("Git", "Open Pull Request for This Branch", &[], || {
         Box::new(OpenPullRequest)
     }),
-    cmd("Git", "Stash All Changes", &[], || Box::new(StashChanges)),
+    cmd("Git", "Stash Changes…", &[], || Box::new(StashChanges)),
+    cmd(
+        "Agents",
+        "New Agent Task…",
+        &["secondary-shift-t"],
+        || Box::new(NewTask),
+    ),
+    cmd("Git", "Pull with Rebase", &[], || Box::new(PullRebase)),
+    cmd("Git", "Amend Last Commit", &[], || Box::new(ToggleAmend)),
+    cmd("Git", "Continue Merge or Rebase", &[], || {
+        Box::new(ContinueOperation)
+    }),
+    cmd("Git", "Abort Merge or Rebase", &[], || {
+        Box::new(AbortOperation)
+    }),
+    cmd("Git", "Cherry-pick Selected Commit", &[], || {
+        Box::new(CherryPickSelected)
+    }),
+    cmd("Git", "Revert Selected Commit", &[], || {
+        Box::new(RevertSelected)
+    }),
+    cmd("Git", "New Tag at Selected Commit…", &[], || {
+        Box::new(NewTag)
+    }),
+    cmd("Git", "Stage Selected Lines", &[], || Box::new(StageLines)),
+    cmd("Git", "Unstage Selected Lines", &[], || {
+        Box::new(UnstageLines)
+    }),
+    cmd("Git", "Discard Selected Lines", &[], || {
+        Box::new(DiscardLines)
+    }),
     cmd("Git", "Refresh", &["secondary-r"], || Box::new(Refresh)),
     cmd(
         "View",
@@ -158,6 +188,9 @@ pub const SHORTCUTS: &[Shortcut] = &[
     cmd("View", "Show Actions", &["secondary-shift-a"], || {
         Box::new(ShowActions)
     }),
+    cmd("View", "Show Agents", &["secondary-shift-i"], || {
+        Box::new(ShowAgents)
+    }),
     cmd("View", "Show Git Panel", &["secondary-shift-g"], || {
         Box::new(ShowGitPanel)
     }),
@@ -166,6 +199,9 @@ pub const SHORTCUTS: &[Shortcut] = &[
     }),
     cmd("View", "Search Branches", &["secondary-shift-f"], || {
         Box::new(SearchBranches)
+    }),
+    cmd("View", "Search Commits", &["secondary-f"], || {
+        Box::new(SearchCommits)
     }),
     cmd("View", "Toggle Dock", &["secondary-b"], || {
         Box::new(ToggleDock)

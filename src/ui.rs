@@ -387,6 +387,7 @@ pub fn draw_status_pane(
             FileStatus::Modified => ("~", (220, 180, 60)),
             FileStatus::Untracked => ("?", (180, 180, 180)),
             FileStatus::Deleted => ("-", (220, 100, 100)),
+            FileStatus::Conflicted => ("!", (240, 90, 90)),
         };
         fg(color)?;
         write!(out, " {marker} ")?;
