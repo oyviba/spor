@@ -129,7 +129,7 @@ impl Spor {
                     .rounded(theme.radius)
                     .cursor_pointer()
                     .when(current, |this| {
-                        this.bg(theme.primary.opacity(0.16)).child(
+                        this.bg(theme.primary.opacity(0.24)).child(
                             div()
                                 .absolute()
                                 .left_0()
