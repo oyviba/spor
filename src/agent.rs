@@ -429,7 +429,23 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
             Some("result") => out.push(Entry::Done {
                 ok: event.get("is_error").bool() != Some(true)
                     && event.get("subtype").str().is_none_or(|s| s == "success"),
-                summary: event.get("result").str().unwrap_or("").trim().to_string(),
+                // The result repeats the agent's last words; say them once.
+                summary: {
+                    let result = event.get("result").str().unwrap_or("").trim();
+                    let said = out
+                        .iter()
+                        .rev()
+                        .find_map(|e| match e {
+                            Entry::Text(t) => Some(t.as_str()),
+                            _ => None,
+                        })
+                        .is_some_and(|last| last == result);
+                    if said {
+                        String::new()
+                    } else {
+                        result.to_string()
+                    }
+                },
                 cost_usd: event.get("total_cost_usd").num(),
                 turns: event.get("num_turns").num().map(|n| n as u32),
                 seconds: event.get("duration_ms").num().map(|ms| ms / 1000.0),
@@ -565,6 +581,7 @@ mod tests {
 {"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":"Permission to use Bash has been denied.\nDetails"}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/w/src/lib.rs"}}]}}
 not json at all
+{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed it."}]}}
 {"type":"result","subtype":"success","is_error":false,"result":"Fixed it.","total_cost_usd":0.25,"num_turns":4,"duration_ms":12500,"session_id":"s-1"}"#;
         let entries = parse_claude(log);
         assert_eq!(
@@ -581,9 +598,10 @@ not json at all
                     detail: "/w/src/lib.rs".into()
                 },
                 Entry::Output("not json at all".into()),
+                Entry::Text("Fixed it.".into()),
                 Entry::Done {
                     ok: true,
-                    summary: "Fixed it.".into(),
+                    summary: String::new(),
                     cost_usd: Some(0.25),
                     turns: Some(4),
                     seconds: Some(12.5),

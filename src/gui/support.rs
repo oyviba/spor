@@ -18,7 +18,21 @@ pub fn fix_path_for_gui_launch() {
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect();
-    for extra in ["/opt/homebrew/bin", "/usr/local/bin"] {
+    // Where agents like Claude Code usually install themselves, too.
+    let home = std::env::var("HOME").unwrap_or_default();
+    let user = [
+        ".local/bin",
+        ".claude/local",
+        ".npm-global/bin",
+        ".bun/bin",
+        ".cargo/bin",
+    ]
+    .map(|d| format!("{home}/{d}"));
+    let system = ["/opt/homebrew/bin", "/usr/local/bin"].map(String::from);
+    for extra in system
+        .iter()
+        .chain(user.iter().filter(|_| !home.is_empty()))
+    {
         if !parts.iter().any(|p| p == extra) && Path::new(extra).is_dir() {
             parts.push(extra.to_string());
         }

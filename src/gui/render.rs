@@ -572,7 +572,7 @@ impl Spor {
             Tab::Task => self
                 .agents
                 .open_task()
-                .map(|(t, _)| format!("Task: {}", t.title())),
+                .map(|v| format!("Task: {}", v.task.title())),
             // A rebase being planned keeps its tab until it's run or cancelled.
             _ => self.rebase.as_ref().map(|d| format!("Rebase {}", d.branch)),
         }

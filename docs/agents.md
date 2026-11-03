@@ -1,8 +1,9 @@
 # Spor for parallel coding agents
 
 A design for making spor the place where you run, watch, review and land
-the work of several coding agents at once. **Phase 1 is built** (tasks
-without agent integration; see the README); the rest is the plan.
+the work of several coding agents at once. **Phases 1 and 2 are built**,
+with most of 3 and the conflict radar from 4 (see the README); the rest is
+the plan.
 
 ## The problem
 
@@ -193,12 +194,15 @@ Each phase is useful on its own.
    with Land, Open Pull Request and Discard. That's already a better way to
    run agents by hand: start a task, run your agent in its folder, review
    and land in spor.
-2. **Launch and watch.** The generic command adapter and the Claude Code
+2. **Launch and watch** — *done*. The generic command adapter and the Claude Code
    adapter: spawn in the worktree, stream the transcript, states from the
    process and the stream, a notification when a task finishes or fails.
-3. **The review loop.** Send Feedback with diff-line comments, resume the
-   agent's session, and the permission bridge for *Needs you*.
-4. **Many at once.** Collision radar, Rebase All with conflicts handed back
+3. **The review loop** — *done, except the permission bridge*. Send
+   Feedback with diff-line comments, resume the agent's session. Still to
+   do: the permission bridge for *Needs you*; for now the task's
+   permissions are set when it starts.
+4. **Many at once** — *collision radar done*, with *Ask Agent to Rebase*
+   for conflicts with the base. Still to do: Rebase All with conflicts handed back
    to the agent, and landing in order with checks.
 5. **Remote agents.** Agents running in the cloud already work on branches
    and open pull requests. A task can follow a remote branch or PR instead
