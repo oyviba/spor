@@ -78,7 +78,7 @@ impl Spor {
         let mode_button = |id: &'static str, label: &'static str, m: ChangesMode| {
             Button::new(id)
                 .ghost()
-                .xsmall()
+                .small()
                 .label(label)
                 .selected(mode == m)
                 .on_click(cx.listener(move |this, _, _, cx| this.set_changes_mode(m, cx)))
@@ -86,7 +86,7 @@ impl Spor {
         let line_button = |id: &'static str, label: &'static str, action: LineAction| {
             Button::new(id)
                 .outline()
-                .xsmall()
+                .small()
                 .label(label)
                 .disabled(!selection)
                 .tooltip(if selection {
@@ -136,7 +136,7 @@ impl Spor {
                 .size_full()
                 .child(
                     h_flex()
-                        .h(gpui_kit::px(32.))
+                        .h(gpui_kit::px(40.))
                         .flex_none()
                         .px_3()
                         .border_b_1()
@@ -164,7 +164,7 @@ impl Spor {
             .size_full()
             .child(
                 h_flex()
-                    .h(gpui_kit::px(32.))
+                    .h(gpui_kit::px(40.))
                     .flex_none()
                     .px_3()
                     .gap_3()
@@ -207,7 +207,7 @@ impl Spor {
             .size_full()
             .child(
                 h_flex()
-                    .h(gpui_kit::px(36.))
+                    .h(gpui_kit::px(40.))
                     .flex_none()
                     .px_3()
                     .gap_2()
@@ -229,7 +229,7 @@ impl Spor {
                     .child(
                         Button::new("conflict-ours")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .label("Use Current")
                             .tooltip("Keep the checked-out branch's version of the whole file")
                             .on_click(cx.listener(move |this, _, w, cx| {
@@ -239,7 +239,7 @@ impl Spor {
                     .child(
                         Button::new("conflict-theirs")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .label("Use Incoming")
                             .tooltip("Keep the incoming version of the whole file")
                             .on_click(cx.listener(move |this, _, w, cx| {
@@ -249,7 +249,7 @@ impl Spor {
                     .child(
                         Button::new("conflict-close")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .label("Close")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.conflict_path = None;
@@ -259,7 +259,7 @@ impl Spor {
                     .child(
                         Button::new("conflict-save")
                             .primary()
-                            .xsmall()
+                            .small()
                             .label("Save and Mark Resolved")
                             .disabled(!ready)
                             .tooltip(if ready {

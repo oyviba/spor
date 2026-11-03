@@ -61,7 +61,6 @@ pub mod icon {
     pub const FOLDER_GIT: &str = "icons/folder-git-2.svg";
     pub const GIT_BRANCH: &str = "icons/git-branch.svg";
     pub const GIT_COMMIT: &str = "icons/git-commit-horizontal.svg";
-    pub const GIT_COMPARE: &str = "icons/git-compare.svg";
     pub const GIT_PULL_REQUEST: &str = "icons/git-pull-request.svg";
     pub const LIST_CHECKS: &str = "icons/list-checks.svg";
     pub const SYNC: &str = "icons/arrow-up-down.svg";

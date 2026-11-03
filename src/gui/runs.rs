@@ -61,7 +61,7 @@ impl Spor {
             _ => "Runs on All Branches".to_string(),
         };
         let header = h_flex()
-            .h(px(36.))
+            .h(px(44.))
             .flex_none()
             .px_2()
             .gap_1()
@@ -70,7 +70,7 @@ impl Spor {
             .child(
                 Button::new("runs-scope")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .label(scope)
                     .dropdown_caret(true)
                     .dropdown_menu(move |menu, _, _| {
@@ -103,7 +103,7 @@ impl Spor {
             .child(
                 Button::new("runs-refresh")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .icon(Icon::empty().path(icon::REFRESH))
                     .loading(refreshing)
                     .tooltip("Refresh")
@@ -135,6 +135,7 @@ impl Spor {
 
         v_flex()
             .size_full()
+            .bg(theme.sidebar)
             .child(header)
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
@@ -434,7 +435,7 @@ impl Spor {
         };
         let url = job.url.clone();
         let header = h_flex()
-            .h(px(32.))
+            .h(px(40.))
             .flex_none()
             .px_3()
             .gap_2()
@@ -454,7 +455,7 @@ impl Spor {
                 this.child(
                     Button::new("job-web")
                         .ghost()
-                        .xsmall()
+                        .small()
                         .icon(Icon::empty().path(icon::EXTERNAL_LINK))
                         .tooltip("Open this job on GitHub")
                         .on_click(move |_, _, cx| cx.open_url(&url)),

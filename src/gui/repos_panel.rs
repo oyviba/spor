@@ -44,7 +44,7 @@ impl Spor {
         let heads = self.repo_heads.clone();
 
         let header = h_flex()
-            .h(px(36.))
+            .h(px(44.))
             .flex_none()
             .pl_3()
             .pr_1()
@@ -63,7 +63,7 @@ impl Spor {
             .child(
                 Button::new("add-repository")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .icon(IconName::Plus)
                     .tooltip("Add Repository… (⌘O)")
                     .on_click(cx.listener(|this, _, window, cx| this.pick_repo(window, cx))),

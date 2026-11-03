@@ -72,7 +72,7 @@ pub struct Hub {
     /// The PR the open run was reached from, for its Back button.
     pub run_back: Option<u64>,
     /// Where closing the PR or run page goes back to.
-    return_to: Tab,
+    pub(crate) return_to: Tab,
     pub job: Option<u64>,
     pub log: Load<Rc<Vec<LogLine>>>,
     log_for: Option<u64>,
@@ -231,18 +231,18 @@ impl Spor {
         if matches!(self.tab, Tab::Changes | Tab::History) {
             self.hub.return_to = self.tab;
         }
-        self.tab = page;
+        self.set_tab(page);
     }
 
     /// Close the PR or run page.
     pub(crate) fn close_page(&mut self, cx: &mut Context<Self>) {
-        self.tab = self.hub.return_to;
+        self.set_tab(self.hub.return_to);
         cx.notify();
     }
 
     /// Show the pull request list in the dock.
     pub(crate) fn show_pulls(&mut self, cx: &mut Context<Self>) {
-        self.dock = Some(DockPanel::PullRequests);
+        self.set_dock(DockPanel::PullRequests);
         self.hub_repo_changed(cx);
         if self.hub.pulls.needs_load() {
             self.load_pulls(cx);
@@ -519,7 +519,7 @@ impl Spor {
 
     /// Show the Actions run list in the dock.
     pub(crate) fn show_runs(&mut self, cx: &mut Context<Self>) {
-        self.dock = Some(DockPanel::Actions);
+        self.set_dock(DockPanel::Actions);
         self.hub_repo_changed(cx);
         if self.hub.runs.needs_load() {
             self.load_runs(cx);

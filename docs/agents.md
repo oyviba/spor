@@ -124,7 +124,7 @@ with the permission mode the user picked when starting the task.
 
 ### What you see
 
-- **Agents panel** in the dock (next to Pull Requests and Actions). One row
+- **Agents panel** in the sidebar (the rail's Agents section, after Pulls and Actions). One row
   per task: its state, how long it's been running, files changed and +/−,
   and checks once they've run. *Needs you* rows go to the top, highlighted.
   The workspace's repository sidebar gets a count, the way it shows commits
@@ -132,9 +132,9 @@ with the permission mode the user picked when starting the task.
 - **History** shows each agent branch as its own lane with a robot marker.
   The poll loop already reloads when refs move, so commits appear as the
   agent makes them.
-- **The task page** (a center tab, like a PR or a run) has:
+- **The task page** (in the center, like a PR or a run) has:
   - the prompt and the agent's transcript, streamed, with tool calls folded
-  - the diff against the base, with the Changes tab's All / Unstaged /
+  - the diff against the base, with the Changes view's All / Unstaged /
     Staged views, since an agent's uncommitted work counts too
   - checks: a per-repository test command run in the worktree, or the
     branch's Actions once it's pushed

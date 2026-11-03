@@ -149,6 +149,20 @@ pub enum Tab {
     Task,
 }
 
+impl Tab {
+    /// The sidebar panel that goes with this view: the two are one section
+    /// of the navigation rail.
+    pub fn panel(self) -> DockPanel {
+        match self {
+            Tab::Changes => DockPanel::Git,
+            Tab::History | Tab::Rebase => DockPanel::Branches,
+            Tab::Pull => DockPanel::PullRequests,
+            Tab::Run => DockPanel::Actions,
+            Tab::Task => DockPanel::Agents,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum DockPanel {
     Git,
@@ -166,7 +180,9 @@ pub enum DockSide {
 }
 
 /// Panel layout that survives restarts: whether the repository list is
-/// shown, and the dock's side. Stored as `repos<TAB>1` / `dock<TAB>right`.
+/// shown, and the sidebar's side. Stored as `repos<TAB>1` / `dock<TAB>right`.
+/// (Under a new name since the navigation rail: the sidebar now starts
+/// beside the rail, and the repository list hidden.)
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Layout {
     pub show_repos: bool,
@@ -174,12 +190,12 @@ pub struct Layout {
 }
 
 impl Layout {
-    const SETTING: &'static str = "layout";
+    const SETTING: &'static str = "panels";
 
     fn saved() -> Self {
         let mut layout = Self {
-            show_repos: true,
-            dock_side: DockSide::Right,
+            show_repos: false,
+            dock_side: DockSide::Left,
         };
         for line in support::read_setting(Self::SETTING)
             .unwrap_or_default()
@@ -572,14 +588,14 @@ impl Spor {
                 self.history_search
                     .update(cx, |state, cx| state.set_value("", window, cx));
                 if matches!(self.tab, Tab::Rebase | Tab::Task) {
-                    self.tab = Tab::History;
+                    self.set_tab(Tab::History);
                 }
                 self.agents.open = None;
                 self.agents.list.clear();
                 self.refresh_tasks(cx);
                 self.message
                     .update(cx, |state, cx| state.set_value("", window, cx));
-                self.tab = if dirty { Tab::Changes } else { Tab::History };
+                self.set_tab(if dirty { Tab::Changes } else { Tab::History });
                 self.load_changes_diff(cx);
                 if let Some(head) = head {
                     self.select_commit(head, cx);
@@ -1192,7 +1208,7 @@ impl Spor {
             );
             return;
         };
-        self.tab = Tab::History;
+        self.set_tab(Tab::History);
         self.selected = None;
         self.select_commit(i, cx);
         self.history_focus.focus(window, cx);
@@ -1234,7 +1250,7 @@ impl Spor {
 
     /// Scroll Uncommitted Changes to a file's diff.
     pub(crate) fn show_change(&mut self, path: &str, cx: &mut Context<Self>) {
-        self.tab = Tab::Changes;
+        self.set_tab(Tab::Changes);
         self.conflict_path = None;
         self.changes_diff
             .update(cx, |state, cx| state.scroll_to_file(path, cx));
@@ -1385,7 +1401,7 @@ impl Spor {
             self.message
                 .update(cx, |state, cx| state.set_value("", window, cx));
         }
-        self.dock = Some(DockPanel::Git);
+        self.set_dock(DockPanel::Git);
         cx.notify();
     }
 
@@ -1441,7 +1457,7 @@ impl Spor {
                     self.git().uncommit().map(|()| {
                         self.message
                             .update(cx, |state, cx| state.set_value(message, window, cx));
-                        self.tab = Tab::Changes;
+                        self.set_tab(Tab::Changes);
                         self.dock = Some(DockPanel::Git);
                     })
                 }
@@ -1575,7 +1591,7 @@ impl Spor {
         match self.git().stash_pop_at(index) {
             Ok(()) => {
                 self.ok("Stashed changes restored", window, cx);
-                self.tab = Tab::Changes;
+                self.set_tab(Tab::Changes);
                 self.reload(window, cx);
             }
             Err(e) => self.error(
@@ -2034,10 +2050,10 @@ impl Spor {
                     label: format!("Merge into {target} undone"),
                 };
                 self.did(format!("Merged {shown} into {target}"), undo, window, cx);
-                self.tab = Tab::History;
+                self.set_tab(Tab::History);
             }
             Ok(git::Outcome::Conflicts(_)) => {
-                self.tab = Tab::Changes;
+                self.set_tab(Tab::Changes);
                 let spor = cx.entity().downgrade();
                 window.push_notification(
                     Notification::warning(format!(
@@ -2193,7 +2209,65 @@ impl Spor {
             DockSide::Right => DockSide::Left,
         };
         self.layout.save();
-        self.dock.get_or_insert(DockPanel::Git);
+        self.dock.get_or_insert(self.tab.panel());
+        cx.notify();
+    }
+
+    /// The rail's section: the sidebar's panel, or with the sidebar hidden,
+    /// the one that goes with the center.
+    pub(crate) fn section(&self) -> DockPanel {
+        self.dock.unwrap_or(self.tab.panel())
+    }
+
+    /// Show `tab` in the center, bringing the sidebar along to its section.
+    pub(crate) fn set_tab(&mut self, tab: Tab) {
+        self.tab = tab;
+        if self.dock.is_some() {
+            self.dock = Some(tab.panel());
+        }
+    }
+
+    /// Open a section of the rail: its panel in the sidebar, and in the
+    /// center what goes with it — the page last open there, if any.
+    pub(crate) fn set_dock(&mut self, panel: DockPanel) {
+        self.dock = Some(panel);
+        if self.tab.panel() == panel {
+            return;
+        }
+        let tab = match panel {
+            DockPanel::Git => Some(Tab::Changes),
+            DockPanel::Branches if self.rebase.is_some() => Some(Tab::Rebase),
+            DockPanel::Branches => Some(Tab::History),
+            DockPanel::PullRequests => self.hub.pull.map(|_| Tab::Pull),
+            DockPanel::Actions => self.hub.run.map(|_| Tab::Run),
+            DockPanel::Agents => self.agents.open.as_ref().map(|_| Tab::Task),
+        };
+        if let Some(tab) = tab {
+            if matches!(self.tab, Tab::Changes | Tab::History)
+                && matches!(tab, Tab::Pull | Tab::Run)
+            {
+                self.hub.return_to = self.tab;
+            }
+            self.tab = tab;
+        }
+    }
+
+    /// A click on a section of the rail: open it, or hide the sidebar when
+    /// it's the one already showing.
+    pub(crate) fn go_to(&mut self, panel: DockPanel, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dock == Some(panel) {
+            self.dock = None;
+        } else {
+            match panel {
+                DockPanel::PullRequests => self.show_pulls(cx),
+                DockPanel::Actions => self.show_runs(cx),
+                DockPanel::Agents => self.show_agents(cx),
+                _ => self.set_dock(panel),
+            }
+            if self.tab == Tab::History {
+                self.history_focus.focus(window, cx);
+            }
+        }
         cx.notify();
     }
 

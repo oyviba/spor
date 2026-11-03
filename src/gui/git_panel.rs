@@ -89,7 +89,6 @@ impl Spor {
         let changes = repo.changes.clone();
         let all_staged = !changes.is_empty() && changes.iter().all(|c| c.included());
         let staged = repo.staged_count();
-        let has_remote = !repo.remotes.is_empty();
         // A partly staged file stays under Unstaged, with a mixed checkbox:
         // clicking it stages the rest.
         let (conflicts, changes_left): (Vec<Change>, Vec<Change>) =
@@ -112,9 +111,6 @@ impl Spor {
         let rows = Rc::new(rows);
         let spor = Self::weak(cx);
         let message_empty = self.message.read(cx).value().trim().is_empty();
-        let job = self.job;
-        let sync_label = self.sync_label();
-        let behind = repo.tracking.behind;
         let amend = self.amend;
         let has_commits = !repo.rows.is_empty();
         // Amending a commit that's already on the remote rewrites it there
@@ -122,13 +118,13 @@ impl Spor {
         let amend_published = repo.tracking.upstream.is_some() && repo.tracking.ahead == 0;
 
         let header = h_flex()
-            .h(px(36.))
+            .h(px(44.))
             .flex_none()
             .px_3()
             .gap_2()
             .border_b_1()
             .border_color(theme.border)
-            .child(div().text_sm().font_medium().child("Changes"))
+            .child(div().text_sm().font_semibold().child("Changes"))
             .when(!changes.is_empty(), |this| {
                 this.child(
                     div()
@@ -142,7 +138,7 @@ impl Spor {
                 this.child(
                     Button::new("stage-all")
                         .ghost()
-                        .xsmall()
+                        .small()
                         .label(if all_staged {
                             "Unstage All"
                         } else {
@@ -159,7 +155,7 @@ impl Spor {
                     changes.iter().filter(|c| c.unstaged).cloned().collect();
                 Button::new("git-panel-menu")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .icon(Icon::empty().path(icon::ELLIPSIS))
                     .dropdown_menu(move |menu, _, _| {
                         let item = |label: &'static str, f: SporAction| {
@@ -254,26 +250,7 @@ impl Spor {
             )
             .child(
                 h_flex()
-                    .gap_1()
-                    .when(has_remote, |this| {
-                        let sync = Button::new("sync");
-                        // Stands out while there are commits waiting to be pulled.
-                        let sync = if behind > 0 {
-                            sync.info()
-                        } else {
-                            sync.ghost()
-                        };
-                        this.child(
-                            sync.small()
-                                .icon(Icon::empty().path(icon::SYNC))
-                                .label(sync_label)
-                                .loading(job.is_some())
-                                .disabled(job.is_some())
-                                .tooltip("Fetch, then pull or push as needed (⌘⇧S)")
-                                .on_click(cx.listener(|this, _, window, cx| this.sync(window, cx))),
-                        )
-                    })
-                    .child(div().flex_1())
+                    .gap_2()
                     .when(has_commits, |this| {
                         this.child(
                             gpui_kit::component::checkbox::Checkbox::new("amend")
@@ -293,7 +270,7 @@ impl Spor {
                     .child(
                         Button::new("commit")
                             .primary()
-                            .small()
+                            .flex_1()
                             .label(commit_label)
                             .disabled(!can_commit)
                             .tooltip(if amend {
