@@ -120,7 +120,8 @@ fn stats_count_commits_and_uncommitted_work() {
     assert_eq!(stats.commits, 1);
     assert_eq!(stats.uncommitted, 2);
     assert_eq!(stats.files, 3);
-    assert_eq!((stats.additions, stats.deletions), (2, 1));
+    // parser.rs (committed) +1, app.txt +1 −1, notes.txt (new) +1.
+    assert_eq!((stats.additions, stats.deletions), (3, 1));
     assert!(!stats.base_moved);
     let patch = f.tasks.patch(&task).unwrap();
     for file in ["parser.rs", "app.txt", "notes.txt"] {

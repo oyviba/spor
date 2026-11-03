@@ -180,10 +180,22 @@ impl Tasks {
 
     /// Forget a task entirely (its branch and folder are left alone).
     pub fn forget(&self, id: &str) -> Result<(), String> {
+        let _ = std::fs::remove_dir_all(self.run_dir(id));
+        self.unlist(id)
+    }
+
+    /// Drop a task from the list, keeping its agents' transcripts so an
+    /// undo brings them back too.
+    fn unlist(&self, id: &str) -> Result<(), String> {
         match std::fs::remove_file(self.file(id)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
             _ => Ok(()),
         }
+    }
+
+    /// Where a task's agent runs keep their logs (see `agent`).
+    pub fn run_dir(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.d"))
     }
 
     pub fn stats(&self, task: &Task) -> TaskStats {
@@ -204,16 +216,28 @@ impl Tasks {
         let status = wt.status().unwrap_or_default();
         let mut uncommitted: Vec<&str> = status.iter().map(|e| e.path.as_str()).collect();
         uncommitted.dedup();
-        let untracked = status
+        let untracked: Vec<&str> = status
             .iter()
             .filter(|e| e.status == crate::git::FileStatus::Untracked)
-            .count();
+            .map(|e| e.path.as_str())
+            .collect();
+        // numstat leaves out untracked files: count their lines as added
+        // (skipping big ones, which are probably not text).
+        let untracked_lines: usize = untracked
+            .iter()
+            .filter_map(|p| {
+                let path = task.worktree.join(p);
+                let meta = std::fs::metadata(&path).ok()?;
+                (meta.len() < 1 << 20).then_some(path)
+            })
+            .filter_map(|path| std::fs::read(path).ok())
+            .map(|bytes| bytecount_lines(&bytes))
+            .sum();
         TaskStats {
             commits: wt.count_commits(&format!("{start}..HEAD")),
             uncommitted: uncommitted.len(),
-            // numstat leaves out untracked files.
-            files: files + untracked,
-            additions,
+            files: files + untracked.len(),
+            additions: additions + untracked_lines,
             deletions,
             base_moved: wt.count_commits(&format!("HEAD..{}", task.base)) > 0,
             last_commit: wt.commit_time("HEAD"),
@@ -237,7 +261,7 @@ impl Tasks {
             self.repo.remove_worktree(&task.worktree, true)?;
         }
         self.repo.delete_branch(&task.branch, true)?;
-        self.forget(&task.id)?;
+        self.unlist(&task.id)?;
         Ok(Undoable {
             task: task.clone(),
             branch_sha,
@@ -395,6 +419,12 @@ impl Tasks {
     fn file(&self, id: &str) -> PathBuf {
         self.dir.join(format!("{id}.task"))
     }
+}
+
+/// Lines in a file's contents, counting a last line without a newline.
+fn bytecount_lines(bytes: &[u8]) -> usize {
+    let newlines = bytes.iter().filter(|&&b| b == b'\n').count();
+    newlines + usize::from(bytes.last().is_some_and(|&b| b != b'\n'))
 }
 
 /// "Fix the login redirect on Safari!" → `fix-login-redirect-safari`: the

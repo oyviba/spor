@@ -873,10 +873,16 @@ impl Spor {
             }
             // An agent's uncommitted work doesn't move any ref, so watch
             // its folder while tasks are on screen.
-            let _ = this.update(cx, |this, cx| {
-                if this.dock == Some(DockPanel::Agents) || this.tab == Tab::Task {
+            // While an agent works, keep watching even with the panel
+            // closed, to say when it's done.
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.dock == Some(DockPanel::Agents)
+                    || this.tab == Tab::Task
+                    || this.agents.any_running()
+                {
                     this.refresh_tasks(cx);
                 }
+                this.announce_agents(window, cx);
             });
             let Ok(Some(root)) = this.read_with(cx, |this, _| {
                 (this.job.is_none()).then(|| this.repo.as_ref().map(|r| r.root.clone()))?

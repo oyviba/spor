@@ -205,11 +205,26 @@ in `keymap` in the config directory.
 its own branch and folder so several can work at once without touching your
 checkout. A task is a prompt: spor creates `agent/<name>` from the
 checked-out branch, checks it out in `<repo>.spor/<name>` beside the
-repository, and hands you the command to start Claude Code there (*Copy
-Agent Command*, or open the folder in Terminal). Any agent works — run it
-in the folder. Its commits appear in History as they're made (a robot
-marks agent branches), and the task's page shows everything it changed
-against its base, uncommitted work included, refreshing as it goes. Then:
+repository, and starts an agent there:
+
+- **Claude Code** runs headless. It may edit files; shell commands are
+  refused unless you tick *Let it run shell commands*, and `git push`
+  never is. Its **Transcript** shows what it said, each command and file
+  it touched, refusals, and when it's done with time, turns and cost
+- **A custom command** (Agents panel menu → *Custom Agent Command…*) runs
+  any agent, with `{prompt}` for the task; its output is the transcript
+- **None** — run an agent in the folder yourself (*Copy Agent Command*)
+
+Agents keep running if spor quits, and spor picks them up again. A
+notification says when one is ready for review, failed or stopped. Its
+commits appear in History as they're made (a robot marks agent branches),
+and **Changes** shows everything it changed against its base, uncommitted
+work included. Select lines there and *Comment on Lines…* to queue review
+comments; **Send to Agent** sends them with your feedback, continuing the
+agent's conversation. The panel warns when a task's work would conflict
+with its base or with another task's (spor trial-merges them in the
+background), and *Ask Agent to Rebase* hands a conflict with the base back
+to the agent. Then:
 
 - **Land** squashes it onto the base as one commit with the prompt as its
   message and a `Spor-Task:` trailer (or *Land with a Merge Commit*). If
@@ -218,8 +233,9 @@ against its base, uncommitted work included, refreshing as it goes. Then:
 - **Open Pull Request** publishes the branch and opens the host's page
 - **Discard** removes the folder and branch
 
-Landing and discarding can be undone with ⌘Z. Tasks are kept in
-`.git/spor/tasks/`, shared by every worktree and never committed. What
+Landing and discarding can be undone with ⌘Z. Tasks and their
+transcripts are kept in `.git/spor/tasks/`, shared by every worktree and
+never committed. What
 comes next is in [docs/agents.md](docs/agents.md).
 
 **Knowing when to pull** — the open repository is fetched quietly in the
@@ -297,6 +313,9 @@ The core is a library (`src/lib.rs`) that knows nothing about how it's drawn:
 
 - `src/git.rs` — a `Repo` handle that runs `git` in that repository's
   directory (never the process's), and parses its output
+- `src/agent.rs` — running agents in task folders (Claude Code or any
+  command), stopping them, and reading their transcripts
+- `src/json.rs` — a small JSON reader for agents' event streams
 - `src/tasks.rs` — agent tasks: a prompt with its own branch and
   worktree; creating, measuring, landing, discarding and restoring them
 - `src/patch.rs` — cuts a patch down to selected lines, for staging,
