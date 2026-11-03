@@ -27,12 +27,13 @@ jobs:
         run: cargo fmt --check
       - name: Clippy (terminal)
         run: cargo clippy --all-targets -- -D warnings
-      - name: Clippy (terminal + app)
-        run: cargo clippy --all-targets --features gui -- -D warnings
+      - name: Clippy (terminal + app + UI tests)
+        run: cargo clippy --all-targets --features ui-tests -- -D warnings
       - name: Build
         run: cargo build --all-targets --features gui --locked
+      # ui-tests adds the app's headless UI tests (GPUI test windows).
       - name: Test
-        run: cargo test --features gui --locked
+        run: cargo test --features ui-tests --locked
 
   macos-app:
     runs-on: macos-latest

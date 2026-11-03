@@ -73,6 +73,14 @@ To run it without bundling (works on Linux and Windows too):
 cargo run --release --features gui --bin spor-app -- /path/to/repo
 ```
 
+Its headless UI tests (the real window on a scratch repository, driven by
+actions and pointer events) run on any OS; on Linux they need the same
+`libxkbcommon` / Wayland / X11 dev packages as the app build:
+
+```sh
+cargo test --features ui-tests
+```
+
 The layout follows Zed's:
 
 - **Workspace rail** — like Slack, the strip on the far left switches
@@ -83,7 +91,7 @@ The layout follows Zed's:
   already belongs to; the repository menu in the title bar switches between
   a workspace's repositories, moves one to another workspace or removes it
 - **Repositories** — the workspace's repositories in a sidebar beside the
-  rail (⌘⇧E hides it); each shows its current branch, and a blue `↓3`
+  rail (⌘⇧E hides it, drag its edge to resize); each shows its current branch, and a blue `↓3`
   when it has commits to pull (the open one also its change count). Hover
   for where it lives; click to switch, right-click to reveal or remove one
 - **Title bar** — repository and branch pickers, and the branch's PR
@@ -104,7 +112,8 @@ The layout follows Zed's:
   `Return` checks out). Branches and tags get their own column: a laptop
   marks a local branch, a cloud a branch on the remote (one label when it's
   both), and the default branch is filled in, with a bold lane. The ⚙ menu
-  in the header picks columns, labels, row height and lane width. **Drag a
+  in the header picks columns, labels, row height and lane width; drag a
+  column's edge in the header to resize it (double-click resets). **Drag a
   branch** onto another branch's row to merge it there (⌘Z undoes) or open
   a pull request between the two
 - **Pull requests and Actions** — two more dock panels (⌘⇧P, ⌘⇧A, or the
@@ -263,6 +272,7 @@ Mac app (`spor-app`, `--features gui`):
 - `src/gui/theme.rs`, `assets/themes/spor.json` — Spor Light / Spor Dark,
   and the user's overrides
 - `src/gui/theme_editor.rs` — the theme editor
+- `src/gui/ui_tests.rs` — headless UI tests of the app in a GPUI test window
 - `scripts/bundle-macos.sh` — wraps the binary into `Spor.app`
 
 ## License
