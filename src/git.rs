@@ -361,6 +361,32 @@ impl Repo {
         }
     }
 
+    /// Files that would conflict if `a` and `b` were merged, worked out
+    /// without touching any working tree or the index. Empty when they
+    /// merge cleanly.
+    pub fn merge_conflicts(&self, a: &str, b: &str) -> Result<Vec<String>, String> {
+        let out = self.run(&[
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            a,
+            b,
+        ])?;
+        match out.status.code() {
+            Some(0) => Ok(Vec::new()),
+            // The first line is the tree it would write; then one path per
+            // conflicted file.
+            Some(1) => Ok(String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .skip(1)
+                .take_while(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()),
+            _ => Err(error_text(&out)),
+        }
+    }
+
     /// Merge `branch` with a merge commit even when it could fast-forward.
     pub fn merge_no_ff(&self, branch: &str, message: &str) -> Result<Outcome, String> {
         let out = self.run(&["merge", "--no-ff", "-m", message, branch])?;

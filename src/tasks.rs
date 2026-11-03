@@ -180,10 +180,22 @@ impl Tasks {
 
     /// Forget a task entirely (its branch and folder are left alone).
     pub fn forget(&self, id: &str) -> Result<(), String> {
+        let _ = std::fs::remove_dir_all(self.run_dir(id));
+        self.unlist(id)
+    }
+
+    /// Drop a task from the list, keeping its agents' transcripts so an
+    /// undo brings them back too.
+    fn unlist(&self, id: &str) -> Result<(), String> {
         match std::fs::remove_file(self.file(id)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
             _ => Ok(()),
         }
+    }
+
+    /// Where a task's agent runs keep their logs (see `agent`).
+    pub fn run_dir(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.d"))
     }
 
     pub fn stats(&self, task: &Task) -> TaskStats {
@@ -237,7 +249,7 @@ impl Tasks {
             self.repo.remove_worktree(&task.worktree, true)?;
         }
         self.repo.delete_branch(&task.branch, true)?;
-        self.forget(&task.id)?;
+        self.unlist(&task.id)?;
         Ok(Undoable {
             task: task.clone(),
             branch_sha,

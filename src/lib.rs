@@ -2,10 +2,12 @@
 //! remote-host (PR) integration. The terminal UI (`spor`) and the native app
 //! (`spor-app`, behind the `gui` feature) are both thin shells over this.
 
+pub mod agent;
 pub mod color;
 pub mod git;
 pub mod github;
 pub mod graph;
+pub mod json;
 pub mod patch;
 pub mod remote;
 pub mod tasks;
