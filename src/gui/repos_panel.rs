@@ -116,15 +116,30 @@ impl Spor {
                 let open_path = path.clone();
                 let menu_path = path.clone();
                 let menu_spor = spor.clone();
+                // The open repository is tinted in the accent color with a
+                // bar on its leading edge, like the selected rail item, so
+                // it stands out at a glance.
                 h_flex()
                     .id(("repository", ix))
+                    .relative()
                     .mx_1()
                     .px_2()
                     .py_1()
                     .gap_2()
                     .rounded(theme.radius)
                     .cursor_pointer()
-                    .when(current, |this| this.bg(theme.list_active))
+                    .when(current, |this| {
+                        this.bg(theme.primary.opacity(0.16)).child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top(px(6.))
+                                .bottom(px(6.))
+                                .w(px(3.))
+                                .rounded_full()
+                                .bg(theme.primary),
+                        )
+                    })
                     .when(!current, |this| {
                         this.hover(|this| this.bg(theme.list_hover))
                     })
@@ -133,7 +148,7 @@ impl Spor {
                             .path(icon::FOLDER_GIT)
                             .small()
                             .text_color(if current {
-                                theme.foreground
+                                theme.primary
                             } else {
                                 theme.muted_foreground
                             }),
@@ -146,7 +161,10 @@ impl Spor {
                                 div()
                                     .truncate()
                                     .text_sm()
-                                    .when(current, |this| this.font_medium())
+                                    .when(current, |this| {
+                                        this.font_semibold().text_color(theme.foreground)
+                                    })
+                                    .when(!current, |this| this.text_color(theme.muted_foreground))
                                     .child(name),
                             )
                             .child(
