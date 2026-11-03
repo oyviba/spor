@@ -116,30 +116,17 @@ impl Spor {
                 let open_path = path.clone();
                 let menu_path = path.clone();
                 let menu_spor = spor.clone();
-                // The open repository is tinted in the accent color with a
-                // bar on its leading edge, like the selected rail item, so
-                // it stands out at a glance.
+                // The open repository is tinted in the accent color, like
+                // the selected rail item, so it stands out at a glance.
                 h_flex()
                     .id(("repository", ix))
-                    .relative()
                     .mx_1()
                     .px_2()
                     .py_1()
                     .gap_2()
                     .rounded(theme.radius)
                     .cursor_pointer()
-                    .when(current, |this| {
-                        this.bg(theme.primary.opacity(0.24)).child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top(px(6.))
-                                .bottom(px(6.))
-                                .w(px(3.))
-                                .rounded_full()
-                                .bg(theme.primary),
-                        )
-                    })
+                    .when(current, |this| this.bg(theme.primary.opacity(0.24)))
                     .when(!current, |this| {
                         this.hover(|this| this.bg(theme.list_hover))
                     })
