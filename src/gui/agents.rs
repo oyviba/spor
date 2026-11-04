@@ -1870,10 +1870,17 @@ fn render_entry(entry: &Entry, cx: &App) -> AnyElement {
             .text_color(theme.yellow)
             .child(format!("Asked to use {tool}: {detail}"))
             .into_any_element(),
-        Entry::Answer { allow, message, .. } => div()
+        Entry::Answer {
+            allow,
+            message,
+            always,
+            ..
+        } => div()
             .text_xs()
             .text_color(theme.muted_foreground)
-            .child(if *allow {
+            .child(if *allow && *always {
+                "Allowed for this session".to_string()
+            } else if *allow {
                 "Allowed".to_string()
             } else if message.is_empty() {
                 "Denied".to_string()

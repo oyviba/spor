@@ -169,12 +169,18 @@ pub enum Entry {
         id: String,
         tool: String,
         detail: String,
+        /// What "Allow for this session" would cover, from the rules Claude
+        /// Code suggests (#40): "`npm test` commands". None: it suggests
+        /// none, so only this once.
+        session: Option<String>,
     },
-    /// How a question was answered (`message`: what the user said instead).
+    /// How a question was answered (`message`: what the user said instead;
+    /// `always`: allowed for the rest of the session).
     Answer {
         id: String,
         allow: bool,
         message: String,
+        always: bool,
     },
     /// A message sent to the agent while it worked (steering, #22).
     Steer(String),
@@ -189,6 +195,8 @@ pub struct Ask {
     pub id: String,
     pub tool: String,
     pub detail: String,
+    /// What "Allow for this session" would cover, if it's offered.
+    pub session: Option<String>,
 }
 
 /// The runs of one task.
@@ -518,6 +526,16 @@ echo $code > "$SPOR_EXIT""#;
         ))
     }
 
+    /// Allow the tool, and don't ask again about this kind of action while
+    /// the session lasts: the rules Claude Code suggested go back with the
+    /// answer (`Ask::session` says what they cover).
+    pub fn allow_for_session(&self, id: &str) -> Result<(), String> {
+        self.command(&format!(
+            r#"{{"answer":{{"request_id":{},"allow":true,"always":true,"message":""}}}}"#,
+            host::quote(id)
+        ))
+    }
+
     /// Change the running agent's permission mode (Claude Code under the
     /// host). Takes effect for what it does next.
     pub fn set_mode(&self, mode: Mode) -> Result<(), String> {
@@ -562,10 +580,16 @@ echo $code > "$SPOR_EXIT""#;
         entries
             .iter()
             .filter_map(|e| match e {
-                Entry::Ask { id, tool, detail } if !answered.contains(id.as_str()) => Some(Ask {
+                Entry::Ask {
+                    id,
+                    tool,
+                    detail,
+                    session,
+                } if !answered.contains(id.as_str()) => Some(Ask {
                     id: id.clone(),
                     tool: tool.clone(),
                     detail: detail.clone(),
+                    session: session.clone(),
                 }),
                 _ => None,
             })
@@ -887,6 +911,7 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                         .to_string(),
                     tool: request.get("tool_name").str().unwrap_or("Tool").to_string(),
                     detail: tool_detail(request.get("input")),
+                    session: covers(request.get("permission_suggestions")),
                 });
             }
             Some("spor_answer") => out.push(Entry::Answer {
@@ -897,6 +922,7 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                     .to_string(),
                 allow: event.get("allow").bool() == Some(true),
                 message: event.get("message").str().unwrap_or_default().to_string(),
+                always: event.get("always").bool() == Some(true),
             }),
             Some("spor_setup") => out.push(match event.get("state").str() {
                 Some("done") => {
@@ -1002,6 +1028,64 @@ fn alive(pid: Option<&str>) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// What Claude Code's `permission_suggestions` would allow, in words:
+/// "`npm test` commands", "file edits", "all commands". None when there
+/// are none, or none that allow anything.
+pub fn covers(suggestions: &Json) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for s in suggestions.array() {
+        match s.get("type").str() {
+            Some("addRules" | "replaceRules") if s.get("behavior").str() == Some("allow") => {
+                for rule in s.get("rules").array() {
+                    let tool = rule.get("toolName").str().unwrap_or("the tool");
+                    parts.push(rule_words(tool, rule.get("ruleContent").str()));
+                }
+            }
+            Some("setMode") => parts.push(match s.get("mode").str() {
+                Some("acceptEdits") => "file edits".into(),
+                Some("bypassPermissions") => "everything".into(),
+                Some(mode) => format!("{mode} mode"),
+                None => continue,
+            }),
+            Some("addDirectories") => {
+                let dirs: Vec<&str> = s
+                    .get("directories")
+                    .array()
+                    .iter()
+                    .filter_map(Json::str)
+                    .collect();
+                if !dirs.is_empty() {
+                    parts.push(format!("files in {}", dirs.join(", ")));
+                }
+            }
+            _ => {}
+        }
+    }
+    parts.dedup();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
+/// One permission rule, `Bash(npm test:*)`, as words.
+fn rule_words(tool: &str, content: Option<&str>) -> String {
+    let content = content.map(str::trim).filter(|c| !c.is_empty());
+    match (tool, content) {
+        ("Bash", None) => "all commands".into(),
+        ("Bash", Some(c)) => match c.strip_suffix(":*").or_else(|| c.strip_suffix(" *")) {
+            Some(prefix) => format!("`{prefix}` commands"),
+            None => format!("`{c}`"),
+        },
+        ("Edit" | "Write" | "MultiEdit" | "NotebookEdit", None) => "file edits".into(),
+        ("Edit" | "Write" | "MultiEdit" | "NotebookEdit", Some(c)) => format!("edits to {c}"),
+        ("Read", Some(c)) => format!("reading {c}"),
+        ("WebFetch", Some(c)) => match c.strip_prefix("domain:") {
+            Some(domain) => format!("fetching from {domain}"),
+            None => format!("fetching {c}"),
+        },
+        (tool, None) => format!("all {tool} uses"),
+        (tool, Some(c)) => format!("{tool}({c})"),
+    }
+}
+
 /// Is `program` on the PATH?
 pub fn available(program: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|paths| {
@@ -1060,6 +1144,43 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggested_rules_in_words() {
+        let say = |json: &str| covers(&Json::parse(json).unwrap());
+        assert_eq!(say("[]"), None);
+        assert_eq!(
+            say(
+                r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test:*"}],"behavior":"allow","destination":"session"}]"#
+            ),
+            Some("`npm test` commands".into())
+        );
+        assert_eq!(
+            say(
+                r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"make"},{"toolName":"Bash"}],"behavior":"allow","destination":"session"}]"#
+            ),
+            Some("`make`, all commands".into())
+        );
+        assert_eq!(
+            say(
+                r#"[{"type":"setMode","mode":"acceptEdits","destination":"session"},{"type":"addDirectories","directories":["/tmp/x"],"destination":"session"}]"#
+            ),
+            Some("file edits, files in /tmp/x".into())
+        );
+        assert_eq!(
+            say(
+                r#"[{"type":"addRules","rules":[{"toolName":"WebFetch","ruleContent":"domain:docs.rs"}],"behavior":"allow","destination":"session"}]"#
+            ),
+            Some("fetching from docs.rs".into())
+        );
+        // Rules that deny or ask don't allow anything.
+        assert_eq!(
+            say(
+                r#"[{"type":"addRules","rules":[{"toolName":"Bash"}],"behavior":"deny","destination":"session"}]"#
+            ),
+            None
+        );
+    }
 
     #[test]
     fn claude_events_become_a_transcript() {

@@ -62,6 +62,8 @@ export interface Ask {
   id: string;
   tool: string;
   detail: string;
+  /** What "Allow for this session" covers ("`npm test` commands"); null: only once. */
+  session: string | null;
 }
 
 export type Item =
@@ -78,8 +80,8 @@ export type Item =
       seconds: number | null;
     }
   | { kind: "output"; text: string }
-  | { kind: "ask"; id: string; tool: string; detail: string }
-  | { kind: "answer"; id: string; allow: boolean; message: string }
+  | { kind: "ask"; id: string; tool: string; detail: string; session: string | null }
+  | { kind: "answer"; id: string; allow: boolean; message: string; always: boolean }
   | { kind: "steer"; text: string }
   | { kind: "setup"; ok: boolean | null; code: number | null };
 

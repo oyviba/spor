@@ -160,7 +160,7 @@ const tasks: MockTask[] = [
       { kind: "tool", name: "Edit", detail: "src/routes/drafts.ts" },
     ],
     script: [
-      { kind: "ask", id: "req-1", tool: "Bash", detail: "pnpm tsc --noEmit" },
+      { kind: "ask", id: "req-1", tool: "Bash", detail: "pnpm tsc --noEmit", session: "`pnpm tsc` commands" },
       { kind: "tool", name: "Bash", detail: "pnpm tsc --noEmit" },
       { kind: "tool", name: "Bash", detail: "pnpm test drafts" },
       { kind: "text", text: "Types check and the draft tests pass. Adding a test for expiry next." },
@@ -237,7 +237,7 @@ setInterval(() => {
   if (next) {
     t.transcript.push(next);
     if (next.kind === "ask") {
-      t.asks = [{ id: next.id, tool: next.tool, detail: next.detail }];
+      t.asks = [{ id: next.id, tool: next.tool, detail: next.detail, session: next.session }];
       t.summary.asks = 1;
     }
     return;
@@ -390,7 +390,13 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
         if (!ask) throw "That question was already answered";
         t.asks = t.asks!.filter((a) => a !== ask);
         t.summary.asks = t.asks.length;
-        t.transcript.push({ kind: "answer", id: ask.id, allow: !!args.allow, message: (args.message as string) ?? "" });
+        t.transcript.push({
+          kind: "answer",
+          id: ask.id,
+          allow: !!args.allow,
+          message: (args.message as string) ?? "",
+          always: !!args.allow && !!args.always,
+        });
         if (!args.allow) t.script = t.script.filter((x) => !(x.kind === "tool" && x.detail === ask.detail));
         return null;
       }

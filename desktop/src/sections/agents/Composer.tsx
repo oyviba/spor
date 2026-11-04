@@ -64,6 +64,7 @@ interface Props {
   /** Questions the agent is waiting on (it runs under the host). */
   asks: Ask[];
   onAnswer: (ask: Ask, allow: boolean, message?: string) => void;
+  onAllowForSession: (ask: Ask) => void;
   /** The running agent's mode, changeable while it works; null otherwise. */
   liveMode: Mode | null;
   onLiveMode: (m: Mode) => void;
@@ -195,6 +196,15 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
               <button className="ghost small" onClick={() => p.onAnswer(ask, false)}>
                 <X size={11} /> Deny
               </button>
+              {ask.session && (
+                <button
+                  className="ghost small"
+                  onClick={() => p.onAllowForSession(ask)}
+                  title={`Allow it, and don't ask again this session about ${ask.session.replace(/`/g, "")}`}
+                >
+                  Allow for this session
+                </button>
+              )}
               <button className="primary small" onClick={() => p.onAnswer(ask, true)}>
                 <Check size={11} /> Allow
               </button>

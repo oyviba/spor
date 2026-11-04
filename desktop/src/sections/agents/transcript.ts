@@ -13,7 +13,7 @@ export type Block =
   | { kind: "tools"; tools: Tool[] }
   | { kind: "output"; lines: string[] }
   /** A question the agent asked, and how it was answered (null: waiting). */
-  | { kind: "ask"; id: string; tool: string; detail: string; answer: { allow: boolean; message: string } | null }
+  | { kind: "ask"; id: string; tool: string; detail: string; answer: { allow: boolean; message: string; always: boolean } | null }
   /** A message sent while it worked. */
   | { kind: "steer"; text: string }
   /** The folder's setup script and its output (ok null: still going). */
@@ -80,7 +80,7 @@ export function runs(items: Item[], running: boolean): RunView[] {
         break;
       case "answer": {
         const ask = (current as RunView | null)?.blocks.find((b) => b.kind === "ask" && b.id === item.id);
-        if (ask?.kind === "ask") ask.answer = { allow: item.allow, message: item.message };
+        if (ask?.kind === "ask") ask.answer = { allow: item.allow, message: item.message, always: item.always };
         break;
       }
       case "steer":

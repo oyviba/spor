@@ -96,9 +96,10 @@ export const api = {
   /** `message` null starts the task's own prompt; otherwise it's a follow-up. */
   sendToAgent: (id: string, message: string | null, agent: AgentChoice, mode: Mode) =>
     call<void>("send_to_agent", { id, message, agent, mode }),
-  /** Answer a question the agent asked; `message` says what to do instead. */
-  answerAsk: (id: string, requestId: string, allow: boolean, message = "") =>
-    call<void>("answer_ask", { id, requestId, allow, message }),
+  /** Answer a question the agent asked; `message` says what to do instead,
+   * `always` allows it for the rest of the session (#40). */
+  answerAsk: (id: string, requestId: string, allow: boolean, message = "", always = false) =>
+    call<void>("answer_ask", { id, requestId, allow, message, always }),
   /** Start the next agent without the folder's setup script (#23). */
   skipSetup: (id: string) => call<void>("skip_setup", { id }),
   /** A message into the turn the agent is on (#22). */
