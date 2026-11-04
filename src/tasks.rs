@@ -232,6 +232,55 @@ impl Tasks {
         self.unlist(id)
     }
 
+    /// Clean up after landed and discarded tasks (#41): their run
+    /// checkpoints (`refs/spor/tasks/<id>/…`), and a discarded task's
+    /// transcripts. Undo can't bring those back afterwards, so apps do this
+    /// when nothing is left to undo (at start) or when asked. Returns how
+    /// many tasks it cleaned up after.
+    pub fn clean_up(&self) -> usize {
+        let open: std::collections::HashSet<String> = self
+            .list()
+            .into_iter()
+            .filter(|t| t.state == TaskState::Open)
+            .map(|t| t.id)
+            .collect();
+        let listed: std::collections::HashSet<String> =
+            self.list().into_iter().map(|t| t.id).collect();
+        let mut ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        // Tasks with checkpoints.
+        ids.extend(
+            crate::checkpoint::list(self.repo.root(), "refs/spor/tasks/")
+                .iter()
+                .filter_map(|r| r.strip_prefix("refs/spor/tasks/"))
+                .filter_map(|r| r.split('/').next())
+                .filter(|id| !open.contains(*id))
+                .map(String::from),
+        );
+        // Discarded tasks' transcripts.
+        let mut gone_dirs = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&self.dir) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if let Some(id) = name.strip_suffix(".d") {
+                    if !listed.contains(id) {
+                        ids.insert(id.to_string());
+                        gone_dirs.push(e.path());
+                    }
+                }
+            }
+        }
+        for id in &ids {
+            crate::checkpoint::delete_all(
+                self.repo.root(),
+                &format!("{}/", crate::agent::checkpoint_prefix(id)),
+            );
+        }
+        for dir in gone_dirs {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        ids.len()
+    }
+
     /// Drop a task from the list, keeping its agents' transcripts so an
     /// undo brings them back too.
     fn unlist(&self, id: &str) -> Result<(), String> {

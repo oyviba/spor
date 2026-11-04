@@ -69,6 +69,7 @@ const summary = (id: string, prompt: string, created: number, over: Partial<Task
   command: `cd /Users/you/code/postplan.spor/${id} && claude '${prompt}'`,
   asks: 0,
   mode: "acceptEdits",
+  queued: [],
   ...over,
 });
 
@@ -323,6 +324,9 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
           runs: t.runs.map((r, i) => ({ ...r, prompt: r.prompt || promptOf(t, i) })),
           conflicts: t.summary.id === "dark-mode-dashboard" ? ["src/styles/theme.css"] : [],
           undoable: last && !last.undone && last.state !== "running" ? last.index : null,
+          undoable_from:
+            last?.state === "running" ? [] : t.runs.filter((r) => !r.undone).map((r) => r.index),
+          setup: null,
           asks: t.asks ?? [],
           listening: t.summary.run?.state === "running",
         };
@@ -372,6 +376,30 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
         );
         return null;
       }
+      case "queue_follow_up": {
+        const t = find(id);
+        t.summary.queued = [...t.summary.queued, (args.text as string).trim()];
+        return null;
+      }
+      case "unqueue": {
+        const t = find(id);
+        t.summary.queued = t.summary.queued.filter((_, i) => i !== args.index);
+        return null;
+      }
+      case "send_queued": {
+        const t = find(id);
+        if (t.summary.run?.state === "running" || t.summary.queued.length === 0) return false;
+        const [first, ...rest] = t.summary.queued;
+        t.summary.queued = rest;
+        start(t, first, args.agent as AgentChoice);
+        return true;
+      }
+      case "rerun_setup":
+        return null;
+      case "clean_up_tasks":
+        return "Nothing to clean up";
+      case "notify":
+        return null;
       case "stop_agent": {
         const t = find(id);
         if (t.summary.run?.state !== "running") return null;
@@ -430,8 +458,9 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
         const t = find(id);
         const last = t.runs.at(-1);
         if (!last || last.undone || last.state === "running") throw "There's no run to undo";
-        last.undone = true;
-        return `Undid run ${last.index + 1}`;
+        const from = (args.from as number | null) ?? last.index;
+        for (const r of t.runs) if (r.index >= from) r.undone = true;
+        return from === last.index ? `Undid run ${last.index + 1}` : `Undid ${last.index - from + 1} runs`;
       }
       default:
         throw `Unknown command ${cmd}`;

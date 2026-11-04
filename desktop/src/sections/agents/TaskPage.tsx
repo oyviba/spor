@@ -44,7 +44,9 @@ interface Props {
   /** For one run: files left out because they came with the base. */
   fromBase: string[];
   onRunChanges: (index: number) => void;
-  onUndoRun: () => void;
+  /** Undo the last run, or (`from`) that run and every run after it. */
+  onUndoRun: (from: number | null) => void;
+  onRerunSetup: () => void;
   onAnswer: (ask: Ask, allow: boolean, message?: string) => void;
   onLiveMode: (mode: Mode) => void;
   onSteer: (text: string) => void;
@@ -143,6 +145,7 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
             onDiscard={p.onDiscard}
             onAskRebase={p.onAskRebase}
             onShowBranch={p.onShowBranch}
+            onRerunSetup={p.onRerunSetup}
           />
         )}
       </div>

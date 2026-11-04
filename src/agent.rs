@@ -191,6 +191,26 @@ pub struct Ask {
     pub detail: String,
 }
 
+/// A task's setup script (#23), for its details card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Setup {
+    /// The script, relative to the task's folder when it's in it.
+    pub script: Option<PathBuf>,
+    /// How it went; None if it hasn't run.
+    pub state: Option<SetupState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupState {
+    Running,
+    Worked,
+    /// Its exit code, if it got as far as one.
+    Failed(Option<i32>),
+    Skipped,
+    /// It worked, and runs again before the next agent.
+    Due,
+}
+
 /// The runs of one task.
 #[derive(Debug, Clone)]
 pub struct Runs {
@@ -221,6 +241,11 @@ impl Runs {
         if self.dir.join("setup.ok").exists() {
             return None;
         }
+        self.find_setup_script(task)
+    }
+
+    /// The task's setup script, whether or not it still has to run.
+    fn find_setup_script(&self, task: &Task) -> Option<PathBuf> {
         let private = crate::git::Repo::new(&self.repo_root)
             .common_dir()
             .ok()
@@ -235,6 +260,132 @@ impl Runs {
     pub fn skip_setup(&self) -> Result<(), String> {
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         std::fs::write(self.dir.join("setup.ok"), "skipped\n").map_err(|e| e.to_string())
+    }
+
+    /// Run the setup script again, before the next agent.
+    pub fn rerun_setup(&self) -> Result<(), String> {
+        match std::fs::remove_file(self.dir.join("setup.ok")) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        }
+    }
+
+    /// The task's setup script and how it went, for its details card.
+    pub fn setup(&self, task: &Task) -> Setup {
+        let script = self.find_setup_script(task).map(|p| {
+            p.strip_prefix(&task.worktree)
+                .map(Path::to_path_buf)
+                .unwrap_or(p)
+        });
+        let ok = std::fs::read_to_string(self.dir.join("setup.ok")).ok();
+        if ok.as_deref() == Some("skipped\n") {
+            return Setup {
+                script,
+                state: Some(SetupState::Skipped),
+            };
+        }
+        // The latest run that ran it says how it went.
+        let mut state = None;
+        for run in self.list() {
+            let log = std::fs::read_to_string(self.file(run.index, "log")).unwrap_or_default();
+            for line in log
+                .lines()
+                .filter(|l| l.starts_with(r#"{"type":"spor_setup""#))
+            {
+                if let Some(Entry::Setup { ok, code }) = parse_claude(line).pop() {
+                    state = Some(match ok {
+                        None if run.state == RunState::Running => SetupState::Running,
+                        None => SetupState::Failed(None),
+                        Some(true) => SetupState::Worked,
+                        Some(false) => SetupState::Failed(code),
+                    });
+                }
+            }
+        }
+        // Run again (rerun_setup) once it worked: due before the next agent.
+        if state == Some(SetupState::Worked) && ok.is_none() {
+            state = Some(SetupState::Due);
+        }
+        Setup { script, state }
+    }
+
+    /// Follow-ups waiting for the agent to finish (#22), oldest first.
+    /// Kept with the task, so every app and every window sees them.
+    pub fn queued(&self) -> Vec<String> {
+        std::fs::read_to_string(self.dir.join("queue"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(unescape)
+            .collect()
+    }
+
+    /// Add a follow-up to send when the agent finishes.
+    pub fn queue(&self, message: &str) -> Result<(), String> {
+        let mut queued = self.queued();
+        queued.push(message.to_string());
+        self.write_queue(&queued)
+    }
+
+    /// Drop queued follow-up `index`.
+    pub fn unqueue(&self, index: usize) -> Result<(), String> {
+        let mut queued = self.queued();
+        if index >= queued.len() {
+            return Err("That follow-up was already sent".into());
+        }
+        queued.remove(index);
+        self.write_queue(&queued)
+    }
+
+    /// Take the oldest queued follow-up off the queue.
+    pub fn take_queued(&self) -> Option<String> {
+        let mut queued = self.queued();
+        if queued.is_empty() {
+            return None;
+        }
+        let first = queued.remove(0);
+        self.write_queue(&queued).ok()?;
+        Some(first)
+    }
+
+    /// Send the oldest queued follow-up, if the agent is idle: as
+    /// [`Runs::follow_up`] does. It leaves the queue only once it's sent.
+    pub fn send_queued(
+        &self,
+        task: &Task,
+        chosen: Option<&AgentKind>,
+        permissions: Permissions,
+    ) -> Result<bool, String> {
+        if self.latest().is_some_and(|r| r.state == RunState::Running) {
+            return Ok(false);
+        }
+        let Some(first) = self.queued().into_iter().next() else {
+            return Ok(false);
+        };
+        self.follow_up(task, Some(&first), chosen, permissions)?;
+        // Someone may have changed the queue meanwhile: drop this message,
+        // wherever it is now.
+        let mut queued = self.queued();
+        if let Some(i) = queued.iter().position(|m| *m == first) {
+            queued.remove(i);
+            self.write_queue(&queued)?;
+        }
+        Ok(true)
+    }
+
+    fn write_queue(&self, queued: &[String]) -> Result<(), String> {
+        std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
+        let path = self.dir.join("queue");
+        if queued.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            return Ok(());
+        }
+        let text: String = queued.iter().map(|m| escape(m) + "\n").collect();
+        // Written whole, then moved into place: another app reading it
+        // never sees half a queue.
+        let tmp = self.dir.join("queue.tmp");
+        std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
     }
 
     /// The ref of one of run `index`'s checkpoints: before, after, undone.
@@ -593,17 +744,57 @@ echo $code > "$SPOR_EXIT""#;
         let run = self
             .undoable()
             .ok_or("There's no run to undo (or an agent is still working)")?;
-        let wt = &self.worktree;
-        let before = checkpoint::resolve(wt, &self.checkpoint_ref(run.index, "before"))
-            .ok_or("This run has no checkpoint")?;
-        checkpoint::capture(wt, &self.checkpoint_ref(run.index, "undone"))?;
-        checkpoint::restore(wt, &before)?;
-        std::fs::write(self.file(run.index, "undone"), "").map_err(|e| e.to_string())?;
+        self.undo_from(run.index)?;
         Ok(run.index)
     }
 
-    /// Take back [`Runs::undo_last`]: the folder as it was, and the run
-    /// counts again.
+    /// The runs "Undo from here" can start at: none while an agent works;
+    /// otherwise each run not yet undone that has a before checkpoint.
+    pub fn undoable_from(&self) -> Vec<usize> {
+        let list = self.list();
+        if list.iter().any(|r| r.state == RunState::Running) {
+            return Vec::new();
+        }
+        list.iter()
+            .filter(|r| !r.undone)
+            .filter(|r| {
+                checkpoint::resolve(&self.worktree, &self.checkpoint_ref(r.index, "before"))
+                    .is_some()
+            })
+            .map(|r| r.index)
+            .collect()
+    }
+
+    /// Undo run `index` and every run after it: the folder as it was
+    /// before `index` ran, and follow-ups resume from before it. Returns
+    /// the runs it took back. [`Runs::redo`] with `index` brings them all
+    /// back.
+    pub fn undo_from(&self, index: usize) -> Result<Vec<usize>, String> {
+        if !self.undoable_from().contains(&index) {
+            return Err("That run can't be undone (or an agent is still working)".into());
+        }
+        let wt = &self.worktree;
+        let before = checkpoint::resolve(wt, &self.checkpoint_ref(index, "before"))
+            .ok_or("This run has no checkpoint")?;
+        checkpoint::capture(wt, &self.checkpoint_ref(index, "undone"))?;
+        checkpoint::restore(wt, &before)?;
+        // Each marker names the run the undo started at, so a redo brings
+        // back this batch and not runs undone on their own before it.
+        let mut taken = Vec::new();
+        for run in self
+            .list()
+            .into_iter()
+            .filter(|r| r.index >= index && !r.undone)
+        {
+            std::fs::write(self.file(run.index, "undone"), index.to_string())
+                .map_err(|e| e.to_string())?;
+            taken.push(run.index);
+        }
+        Ok(taken)
+    }
+
+    /// Take back [`Runs::undo_last`] or [`Runs::undo_from`]: the folder as
+    /// it was, and the runs count again.
     pub fn redo(&self, index: usize) -> Result<(), String> {
         let wt = &self.worktree;
         let undone = checkpoint::resolve(wt, &self.checkpoint_ref(index, "undone"))
@@ -612,7 +803,20 @@ echo $code > "$SPOR_EXIT""#;
             return Err("An agent is working; stop it first".into());
         }
         checkpoint::restore(wt, &undone)?;
-        std::fs::remove_file(self.file(index, "undone")).map_err(|e| e.to_string())?;
+        for i in index..self.count() {
+            let marker = self.file(i, "undone");
+            let Ok(from) = std::fs::read_to_string(&marker) else {
+                continue;
+            };
+            // Older markers are empty: those were one run each.
+            let batch = match from.trim() {
+                "" => i,
+                n => n.parse().unwrap_or(i),
+            };
+            if batch == index {
+                std::fs::remove_file(&marker).map_err(|e| e.to_string())?;
+            }
+        }
         Ok(())
     }
 

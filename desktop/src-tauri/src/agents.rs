@@ -6,7 +6,9 @@
 use crate::undo::Undo;
 use crate::{first_line, App};
 use serde::{Deserialize, Serialize};
-use spor::agent::{self, AgentKind, Entry, LineComment, Mode, Permissions, Run, RunState, Runs};
+use spor::agent::{
+    self, AgentKind, Entry, LineComment, Mode, Permissions, Run, RunState, Runs, Setup, SetupState,
+};
 use spor::tasks::{LandMode, Task, TaskState, TaskStats, Tasks};
 use tauri::State;
 
@@ -113,6 +115,8 @@ pub(crate) struct TaskSummary {
     asks: usize,
     /// The permission mode of its latest run.
     mode: Option<&'static str>,
+    /// Follow-ups waiting for the agent to finish (#22), kept with the task.
+    queued: Vec<String>,
 }
 
 fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
@@ -136,6 +140,7 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
         run: list.into_iter().last().map(RunInfo::from),
         command: task.agent_command(),
         asks: runs.asks().len(),
+        queued: runs.queued(),
     }
 }
 
@@ -230,10 +235,39 @@ pub(crate) struct TaskDetail {
     conflicts: Vec<String>,
     /// The run "Undo this run" would take back, if any.
     undoable: Option<usize>,
+    /// The runs "Undo from here" can start at.
+    undoable_from: Vec<usize>,
+    /// The folder's setup script and how it went (#23).
+    setup: Option<SetupInfo>,
     /// Questions the agent is waiting on.
     asks: Vec<AskInfo>,
     /// The running agent can be answered, steered and interrupted.
     listening: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SetupInfo {
+    script: String,
+    /// "running", "worked", "failed", "skipped", "due"; None: not run yet.
+    state: Option<&'static str>,
+    code: Option<i32>,
+}
+
+fn setup_info(setup: Setup) -> Option<SetupInfo> {
+    let script = setup.script?.display().to_string();
+    let (state, code) = match setup.state {
+        None => (None, None),
+        Some(SetupState::Running) => (Some("running"), None),
+        Some(SetupState::Worked) => (Some("worked"), None),
+        Some(SetupState::Failed(code)) => (Some("failed"), code),
+        Some(SetupState::Skipped) => (Some("skipped"), None),
+        Some(SetupState::Due) => (Some("due"), None),
+    };
+    Some(SetupInfo {
+        script,
+        state,
+        code,
+    })
 }
 
 #[derive(Serialize)]
@@ -329,6 +363,8 @@ pub(crate) fn task_detail(app: State<App>, id: String) -> Result<TaskDetail, Str
             .map(|e| Item::from(e, &folder))
             .collect(),
         undoable: runs.undoable().map(|r| r.index),
+        undoable_from: runs.undoable_from(),
+        setup: setup_info(runs.setup(&task)),
         asks: runs
             .asks()
             .into_iter()
@@ -522,15 +558,25 @@ pub(crate) fn run_patch(app: State<App>, id: String, index: usize) -> Result<Run
     })
 }
 
-/// Take back the task's last run: its folder as it was before, and the
-/// conversation resumed from before it. ⌘Z brings it back.
+/// Take back the task's last run, or with `from`, that run and every run
+/// after it: the folder as it was before, and the conversation resumed from
+/// before it. ⌘Z brings it back.
 #[tauri::command(async)]
-pub(crate) fn undo_run(app: State<App>, id: String) -> Result<String, String> {
+pub(crate) fn undo_run(app: State<App>, id: String, from: Option<usize>) -> Result<String, String> {
     let (tasks, task) = app.task(&id)?;
-    let index = Runs::of(&tasks, &task)
-        .undo_last()
-        .map_err(|e| first_line(&e))?;
-    let label = format!("Undo run {} of {}", index + 1, task.id);
+    let runs = Runs::of(&tasks, &task);
+    let (index, taken) = match from {
+        Some(index) => (
+            index,
+            runs.undo_from(index).map_err(|e| first_line(&e))?.len(),
+        ),
+        None => (runs.undo_last().map_err(|e| first_line(&e))?, 1),
+    };
+    let label = if taken == 1 {
+        format!("Undo run {} of {}", index + 1, task.id)
+    } else {
+        format!("Undo runs {}–{} of {}", index + 1, index + taken, task.id)
+    };
     app.undo.push(
         label.clone(),
         Undo::RunUndone {
@@ -538,10 +584,64 @@ pub(crate) fn undo_run(app: State<App>, id: String) -> Result<String, String> {
             index,
         },
     );
-    Ok(format!(
-        "Undid run {} — its changes are gone, and follow-ups start from before it",
-        index + 1
-    ))
+    Ok(if taken == 1 {
+        format!(
+            "Undid run {} — its changes are gone, and follow-ups start from before it",
+            index + 1
+        )
+    } else {
+        format!(
+            "Undid {taken} runs — their changes are gone, and follow-ups start from before run {}",
+            index + 1
+        )
+    })
+}
+
+/// Queue a follow-up for when the agent finishes (#22). Kept with the
+/// task, so it isn't lost switching apps.
+#[tauri::command(async)]
+pub(crate) fn queue_follow_up(app: State<App>, id: String, text: String) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task).queue(text.trim())
+}
+
+#[tauri::command(async)]
+pub(crate) fn unqueue(app: State<App>, id: String, index: usize) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task).unqueue(index)
+}
+
+/// Send the task's oldest queued follow-up if its agent is idle. True if
+/// one went.
+#[tauri::command(async)]
+pub(crate) fn send_queued(
+    app: State<App>,
+    id: String,
+    agent: AgentChoice,
+    mode: String,
+) -> Result<bool, String> {
+    let mode = mode_of(&mode)?;
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task).send_queued(&task, agent.kind().as_ref(), Permissions { mode })
+}
+
+/// Run the folder's setup script again, before the next agent (#23).
+#[tauri::command(async)]
+pub(crate) fn rerun_setup(app: State<App>, id: String) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task).rerun_setup()
+}
+
+/// Delete landed and discarded tasks' run checkpoints, and discarded
+/// tasks' transcripts. Undo can't bring them back afterwards.
+#[tauri::command(async)]
+pub(crate) fn clean_up_tasks(app: State<App>) -> Result<String, String> {
+    let n = app.tasks()?.clean_up();
+    Ok(match n {
+        0 => "Nothing to clean up".into(),
+        1 => "Cleaned up after 1 old task".into(),
+        n => format!("Cleaned up after {n} old tasks"),
+    })
 }
 
 /// Answer a question the agent asked: allow, or deny (with what to do
