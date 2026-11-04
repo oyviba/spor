@@ -38,6 +38,13 @@ interface Props {
   onOpenFolder: () => void;
   onCopy: (text: string, what: string) => void;
   onShowBranch: () => void;
+  /** What Changes shows: everything, or run N's changes. */
+  source: "all" | number;
+  onSource: (s: "all" | number) => void;
+  /** For one run: files left out because they came with the base. */
+  fromBase: string[];
+  onRunChanges: (index: number) => void;
+  onUndoRun: () => void;
 }
 
 export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, composerRef) {
@@ -76,13 +83,36 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
       </header>
       <div className="task-body">
         {p.tab === "conversation" ? (
-          <Conversation detail={p.detail} onStop={p.onStop} />
+          <Conversation detail={p.detail} onStop={p.onStop} onRunChanges={p.onRunChanges} onUndoRun={p.onUndoRun} />
         ) : (
           <div className="changes">
             <div className="changes-column">
+              {p.detail.runs.length > 0 && (
+                <div className="source-bar">
+                  <select
+                    className="chip-select"
+                    value={String(p.source)}
+                    onChange={(e) => p.onSource(e.target.value === "all" ? "all" : Number(e.target.value))}
+                    aria-label="Which changes"
+                  >
+                    <option value="all">All changes against {t.base}</option>
+                    {p.detail.runs.map((r) => (
+                      <option key={r.index} value={r.index}>
+                        Run {r.index + 1}: {r.prompt.split("\n")[0].slice(0, 60)}
+                        {r.undone ? " (undone)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {p.fromBase.length > 0 && (
+                    <span className="muted small-text" title={p.fromBase.join("\n")}>
+                      {p.fromBase.length} {p.fromBase.length === 1 ? "file" : "files"} from {t.base} left out
+                    </span>
+                  )}
+                </div>
+              )}
               <DiffView
                 patch={p.patch}
-                empty="No changes yet."
+                empty={p.source === "all" ? "No changes yet." : "This run changed no files."}
                 comments={p.comments}
                 onComment={p.onComment}
                 focus={p.focus}

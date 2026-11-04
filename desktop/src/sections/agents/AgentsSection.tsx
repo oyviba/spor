@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
-import type { LineComment, TaskDetail, TaskSummary } from "../../types";
+import type { LineComment, RunPatch, TaskDetail, TaskSummary } from "../../types";
 import { activityAt } from "./status";
 import { usePoll, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
@@ -20,6 +20,9 @@ export function AgentsSection() {
   const [view, setView] = useStored<View>("agents.view", { kind: "new" });
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
+  // The Changes tab: everything against the base, or one run's changes.
+  const [source, setSource] = useState<"all" | number>("all");
+  const [runPatch, setRunPatch] = useState<{ key: string; value: RunPatch } | null>(null);
   const [tab, setTab] = useState<Tab>("conversation");
   const [settings, setSettings] = useStored<AgentSettings>("agent", {
     agent: "claude",
@@ -65,6 +68,7 @@ export function AgentsSection() {
     setDetail(null);
     setTab("conversation");
     setFocus(null);
+    setSource("all");
   }, [selectedId]);
 
   // The diff, reloaded when the task's numbers change.
@@ -73,9 +77,20 @@ export function AgentsSection() {
     ? `${shown.task.id}:${shown.task.stats.additions}:${shown.task.stats.deletions}:${shown.task.stats.files}`
     : "";
   useEffect(() => {
-    if (tab !== "changes" || !shown || patch?.key === patchKey) return;
+    if (tab !== "changes" || !shown || source !== "all" || patch?.key === patchKey) return;
     api.taskPatch(shown.task.id).then((text) => setPatch({ key: patchKey, text }), fail);
-  }, [tab, patchKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab, patchKey, source]); // eslint-disable-line react-hooks/exhaustive-deps
+  const runKey = shown && source !== "all" ? `${patchKey}:${source}:${shown.runs[source]?.state}:${shown.runs[source]?.undone}` : "";
+  useEffect(() => {
+    if (tab !== "changes" || !shown || source === "all" || runPatch?.key === runKey) return;
+    api.runPatch(shown.task.id, source).then(
+      (value) => setRunPatch({ key: runKey, value }),
+      (e) => {
+        setRunPatch({ key: runKey, value: { patch: "", from_base: [] } });
+        fail(e);
+      },
+    );
+  }, [tab, runKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Looking at a task marks what it did as seen.
   useEffect(() => {
@@ -189,7 +204,23 @@ export function AgentsSection() {
             seenAt={seen[shown.task.id]}
             tab={tab}
             onTab={setTab}
-            patch={patch?.key === patchKey ? patch.text : null}
+            patch={
+              source === "all"
+                ? patch?.key === patchKey
+                  ? patch.text
+                  : null
+                : runPatch?.key === runKey
+                  ? runPatch.value.patch
+                  : null
+            }
+            source={source}
+            onSource={setSource}
+            fromBase={source !== "all" && runPatch?.key === runKey ? runPatch.value.from_base : []}
+            onRunChanges={(index) => {
+              setSource(index);
+              setTab("changes");
+            }}
+            onUndoRun={() => shell.act(() => api.undoRun(shown.task.id)).then(afterChange)}
             inspector={inspector}
             onInspector={setInspector}
             settings={settings}

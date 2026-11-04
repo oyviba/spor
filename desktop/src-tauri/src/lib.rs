@@ -112,7 +112,11 @@ fn repo_state(app: State<App>) -> Result<RepoState, String> {
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_default()
     };
-    let refs = fingerprint(&(git(&["for-each-ref", "--format=%(refname) %(objectname)"]), git(&["rev-parse", "HEAD"]), tracking.branch.clone()));
+    let refs = fingerprint(&(
+        git(&["for-each-ref", "--format=%(refname) %(objectname)"]),
+        git(&["rev-parse", "HEAD"]),
+        tracking.branch.clone(),
+    ));
     // The worktree's own git dir: a linked worktree keeps its index there.
     let git_dir = PathBuf::from(git(&["rev-parse", "--absolute-git-dir"]).trim());
     let index_mtime = std::fs::metadata(git_dir.join("index"))
@@ -220,6 +224,8 @@ pub fn run() {
             agents::land_task,
             agents::discard_task,
             agents::open_folder,
+            agents::run_patch,
+            agents::undo_run,
             history::graph,
             history::search_commits,
             history::commit_detail,

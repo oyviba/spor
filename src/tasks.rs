@@ -181,6 +181,10 @@ impl Tasks {
     /// Forget a task entirely (its branch and folder are left alone).
     pub fn forget(&self, id: &str) -> Result<(), String> {
         let _ = std::fs::remove_dir_all(self.run_dir(id));
+        crate::checkpoint::delete_all(
+            self.repo.root(),
+            &format!("{}/", crate::agent::checkpoint_prefix(id)),
+        );
         self.unlist(id)
     }
 

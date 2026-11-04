@@ -12,6 +12,7 @@ import type {
   Run,
   RunDetail,
   StashInfo,
+  RunPatch,
   TaskDetail,
   TaskSummary,
 } from "./types";
@@ -99,6 +100,10 @@ export const api = {
     call<string>("land_task", { id, merge, commitUncommitted }),
   discardTask: (id: string) => call<string>("discard_task", { id }),
   openFolder: (id: string) => call<void>("open_folder", { id }),
+  /** One run's changes, between its checkpoints. */
+  runPatch: (id: string, index: number) => call<RunPatch>("run_patch", { id, index }),
+  /** Take back the task's last run (⌘Z brings it back). */
+  undoRun: (id: string) => call<string>("undo_run", { id }),
 };
 
 export function errorText(e: unknown): string {

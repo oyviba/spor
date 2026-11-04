@@ -47,6 +47,8 @@ const run = (over: Partial<RunInfo>): RunInfo => ({
   ended: t0 - 300,
   cost_usd: 0.42,
   resumable: true,
+  prompt: "",
+  undone: false,
   ...over,
 });
 
@@ -242,6 +244,12 @@ setInterval(() => {
   t.runs[t.runs.length - 1] = finished;
 }, 4000);
 
+/** The prompt of a task's `i`th run, from its transcript. */
+function promptOf(t: MockTask, i: number): string {
+  const prompts = t.transcript.filter((x): x is Extract<Item, { kind: "prompt" }> => x.kind === "prompt");
+  return prompts[i]?.text ?? "";
+}
+
 function find(id: string): MockTask {
   const t = tasks.find((x) => x.summary.id === id);
   if (!t) throw `No task ${id}`;
@@ -299,11 +307,13 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
         ].map((t) => structuredClone(t.summary));
       case "task_detail": {
         const t = find(id);
+        const last = t.runs.at(-1);
         const detail: TaskDetail = {
           task: t.summary,
           transcript: t.transcript,
-          runs: t.runs,
+          runs: t.runs.map((r, i) => ({ ...r, prompt: r.prompt || promptOf(t, i) })),
           conflicts: t.summary.id === "dark-mode-dashboard" ? ["src/styles/theme.css"] : [],
+          undoable: last && !last.undone && last.state !== "running" ? last.index : null,
         };
         return structuredClone(detail);
       }
@@ -363,6 +373,15 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
       }
       case "open_folder":
         return null;
+      case "run_patch":
+        return { patch: find(id).patch, from_base: [] };
+      case "undo_run": {
+        const t = find(id);
+        const last = t.runs.at(-1);
+        if (!last || last.undone || last.state === "running") throw "There's no run to undo";
+        last.undone = true;
+        return `Undid run ${last.index + 1}`;
+      }
       default:
         throw `Unknown command ${cmd}`;
     }

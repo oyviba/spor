@@ -32,6 +32,8 @@ pub(crate) enum Undo {
     Deleted { name: String, sha: String },
     /// A created branch: delete it.
     Created { name: String },
+    /// An agent run that was undone: bring it back.
+    RunUndone { task: String, index: usize },
 }
 
 struct Entry {
@@ -70,7 +72,11 @@ impl Stack {
         };
         match apply(repo, entry.undo) {
             Ok(()) => Ok(format!("Undid: {}", entry.label)),
-            Err(e) => Err(format!("Couldn't undo {}: {}", entry.label, crate::first_line(&e))),
+            Err(e) => Err(format!(
+                "Couldn't undo {}: {}",
+                entry.label,
+                crate::first_line(&e)
+            )),
         }
     }
 }
@@ -127,6 +133,11 @@ fn apply(repo: &Repo, undo: Undo) -> Result<(), String> {
         Undo::Checkout { from } => repo.checkout_branch(&from),
         Undo::Deleted { name, sha } => repo.restore_branch(&name, &sha),
         Undo::Created { name } => repo.delete_branch(&name, true).map(|_| ()),
+        Undo::RunUndone { task, index } => {
+            let tasks = Tasks::open(repo)?;
+            let task = tasks.get(&task).ok_or("The task is gone")?;
+            spor::agent::Runs::of(&tasks, &task).redo(index)
+        }
     }
 }
 

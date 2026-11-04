@@ -26,12 +26,15 @@ export interface RunInfo {
   index: number;
   agent: "claude" | "command";
   label: string;
+  prompt: string;
   state: RunStateName;
   exit_code: number | null;
   started: number;
   ended: number | null;
   cost_usd: number | null;
   resumable: boolean;
+  /** Taken back: its changes are gone, follow-ups resume from before it. */
+  undone: boolean;
 }
 
 export interface TaskSummary {
@@ -69,6 +72,14 @@ export interface TaskDetail {
   transcript: Item[];
   runs: RunInfo[];
   conflicts: string[];
+  /** The run "Undo this run" would take back. */
+  undoable: number | null;
+}
+
+export interface RunPatch {
+  patch: string;
+  /** Left out: they came with the base (a rebase or merge), not the agent. */
+  from_base: string[];
 }
 
 export type AgentChoice =

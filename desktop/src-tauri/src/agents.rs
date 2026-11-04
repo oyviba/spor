@@ -55,12 +55,16 @@ pub(crate) struct RunInfo {
     index: usize,
     agent: &'static str,
     label: String,
+    /// What it was asked: the task's prompt, or a follow-up.
+    prompt: String,
     state: &'static str,
     exit_code: Option<i32>,
     started: i64,
     ended: Option<i64>,
     cost_usd: Option<f64>,
     resumable: bool,
+    /// Taken back: its changes are gone and follow-ups resume from before it.
+    undone: bool,
 }
 
 impl From<Run> for RunInfo {
@@ -78,12 +82,14 @@ impl From<Run> for RunInfo {
                 AgentKind::Command(_) => "command",
             },
             label: r.kind.label().to_string(),
+            prompt: r.prompt.clone(),
             state,
             exit_code,
             started: r.started,
             ended: r.ended,
             cost_usd: r.cost_usd,
             resumable: r.session.is_some(),
+            undone: r.undone,
         }
     }
 }
@@ -129,10 +135,19 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum Item {
-    Prompt { text: String },
-    Text { text: String },
-    Tool { name: String, detail: String },
-    ToolError { text: String },
+    Prompt {
+        text: String,
+    },
+    Text {
+        text: String,
+    },
+    Tool {
+        name: String,
+        detail: String,
+    },
+    ToolError {
+        text: String,
+    },
     Done {
         ok: bool,
         summary: String,
@@ -140,7 +155,9 @@ pub(crate) enum Item {
         turns: Option<u32>,
         seconds: Option<f64>,
     },
-    Output { text: String },
+    Output {
+        text: String,
+    },
 }
 
 impl Item {
@@ -179,6 +196,8 @@ pub(crate) struct TaskDetail {
     runs: Vec<RunInfo>,
     /// Files that would conflict if the task landed on its base now.
     conflicts: Vec<String>,
+    /// The run "Undo this run" would take back, if any.
+    undoable: Option<usize>,
 }
 
 /// Which agent to run, as the UI names it.
@@ -237,6 +256,7 @@ pub(crate) fn task_detail(app: State<App>, id: String) -> Result<TaskDetail, Str
             .into_iter()
             .map(|e| Item::from(e, &folder))
             .collect(),
+        undoable: runs.undoable().map(|r| r.index),
         runs: runs.list().into_iter().map(RunInfo::from).collect(),
         conflicts,
     })
@@ -384,4 +404,43 @@ pub(crate) fn open_folder(app: State<App>, id: String) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("Couldn't open the folder: {e}"))
+}
+
+#[derive(Serialize)]
+pub(crate) struct RunPatch {
+    patch: String,
+    from_base: Vec<String>,
+}
+
+/// One run's changes, from its checkpoint before to its checkpoint after.
+#[tauri::command(async)]
+pub(crate) fn run_patch(app: State<App>, id: String, index: usize) -> Result<RunPatch, String> {
+    let (tasks, task) = app.task(&id)?;
+    let p = Runs::of(&tasks, &task).patch(index)?;
+    Ok(RunPatch {
+        patch: p.patch,
+        from_base: p.from_base,
+    })
+}
+
+/// Take back the task's last run: its folder as it was before, and the
+/// conversation resumed from before it. ⌘Z brings it back.
+#[tauri::command(async)]
+pub(crate) fn undo_run(app: State<App>, id: String) -> Result<String, String> {
+    let (tasks, task) = app.task(&id)?;
+    let index = Runs::of(&tasks, &task)
+        .undo_last()
+        .map_err(|e| first_line(&e))?;
+    let label = format!("Undo run {} of {}", index + 1, task.id);
+    app.undo.push(
+        label.clone(),
+        Undo::RunUndone {
+            task: task.id.clone(),
+            index,
+        },
+    );
+    Ok(format!(
+        "Undid run {} — its changes are gone, and follow-ups start from before it",
+        index + 1
+    ))
 }

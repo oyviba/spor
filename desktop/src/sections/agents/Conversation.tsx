@@ -8,9 +8,11 @@ import { Alert, Chevron, Square, ToolIcon } from "../../shared/Icons";
 interface Props {
   detail: TaskDetail;
   onStop: () => void;
+  onRunChanges: (index: number) => void;
+  onUndoRun: () => void;
 }
 
-export function Conversation({ detail, onStop }: Props) {
+export function Conversation({ detail, onStop, onRunChanges, onUndoRun }: Props) {
   const latest = detail.runs.at(-1);
   const running = latest?.state === "running";
   const views = toRuns(detail.transcript, running);
@@ -68,6 +70,9 @@ export function Conversation({ detail, onStop }: Props) {
             info={detail.runs[run.index]}
             open={open}
             toggle={toggle}
+            canUndo={detail.undoable === run.index}
+            onRunChanges={() => onRunChanges(run.index)}
+            onUndoRun={onUndoRun}
           />
         ))}
         {running && latest && <LiveLine run={latest} onStop={onStop} />}
@@ -81,20 +86,29 @@ function RunBlock({
   info,
   open,
   toggle,
+  canUndo,
+  onRunChanges,
+  onUndoRun,
 }: {
   run: RunView;
   info: RunInfo | undefined;
   open: Set<string>;
   toggle: (key: string) => void;
+  canUndo: boolean;
+  onRunChanges: () => void;
+  onUndoRun: () => void;
 }) {
+  const [confirm, setConfirm] = useState(false);
+  const undone = !!info?.undone;
   const key = `run-${run.index}`;
   const blocks = (list: Block[]) =>
     list.map((b, i) => <BlockView key={i} block={b} id={`${key}-${i}`} live={run.live && i === list.length - 1} open={open} toggle={toggle} />);
   const stopped = stoppedLabel(run);
   return (
-    <section className="run">
+    <section className={`run${undone ? " undone" : ""}`}>
       {run.prompt && (
         <div className="bubble-row">
+          {undone && <span className="undone-badge" title="Its changes were taken back; follow-ups start from before it">Undone</span>}
           <div className="bubble">{run.prompt}</div>
         </div>
       )}
@@ -121,6 +135,23 @@ function RunBlock({
             </div>
           )}
         </>
+      )}
+      {run.done && !undone && (
+        <div className="run-actions">
+          <button className="link small-text" onClick={onRunChanges}>
+            Changes in this run
+          </button>
+          {canUndo && (
+            <button
+              className={`link small-text${confirm ? " danger-link" : ""}`}
+              onClick={() => (confirm ? onUndoRun() : setConfirm(true))}
+              onBlur={() => setConfirm(false)}
+              title="Put the folder back as it was before this run, and start follow-ups from before it (⌘Z brings it back)"
+            >
+              {confirm ? "Undo this run? Its changes go" : "Undo this run"}
+            </button>
+          )}
+        </div>
       )}
     </section>
   );

@@ -1862,3 +1862,50 @@ kbd {
   gap: 8px;
   color: var(--fg-2);
 }
+
+/* ---- Runs: actions, undone ---- */
+
+.run-actions {
+  display: flex;
+  gap: 14px;
+  margin-top: -2px;
+}
+.run-actions .link {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 500;
+}
+.run-actions .link:hover {
+  color: var(--accent);
+}
+.run-actions .danger-link,
+.run-actions .danger-link:hover {
+  color: var(--red);
+}
+.run.undone > :not(.bubble-row) {
+  opacity: 0.45;
+}
+.run.undone .bubble {
+  opacity: 0.6;
+  text-decoration: line-through;
+  text-decoration-color: var(--faint);
+}
+.undone-badge {
+  align-self: center;
+  margin-right: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+.source-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.source-bar .chip-select {
+  max-width: 420px;
+}

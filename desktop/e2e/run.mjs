@@ -8,6 +8,7 @@
 // the diff, comment on a line, send feedback, land, undo) and checks the
 // repository with git at each step. Use a throwaway repository: it lands.
 
+import { existsSync, readFileSync } from "node:fs";
 import { check, gitIn, open, sleep } from "./webdriver.mjs";
 
 const [app, out = "e2e-shots"] = process.argv.slice(2);
@@ -61,6 +62,27 @@ try {
   check(second.includes("Worked for"), "a clean finished run folds behind 'Worked for'");
   check(second.includes("Added farewell()") || second.includes("Added `farewell()`"), "second run resumed and finished");
   await w.shot("4-second-run");
+
+  console.log("Each run's changes, and undoing a run (#19)");
+  const worktree = git("worktree", "list", "--porcelain").split("\n").find((l) => l.includes("let-greet-take-optional"))?.replace("worktree ", "");
+  const read = (f) => readFileSync(`${worktree}/${f}`, "utf8");
+  await w.clickText(".run:nth-of-type(2) .run-actions .link", "Changes in this run");
+  await w.waitFor(".source-bar select");
+  await w.until(`return document.querySelector(".source-bar select").value === "1" && document.querySelectorAll(".diff tr.add").length > 0`, "run 2's diff");
+  const added = await w.js(`return [...document.querySelectorAll(".diff tr.add")].map(r => r.innerText).join(" | ")`);
+  check(added.includes("def farewell") && !added.includes("title=None"), "Changes can show just one run's diff");
+  await w.clickText(".tabs button", "Conversation");
+  await w.waitFor(".run:nth-of-type(2) .run-actions");
+  await w.clickText(".run:nth-of-type(2) .run-actions .link", "Undo this run");
+  await w.clickText(".run:nth-of-type(2) .run-actions .link", "Undo this run?");
+  await w.waitFor(".run.undone");
+  check(!read("greet.py").includes("farewell") && read("greet.py").includes("title=None"), "Undo this run puts the folder back as the first run left it");
+  const metaDir = `${repo}/.git/spor/tasks/let-greet-take-optional.d`;
+  check(existsSync(`${metaDir}/run-1.undone`), "the run is marked undone");
+  await w.shot("4b-run-undone");
+  await w.js(`document.querySelector(".toast .link").click()`);
+  await w.until(`return !document.querySelector(".run.undone")`, "the redo");
+  check(read("greet.py").includes("farewell") && !existsSync(`${metaDir}/run-1.undone`), "Undo on the toast brings the run back");
 
   console.log("Land");
   await w.click(".inspector .split .primary");
