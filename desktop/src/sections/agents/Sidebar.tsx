@@ -1,4 +1,4 @@
-import type { TaskSummary } from "../../types";
+import type { TaskPull, TaskSummary } from "../../types";
 import { statusOf } from "./status";
 import { ago } from "./transcript";
 import { useNow } from "../../shared/hooks";
@@ -8,6 +8,8 @@ import { SidebarHeader } from "../../shared/Layout";
 
 interface Props {
   tasks: TaskSummary[];
+  /** Open tasks' pull requests, by task id. */
+  pulls: Record<string, TaskPull>;
   selected: string | null;
   seen: Record<string, number>;
   shelves: { working: boolean; settled: boolean };
@@ -29,7 +31,7 @@ export function Sidebar(p: Props) {
   const settled = p.tasks.filter((t) => t.landed);
 
   const row = (t: TaskSummary) => {
-    const status = statusOf(t, p.seen[t.id], now);
+    const status = statusOf(t, p.seen[t.id], now, p.pulls[t.id]?.pull);
     const time = ago(t.run?.ended ?? t.run?.started ?? t.created, Math.max(now, nowMinute));
     return (
       <button

@@ -637,6 +637,417 @@ pub fn set_pull_open(dir: &Path, number: u64, open: bool) -> Result<(), String> 
     gh(dir, &repo, &["pr", verb, &number.to_string()]).map(drop)
 }
 
+/// Open a pull request from `head` (already pushed) into `base`. Returns
+/// its number and URL.
+pub fn create_pull(
+    dir: &Path,
+    head: &str,
+    base: &str,
+    title: &str,
+    body: &str,
+    draft: bool,
+) -> Result<(u64, String), String> {
+    let repo = repo(dir)?;
+    let mut args = vec![
+        "pr", "create", "--head", head, "--base", base, "--title", title, "--body", body,
+    ];
+    if draft {
+        args.push("--draft");
+    }
+    let out = gh(dir, &repo, &args)?;
+    // `gh pr create` prints the new PR's URL.
+    let url = out
+        .lines()
+        .map(str::trim)
+        .rfind(|l| l.starts_with("https://"))
+        .ok_or("gh didn't say which pull request it opened")?
+        .to_string();
+    let number = pull_number_from_url(&url).ok_or_else(|| format!("Couldn't read {url}"))?;
+    Ok((number, url))
+}
+
+/// `https://github.com/o/r/pull/12` → 12.
+fn pull_number_from_url(url: &str) -> Option<u64> {
+    let (_, rest) = url.split_once("/pull/")?;
+    rest.split(['/', '#', '?']).next()?.parse().ok()
+}
+
+/// A pull request whose head is an agent task's branch, with the commit it
+/// was merged as.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BranchPull {
+    pub pull: Pull,
+    pub merge_commit: Option<String>,
+}
+
+fn parse_branch_pulls(out: &str) -> Vec<BranchPull> {
+    let mut found: Vec<BranchPull> = Vec::new();
+    for line in out.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        match f.as_slice() {
+            ["pr", rest @ ..] => {
+                if let Some(pull) = parse_pull(rest) {
+                    found.push(BranchPull {
+                        pull,
+                        merge_commit: None,
+                    });
+                }
+            }
+            ["merge", number, sha, ..] if !sha.is_empty() => {
+                let number: u64 = number.parse().unwrap_or(0);
+                if let Some(bp) = found.iter_mut().find(|b| b.pull.number == number) {
+                    bp.merge_commit = Some(sha.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Pull requests (open, merged and closed) whose head branch starts with
+/// `prefix`, newest first: one call for every agent task's PR.
+pub fn pulls_for_branches(dir: &Path, prefix: &str) -> Result<Vec<BranchPull>, String> {
+    let repo = repo(dir)?;
+    let fields = format!("{PULL_FIELDS},mergeCommit");
+    let jq = format!(
+        r#".[] | select(.headRefName | startswith("{prefix}")) | ({}), (["merge", (.number|tostring), (.mergeCommit.oid // "")] | @tsv)"#,
+        pull_jq("pr")
+    );
+    let out = gh(
+        dir,
+        &repo,
+        &[
+            "pr", "list", "--state", "all", "--limit", "200", "--json", &fields, "--jq", &jq,
+        ],
+    )?;
+    let mut pulls = parse_branch_pulls(&out);
+    pulls.sort_by_key(|b| std::cmp::Reverse(b.pull.updated));
+    Ok(pulls)
+}
+
+/// A comment on a line of the PR's diff.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineNote {
+    pub author: String,
+    pub path: String,
+    /// The line in the PR's version of the file; 0 when GitHub no longer
+    /// knows where it is (the line has changed since).
+    pub line: u64,
+    pub body: String,
+    pub at: i64,
+}
+
+fn parse_line_notes(out: &str) -> Vec<LineNote> {
+    out.lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split('\t').collect();
+            match f.as_slice() {
+                ["note", author, path, line, body, at, ..] => Some(LineNote {
+                    author: author.to_string(),
+                    path: unescape(path),
+                    line: line.parse().unwrap_or(0),
+                    body: unescape(body),
+                    at: parse_time(at),
+                }),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The comments on lines of the PR's diff, oldest first.
+pub fn line_notes(dir: &Path, number: u64) -> Result<Vec<LineNote>, String> {
+    let repo = repo(dir)?;
+    let path = format!("repos/{}/{}/pulls/{number}/comments", repo.owner, repo.name);
+    let jq = r#".[] | ["note", (.user.login // ""), .path, ((.line // .original_line // 0)|tostring), .body, .created_at] | @tsv"#;
+    let out = gh(dir, &repo, &["api", "--paginate", &path, "--jq", jq])?;
+    let mut notes = parse_line_notes(&out);
+    notes.sort_by_key(|n| n.at);
+    Ok(notes)
+}
+
+/// What reviewers said on a PR since `since` (Unix seconds), written as a
+/// follow-up for the agent that made it: reviews and comments, then the
+/// line comments as `file:line — comment`. None when there's nothing new.
+pub fn review_feedback(detail: &PullDetail, notes: &[LineNote], since: i64) -> Option<String> {
+    let said: Vec<String> = detail
+        .timeline
+        .iter()
+        .filter(|c| c.at >= since && !c.body.trim().is_empty())
+        .map(|c| {
+            let how = match c.verdict {
+                Some(Verdict::ChangesRequested) => " (requested changes)",
+                Some(Verdict::Approved) => " (approved)",
+                _ => "",
+            };
+            format!("{}{how}:\n{}", c.author, quote(c.body.trim()))
+        })
+        .collect();
+    let lines: Vec<String> = notes
+        .iter()
+        .filter(|n| n.at >= since)
+        .map(|n| {
+            let place = if n.line > 0 {
+                format!("{}:{}", n.path, n.line)
+            } else {
+                n.path.clone()
+            };
+            format!(
+                "- `{place}` — {} ({})",
+                n.body.trim().replace('\n', " "),
+                n.author
+            )
+        })
+        .collect();
+    if said.is_empty() && lines.is_empty() {
+        return None;
+    }
+    let mut out = format!(
+        "Review on pull request #{} ({}):\n",
+        detail.pull.number, detail.pull.url
+    );
+    for s in &said {
+        out.push('\n');
+        out.push_str(s);
+        out.push('\n');
+    }
+    if !lines.is_empty() {
+        out.push_str("\nOn the diff:\n");
+        out.push_str(&lines.join("\n"));
+        out.push('\n');
+    }
+    out.push_str(
+        "\nAddress each point (or say why not), make sure it still builds and the tests pass, and commit.",
+    );
+    Some(out)
+}
+
+/// Markdown block quote.
+fn quote(text: &str) -> String {
+    text.lines()
+        .map(|l| format!("> {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// ── Issues ───────────────────────────────────────────────────────────────────
+
+/// Which issues the list shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueFilter {
+    /// Open ones assigned to you.
+    Assigned,
+    /// Open ones you opened.
+    Yours,
+    Open,
+    Closed,
+}
+
+/// An issue as the list shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub open: bool,
+    pub labels: Vec<String>,
+    pub assignees: Vec<String>,
+    pub comments: usize,
+    pub updated: i64,
+    pub url: String,
+}
+
+const ISSUE_FIELDS: &str = "number,title,author,state,labels,assignees,comments,updatedAt,url";
+
+fn issue_jq(tag: &str) -> String {
+    format!(
+        r#"["{tag}", (.number|tostring), .title, (.author.login // ""), .state, ([.labels[]?.name] | join(",")), ([.assignees[]?.login] | join(",")), (.comments|length|tostring), .updatedAt, .url] | @tsv"#
+    )
+}
+
+fn split_list(field: &str) -> Vec<String> {
+    field
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(unescape)
+        .collect()
+}
+
+fn parse_issue(f: &[&str]) -> Option<Issue> {
+    if f.len() < 9 {
+        return None;
+    }
+    Some(Issue {
+        number: f[0].parse().ok()?,
+        title: unescape(f[1]),
+        author: f[2].to_string(),
+        open: f[3] != "CLOSED",
+        labels: split_list(f[4]),
+        assignees: split_list(f[5]),
+        comments: f[6].parse().unwrap_or(0),
+        updated: parse_time(f[7]),
+        url: f[8].to_string(),
+    })
+}
+
+fn parse_issues(out: &str) -> Vec<Issue> {
+    out.lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split('\t').collect();
+            (f.first() == Some(&"issue")).then(|| parse_issue(&f[1..]))?
+        })
+        .collect()
+}
+
+/// The issues `filter` picks, most recently updated first.
+pub fn list_issues(dir: &Path, filter: IssueFilter) -> Result<Vec<Issue>, String> {
+    let repo = repo(dir)?;
+    let jq = format!(".[] | {}", issue_jq("issue"));
+    let mut args = vec!["issue", "list", "--limit", "100", "--json", ISSUE_FIELDS];
+    match filter {
+        IssueFilter::Assigned => args.extend(["--state", "open", "--assignee", "@me"]),
+        IssueFilter::Yours => args.extend(["--state", "open", "--author", "@me"]),
+        IssueFilter::Open => args.extend(["--state", "open"]),
+        IssueFilter::Closed => args.extend(["--state", "closed"]),
+    }
+    args.extend(["--jq", &jq]);
+    let mut issues = parse_issues(&gh(dir, &repo, &args)?);
+    issues.sort_by_key(|i| std::cmp::Reverse(i.updated));
+    Ok(issues)
+}
+
+/// Everything the issue page shows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IssueDetail {
+    pub issue: Issue,
+    pub body: String,
+    pub comments: Vec<Comment>,
+}
+
+/// The longest a comment gets in a task's prompt, and all of them together.
+const PROMPT_COMMENT: usize = 4000;
+const PROMPT_COMMENTS: usize = 20_000;
+
+impl IssueDetail {
+    /// The prompt an agent task starts from: the issue's title (the task's
+    /// title, so its first line), where it is, what it says, and what was
+    /// said about it.
+    pub fn task_prompt(&self) -> String {
+        let i = &self.issue;
+        let mut out = format!(
+            "{} (#{})\n\nGitHub issue #{}: {}\n",
+            i.title.trim(),
+            i.number,
+            i.number,
+            i.url
+        );
+        if !i.labels.is_empty() {
+            out.push_str(&format!("Labels: {}\n", i.labels.join(", ")));
+        }
+        let body = self.body.trim();
+        out.push('\n');
+        out.push_str(if body.is_empty() {
+            "(No description.)"
+        } else {
+            body
+        });
+        out.push('\n');
+        let mut room = PROMPT_COMMENTS;
+        let mut said = Vec::new();
+        // The latest discussion matters most: keep from the end.
+        for c in self.comments.iter().rev() {
+            let text = c.body.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let text: String = if text.chars().count() > PROMPT_COMMENT {
+                text.chars().take(PROMPT_COMMENT).chain(['…']).collect()
+            } else {
+                text.to_string()
+            };
+            let entry = format!("{} wrote:\n{}", c.author, quote(&text));
+            if entry.len() > room {
+                break;
+            }
+            room -= entry.len();
+            said.push(entry);
+        }
+        if !said.is_empty() {
+            said.reverse();
+            out.push_str("\nComments on the issue:\n\n");
+            out.push_str(&said.join("\n\n"));
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "\nResolve this issue in this folder. Keep the change focused on it, add or update tests where it makes sense, make sure it builds and the tests pass, and commit. The pull request will close #{}.",
+            i.number
+        ));
+        out
+    }
+}
+
+fn parse_issue_detail(out: &str) -> Option<IssueDetail> {
+    let mut issue = None;
+    let mut body = String::new();
+    let mut comments = Vec::new();
+    for line in out.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        match f.as_slice() {
+            ["issue", rest @ ..] => issue = parse_issue(rest),
+            ["body", b, ..] => body = unescape(b),
+            ["comment", author, b, at, ..] => comments.push(Comment {
+                author: author.to_string(),
+                body: unescape(b),
+                at: parse_time(at),
+                verdict: None,
+            }),
+            _ => {}
+        }
+    }
+    comments.sort_by_key(|c| c.at);
+    Some(IssueDetail {
+        issue: issue?,
+        body,
+        comments,
+    })
+}
+
+/// An issue with its description and comments.
+pub fn issue_detail(dir: &Path, number: u64) -> Result<IssueDetail, String> {
+    let repo = repo(dir)?;
+    let number = number.to_string();
+    let fields = format!("{ISSUE_FIELDS},body");
+    let jq = format!(
+        r#"({}), (["body", .body] | @tsv), (.comments[]? | ["comment", (.author.login // ""), .body, .createdAt] | @tsv)"#,
+        issue_jq("issue")
+    );
+    let out = gh(
+        dir,
+        &repo,
+        &["issue", "view", &number, "--json", &fields, "--jq", &jq],
+    )?;
+    parse_issue_detail(&out).ok_or_else(|| format!("Couldn't read issue #{number}"))
+}
+
+/// Add a comment to an issue.
+pub fn comment_on_issue(dir: &Path, number: u64, body: &str) -> Result<(), String> {
+    let repo = repo(dir)?;
+    gh(
+        dir,
+        &repo,
+        &["issue", "comment", &number.to_string(), "--body", body],
+    )
+    .map(drop)
+}
+
+/// Close an issue (as completed), or reopen a closed one.
+pub fn set_issue_open(dir: &Path, number: u64, open: bool) -> Result<(), String> {
+    let repo = repo(dir)?;
+    let verb = if open { "reopen" } else { "close" };
+    gh(dir, &repo, &["issue", verb, &number.to_string()]).map(drop)
+}
+
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 /// One workflow run.
@@ -1082,6 +1493,143 @@ mod tests {
         assert_eq!(d.timeline[0].author, "carol");
         assert_eq!(d.timeline[0].body, "What about \\n?");
         assert_eq!(d.timeline[1].verdict, Some(Verdict::Approved));
+    }
+
+    #[test]
+    fn pull_numbers_from_urls() {
+        assert_eq!(
+            pull_number_from_url("https://github.com/o/r/pull/12"),
+            Some(12)
+        );
+        assert_eq!(
+            pull_number_from_url("https://ghe.example.com/o/r/pull/7#x"),
+            Some(7)
+        );
+        assert_eq!(
+            pull_number_from_url("https://github.com/o/r/issues/7"),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_branch_pulls_with_merge_commits() {
+        let out = "pr\t12\tFix it\toyviba\tagent/fix-it\tmain\tMERGED\t\tSUCCESS\t2026-10-30T10:00:00Z\t3\t1\thttps://github.com/o/r/pull/12\n\
+                   merge\t12\tabc123\n\
+                   pr\t13\tOther\toyviba\tagent/other\tmain\tOPEN\t\t\t2026-10-31T10:00:00Z\t1\t0\thttps://github.com/o/r/pull/13\n\
+                   merge\t13\t\n";
+        let pulls = parse_branch_pulls(out);
+        assert_eq!(pulls.len(), 2);
+        assert_eq!(pulls[0].pull.state, PrState::Merged);
+        assert_eq!(pulls[0].merge_commit.as_deref(), Some("abc123"));
+        assert_eq!(pulls[1].merge_commit, None);
+    }
+
+    fn detail(timeline: Vec<Comment>) -> PullDetail {
+        PullDetail {
+            pull: Pull {
+                number: 12,
+                title: "Fix it".into(),
+                author: "a".into(),
+                head: "agent/fix-it".into(),
+                base: "main".into(),
+                state: PrState::Open,
+                review: ReviewState::ChangesRequested,
+                checks: ChecksState::None,
+                updated: 0,
+                additions: 0,
+                deletions: 0,
+                url: "https://github.com/o/r/pull/12".into(),
+            },
+            body: String::new(),
+            mergeable: Mergeable::Yes,
+            changed_files: 0,
+            commits: 0,
+            checks: Vec::new(),
+            timeline,
+        }
+    }
+
+    #[test]
+    fn review_feedback_takes_what_is_new() {
+        let d = detail(vec![
+            Comment {
+                author: "old".into(),
+                body: "Seen already".into(),
+                at: 10,
+                verdict: None,
+            },
+            Comment {
+                author: "alice".into(),
+                body: "Not like this.\nLike that.".into(),
+                at: 100,
+                verdict: Some(Verdict::ChangesRequested),
+            },
+        ]);
+        let notes = parse_line_notes(
+            "note\tbob\tsrc/a.rs\t42\tRename this\\nplease\t2026-10-30T10:00:00Z\n\
+             note\tbob\tsrc/b.rs\t0\tGone\t2026-10-30T10:00:00Z\n",
+        );
+        assert_eq!(notes[0].body, "Rename this\nplease");
+        let text = review_feedback(&d, &notes, 50).unwrap();
+        assert!(!text.contains("Seen already"));
+        assert!(text.contains("alice (requested changes):\n> Not like this.\n> Like that."));
+        assert!(text.contains("- `src/a.rs:42` — Rename this please (bob)"));
+        assert!(text.contains("- `src/b.rs` — Gone (bob)"));
+        assert_eq!(review_feedback(&d, &[], 1000), None);
+    }
+
+    #[test]
+    fn parses_issues_and_builds_a_prompt() {
+        let out = "issue\t7\tLogin fails on Safari\toyviba\tOPEN\tbug,ui\toyviba\t2\t2026-10-30T10:00:00Z\thttps://github.com/o/r/issues/7\n\
+                   body\tSteps:\\n1. Open it\n\
+                   comment\tbob\tSame here\t2026-10-30T12:00:00Z\n\
+                   comment\talice\tI think it's the cookie\t2026-10-30T11:00:00Z\n";
+        let d = parse_issue_detail(out).unwrap();
+        assert_eq!(d.issue.number, 7);
+        assert!(d.issue.open);
+        assert_eq!(d.issue.labels, ["bug", "ui"]);
+        assert_eq!(d.issue.assignees, ["oyviba"]);
+        assert_eq!(d.body, "Steps:\n1. Open it");
+        assert_eq!(d.comments[0].author, "alice");
+        let prompt = d.task_prompt();
+        assert!(prompt.starts_with("Login fails on Safari (#7)\n"));
+        assert!(prompt.contains("https://github.com/o/r/issues/7"));
+        assert!(prompt.contains("Labels: bug, ui"));
+        assert!(prompt.contains("Steps:\n1. Open it"));
+        let (a, b) = (
+            prompt.find("alice wrote").unwrap(),
+            prompt.find("bob wrote").unwrap(),
+        );
+        assert!(a < b, "comments stay in order");
+        assert!(prompt.ends_with("The pull request will close #7."));
+
+        let list = parse_issues("issue\t8\tClosed one\tx\tCLOSED\t\t\t0\t2026-10-30T10:00:00Z\thttps://github.com/o/r/issues/8\njunk\n");
+        assert_eq!(list.len(), 1);
+        assert!(!list[0].open);
+        assert!(list[0].labels.is_empty());
+    }
+
+    #[test]
+    fn issue_prompts_keep_the_latest_comments() {
+        let comment = |n: i64| Comment {
+            author: format!("u{n}"),
+            body: "x".repeat(3000),
+            at: n,
+            verdict: None,
+        };
+        let d = IssueDetail {
+            issue: parse_issues(
+                "issue\t1\tBig\tx\tOPEN\t\t\t0\t\thttps://github.com/o/r/issues/1\n",
+            )
+            .remove(0),
+            body: String::new(),
+            comments: (0..20).map(comment).collect(),
+        };
+        let prompt = d.task_prompt();
+        assert!(prompt.contains("u19 wrote"));
+        assert!(!prompt.contains("u0 wrote"));
+        assert!(prompt.contains("(No description.)"));
+        assert!(prompt.len() < 25_000);
     }
 
     #[test]

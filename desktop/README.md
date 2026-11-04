@@ -3,7 +3,7 @@
 Spor's app as a web UI on Tauri, over the same Rust core (`spor::git`,
 `spor::graph`, `spor::github`, `spor::tasks`, `spor::agent`) that the
 terminal and GPUI builds use. It began as a trial of the Agents feature and
-now has all five sections. Each is built from the same four pieces: a list
+now has six sections. Each is built from the same four pieces: a list
 in the sidebar, a page, a details card on the right, and a bar or composer
 at the bottom.
 
@@ -11,9 +11,10 @@ at the bottom.
 |---|---|---|---|---|---|
 | **Changes** | 1 | Conflicts, staged and unstaged files | The file's diff: click lines, shift-click to extend, then stage, unstage or discard them | Branch and upstream, Fetch / Pull / Push, stashes | Commit box (⌘↩), amend |
 | **History** | 2 | Search, branches (local, agent, remote) | The commit graph, and a commit's diff | The commit: message, parents, Branch here, Cherry-pick, Revert | |
-| **Pull requests** | 3 | Review / Yours / Open / Closed | Conversation · Files · Checks | Branches, checks, conflicts, linked agent task, merge, check out, close | Comment / Approve, with line comments from Files |
-| **Actions** | 4 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | Run, commit, linked agent task, re-run, cancel | |
-| **Agents** | 5 | Tasks, with Working / Settled shelves | Conversation · Changes | Folder, branch, conflicts, land, discard | Composer |
+| **Issues** | 3 | Assigned / Yours / Open / Closed | The issue and its comments | Labels, assignees, its agent task and PR, close or reopen | *Start agent task*: the issue as the prompt (editable), the base and the agent |
+| **Pull requests** | 4 | Review / Yours / Open / Closed | Conversation · Files · Checks | Branches, checks, conflicts, linked agent task, merge, check out, close | Comment / Approve, with line comments from Files |
+| **Actions** | 5 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | Run, commit, linked agent task, re-run, cancel | |
+| **Agents** | 6 | Tasks, with Working / Settled shelves | Conversation · Changes | Folder, branch, conflicts, its issue and PR, open a PR, land, discard | Composer |
 
 What one app makes possible:
 
@@ -25,6 +26,17 @@ What one app makes possible:
   failing log. A task's branch opens in History, and a run's commit too.
 - **One conflict banner.** A merge or rebase that stops shows on every
   section, with *Resolve in Changes*, *Continue* and *Abort*.
+- **From issue to merged PR** (#47, #24). *Start agent task* on an issue
+  gives the agent the issue and its comments, on `agent/<number>-<slug>`.
+  *Open pull request* (or a draft) on the task pushes its branch and opens
+  a PR whose description says `Closes #n`; landing locally puts `Closes #n`
+  in the commit instead. The task then shows its PR's state, offers *Push*
+  when the agent has commits the PR doesn't, and *Send review to agent*
+  (on the task, or on the PR page) sends reviews and line comments made
+  since the agent last ran, as `file:line — comment`. When the PR merges, a
+  notification offers *Clean up*: the task is marked landed and its folder
+  and branch go (⌘Z brings them back). PRs opened from a task's branch some
+  other way are linked too.
 - **Stash and switch.** A switch that uncommitted changes would block says
   so and offers to stash them, as the GPUI app does.
 
@@ -81,12 +93,12 @@ src-tauri/src/
   undo.rs       the undo stack
   history.rs    graph (lanes → segments), commits, branches, switch, merge, cherry-pick, revert
   changes.rs    status, diffs, staging lines, discard, commit, sync, stashes, conflicts
-  github.rs     pull requests and Actions, through spor's gh wrappers
-  agents.rs     agent tasks
+  github.rs     issues, pull requests and Actions, through spor's gh wrappers
+  agents.rs     agent tasks, and their pull requests
 src/
-  App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–5, ⌘Z
+  App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–6, ⌘Z
   shared/       DiffView, details card, status pills, CI status, icons, hooks
-  sections/     changes/ history/ pulls/ actions/ agents/
+  sections/     changes/ history/ issues/ pulls/ actions/ agents/
 ```
 
 `src-tauri` is its own Cargo workspace, so the root crate and its

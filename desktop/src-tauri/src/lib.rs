@@ -235,6 +235,12 @@ pub fn run() {
             agents::set_mode,
             agents::steer,
             agents::skip_setup,
+            agents::create_issue_task,
+            agents::publish_task,
+            agents::push_task,
+            agents::task_pulls,
+            agents::review_feedback,
+            agents::settle_task,
             history::graph,
             history::search_commits,
             history::commit_detail,
@@ -269,6 +275,9 @@ pub fn run() {
             github::run_detail,
             github::run_action,
             github::job_log,
+            github::issues,
+            github::issue_detail,
+            github::issue_action,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Spor");

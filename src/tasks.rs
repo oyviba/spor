@@ -30,6 +30,10 @@ pub struct Task {
     /// Unix time it was created.
     pub created: i64,
     pub state: TaskState,
+    /// The GitHub issue it was started from.
+    pub issue: Option<u64>,
+    /// The pull request its branch was published as.
+    pub pull: Option<u64>,
 }
 
 impl Task {
@@ -46,6 +50,47 @@ impl Task {
         } else {
             line.to_string()
         }
+    }
+
+    /// The landing commit's message: the title, the prompt (an issue's
+    /// whole text is left out: the issue has it), `Closes #n`, and the
+    /// `Spor-Task` trailer.
+    pub fn land_message(&self) -> String {
+        let mut parts = vec![self.title()];
+        match self.issue {
+            Some(n) => parts.push(format!("Closes #{n}")),
+            None if self.prompt.trim() != self.title() => {
+                parts.push(self.prompt.trim().to_string())
+            }
+            None => {}
+        }
+        parts.push(format!("Spor-Task: {}", self.id));
+        parts.join("\n\n")
+    }
+
+    /// The description of the pull request it's published as.
+    pub fn pull_request_body(&self) -> String {
+        let mut parts = Vec::new();
+        match self.issue {
+            Some(n) => parts.push(format!("Closes #{n}")),
+            None => {
+                let rest = self
+                    .prompt
+                    .trim()
+                    .lines()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !rest.trim().is_empty() {
+                    parts.push(rest.trim().to_string());
+                }
+            }
+        }
+        parts.push(format!(
+            "---\n_Made by an agent in spor task `{}`._",
+            self.id
+        ));
+        parts.join("\n\n")
     }
 
     /// A shell command that starts Claude Code on the prompt in the task's
@@ -76,6 +121,8 @@ pub struct TaskStats {
     pub last_commit: i64,
     /// Its folder is gone (deleted by hand, say).
     pub missing: bool,
+    /// Commits its published branch doesn't have yet (0 when unpublished).
+    pub unpushed: usize,
 }
 
 impl TaskStats {
@@ -148,12 +195,37 @@ impl Tasks {
 
     /// Start a task: a branch from `base` checked out in a folder of its own.
     pub fn create(&self, prompt: &str, base: &str) -> Result<Task, String> {
+        self.create_with(prompt, base, &slug(prompt), None)
+    }
+
+    /// Start a task on a GitHub issue: its id (and branch) begin with the
+    /// issue's number, and it remembers the issue so its pull request and
+    /// landing commit close it.
+    pub fn create_for_issue(
+        &self,
+        prompt: &str,
+        base: &str,
+        issue: u64,
+        title: &str,
+    ) -> Result<Task, String> {
+        let id = format!("{issue}-{}", slug(title));
+        let id = id.trim_end_matches("-task");
+        self.create_with(prompt, base, id, Some(issue))
+    }
+
+    fn create_with(
+        &self,
+        prompt: &str,
+        base: &str,
+        id: &str,
+        issue: Option<u64>,
+    ) -> Result<Task, String> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
             return Err("Describe the task first".into());
         }
         let base_sha = self.repo.resolve(base)?;
-        let id = self.unique_id(&slug(prompt));
+        let id = self.unique_id(id);
         let branch = format!("agent/{id}");
         let worktree = self.worktree_dir()?.join(&id);
         std::fs::create_dir_all(worktree.parent().unwrap_or(&worktree))
@@ -169,6 +241,8 @@ impl Tasks {
             worktree,
             created: now(),
             state: TaskState::Open,
+            issue,
+            pull: None,
         };
         self.save(&task)?;
         Ok(task)
@@ -279,6 +353,7 @@ impl Tasks {
             base_moved: wt.count_commits(&format!("HEAD..{}", task.base)) > 0,
             last_commit: wt.commit_time("HEAD"),
             missing: false,
+            unpushed: wt.count_commits("@{upstream}..HEAD"),
         }
     }
 
@@ -383,17 +458,7 @@ impl Tasks {
         }
         let base_before = self.repo.head_sha()?;
         let branch_sha = self.repo.resolve(&task.branch)?;
-        let message = format!(
-            "{}\n\n{}\n\nSpor-Task: {}",
-            task.title(),
-            task.prompt.trim(),
-            task.id
-        );
-        let message = if task.prompt.trim() == task.title() {
-            format!("{}\n\nSpor-Task: {}", task.title(), task.id)
-        } else {
-            message
-        };
+        let message = task.land_message();
         let outcome = match mode {
             LandMode::Squash => {
                 let o = self.repo.squash_merge(&task.branch)?;
@@ -420,6 +485,110 @@ impl Tasks {
             task: task.clone(),
             branch_sha,
             base_before: Some(base_before),
+        })
+    }
+
+    /// Push the task's branch to `remote` and open a pull request for it
+    /// on GitHub, into its base. With `commit_uncommitted`, uncommitted
+    /// work in its folder is committed first; otherwise it's refused. The
+    /// task remembers the PR. Returns its number and URL.
+    pub fn publish(
+        &self,
+        task: &Task,
+        remote: &str,
+        draft: bool,
+        commit_uncommitted: bool,
+    ) -> Result<(u64, String), String> {
+        if task.state != TaskState::Open {
+            return Err(format!("{} has already landed", task.id));
+        }
+        let stats = self.stats(task);
+        if stats.missing {
+            return Err(format!("{}'s folder is gone", task.id));
+        }
+        let wt = task.repo();
+        if stats.uncommitted > 0 {
+            if !commit_uncommitted {
+                return Err(format!("{} has uncommitted changes", task.id));
+            }
+            wt.stage_all()?;
+            wt.commit(&format!("Uncommitted work from {}", task.id))?;
+        }
+        if self
+            .repo
+            .count_commits(&format!("{}..{}", task.base, task.branch))
+            == 0
+        {
+            return Err(format!("{} has no commits to publish", task.id));
+        }
+        self.push(task, remote)?;
+        let (number, url) = crate::github::create_pull(
+            &task.worktree,
+            &task.branch,
+            &task.base,
+            &task.title(),
+            &task.pull_request_body(),
+            draft,
+        )?;
+        self.save(&Task {
+            pull: Some(number),
+            ..task.clone()
+        })?;
+        Ok((number, url))
+    }
+
+    /// Push the task's branch to `remote` (setting it as the upstream), so
+    /// its pull request gets the agent's latest commits.
+    pub fn push(&self, task: &Task, remote: &str) -> Result<(), String> {
+        if task.state != TaskState::Open || !task.worktree.exists() {
+            return Err(format!("{} has no folder to push from", task.id));
+        }
+        crate::git::network(
+            &task.worktree,
+            &["push", "--set-upstream", remote, &task.branch],
+        )
+        .map(drop)
+    }
+
+    /// Remember the pull request a task's branch was published as (one
+    /// opened outside spor, found by its branch).
+    pub fn link_pull(&self, task: &Task, number: u64) -> Result<(), String> {
+        if task.pull == Some(number) {
+            return Ok(());
+        }
+        self.save(&Task {
+            pull: Some(number),
+            ..task.clone()
+        })
+    }
+
+    /// The task's pull request was merged on the host as `commit`: mark it
+    /// landed, and remove its folder and branch, which aren't needed any
+    /// more. Refused while its folder has work the PR doesn't. Undoable
+    /// with [`Tasks::restore`], like a discard.
+    pub fn settle(&self, task: &Task, commit: &str) -> Result<Undoable, String> {
+        if task.state != TaskState::Open {
+            return Err(format!("{} has already landed", task.id));
+        }
+        let branch_sha = self.repo.resolve(&task.branch)?;
+        if task.worktree.exists() {
+            if !task.repo().status()?.is_empty() {
+                return Err(format!(
+                    "{} has uncommitted changes the pull request doesn't have — commit or discard them first",
+                    task.id
+                ));
+            }
+            self.repo.remove_worktree(&task.worktree, false)?;
+        }
+        self.repo.delete_branch(&task.branch, true)?;
+        self.save(&Task {
+            state: TaskState::Landed(commit.to_string()),
+            ..task.clone()
+        })?;
+        Ok(Undoable {
+            task: task.clone(),
+            branch_sha,
+            base_before: None,
         })
     }
 
@@ -512,9 +681,15 @@ fn render_task(t: &Task) -> String {
         ("created", t.created.to_string()),
         ("state", state),
     ];
+    let optional = [("issue", t.issue), ("pull", t.pull)];
     fields
         .iter()
         .map(|(k, v)| format!("{k}\t{}\n", escape(v)))
+        .chain(
+            optional
+                .iter()
+                .filter_map(|(k, v)| v.map(|n| format!("{k}\t{n}\n"))),
+        )
         .collect()
 }
 
@@ -536,6 +711,8 @@ fn parse_task(text: &str) -> Option<Task> {
         worktree: PathBuf::from(get("worktree")?),
         created: get("created")?.parse().unwrap_or(0),
         state,
+        issue: get("issue").and_then(|n| n.parse().ok()),
+        pull: get("pull").and_then(|n| n.parse().ok()),
     })
 }
 
@@ -588,6 +765,8 @@ mod tests {
             worktree: PathBuf::from("/tmp/r.spor/x"),
             created: 42,
             state: TaskState::Landed("abc".into()),
+            issue: Some(7),
+            pull: Some(12),
         };
         assert_eq!(parse_task(&render_task(&task)), Some(task));
     }
@@ -602,6 +781,8 @@ mod tests {
             worktree: PathBuf::from("/tmp/my repo.spor/x"),
             created: 0,
             state: TaskState::Open,
+            issue: None,
+            pull: None,
         };
         assert_eq!(
             task.agent_command(),
