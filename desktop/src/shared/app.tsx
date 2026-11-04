@@ -5,12 +5,13 @@
 import { createContext, useContext } from "react";
 import type { RepoInfo, RepoState } from "../types";
 
-export type SectionId = "changes" | "history" | "pulls" | "actions" | "agents";
+export type SectionId = "changes" | "history" | "issues" | "pulls" | "actions" | "agents";
 
 /** Where to go: a section, and what to open there. */
 export type Target =
   | { section: "changes"; path?: string }
   | { section: "history"; hash?: string; branch?: string }
+  | { section: "issues"; number?: number }
   | { section: "pulls"; number?: number }
   | { section: "actions"; runId?: number; jobId?: number }
   | { section: "agents"; taskId?: string };

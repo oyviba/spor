@@ -33,6 +33,7 @@ pub(crate) struct Stats {
     base_moved: bool,
     last_commit: i64,
     missing: bool,
+    unpushed: usize,
 }
 
 impl From<TaskStats> for Stats {
@@ -46,6 +47,7 @@ impl From<TaskStats> for Stats {
             base_moved: s.base_moved,
             last_commit: s.last_commit,
             missing: s.missing,
+            unpushed: s.unpushed,
         }
     }
 }
@@ -112,6 +114,10 @@ pub(crate) struct TaskSummary {
     asks: usize,
     /// The permission mode of its latest run.
     mode: Option<&'static str>,
+    /// The GitHub issue it was started from.
+    issue: Option<u64>,
+    /// The pull request it was published as.
+    pull: Option<u64>,
 }
 
 fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
@@ -135,6 +141,8 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
         run: list.into_iter().last().map(RunInfo::from),
         command: task.agent_command(),
         asks: runs.asks().len(),
+        issue: task.issue,
+        pull: task.pull,
     }
 }
 
@@ -338,6 +346,44 @@ pub(crate) fn task_patch(app: State<App>, id: String) -> Result<String, String> 
         return Ok(String::new());
     }
     tasks.patch(&task)
+}
+
+/// Start a task on a GitHub issue: its prompt is the issue (title, text,
+/// comments), and it remembers the issue so its PR closes it.
+#[tauri::command(async)]
+pub(crate) fn create_issue_task(
+    app: State<App>,
+    number: u64,
+    prompt: String,
+    base: String,
+    agent: AgentChoice,
+    mode: String,
+) -> Result<TaskSummary, String> {
+    let mode = mode_of(&mode)?;
+    let kind = agent.kind();
+    if let Some(e) = kind.as_ref().and_then(missing) {
+        return Err(e);
+    }
+    let tasks = app.tasks()?;
+    if let Some(open) = tasks
+        .list()
+        .into_iter()
+        .find(|t| t.issue == Some(number) && t.state == TaskState::Open)
+    {
+        return Err(format!("#{number} already has a task: {}", open.id));
+    }
+    let title = prompt.lines().next().unwrap_or("").trim();
+    let title = title
+        .strip_suffix(&format!("(#{number})"))
+        .unwrap_or(title)
+        .trim();
+    let task = tasks
+        .create_for_issue(&prompt, &base, number, title)
+        .map_err(|e| format!("Couldn't create the task: {}", first_line(&e)))?;
+    if let Some(kind) = kind {
+        Runs::of(&tasks, &task).start(&task, &kind, &task.prompt, None, Permissions { mode })?;
+    }
+    Ok(summary(&tasks, &task))
 }
 
 #[tauri::command(async)]
@@ -551,4 +597,148 @@ pub(crate) fn set_mode(app: State<App>, id: String, mode: String) -> Result<(), 
 pub(crate) fn skip_setup(app: State<App>, id: String) -> Result<(), String> {
     let (tasks, task) = app.task(&id)?;
     Runs::of(&tasks, &task).skip_setup()
+}
+
+// ---- Pull requests -------------------------------------------------------
+
+/// Push the task's branch and open a pull request for it into its base.
+#[tauri::command(async)]
+pub(crate) fn publish_task(
+    app: State<App>,
+    id: String,
+    draft: bool,
+    commit_uncommitted: bool,
+) -> Result<String, String> {
+    let (tasks, task) = app.task(&id)?;
+    if Runs::of(&tasks, &task)
+        .latest()
+        .is_some_and(|r| r.state == RunState::Running)
+    {
+        return Err("The agent is still working".into());
+    }
+    let remote = remote(&app)?;
+    let (number, _) = tasks
+        .publish(&task, &remote, draft, commit_uncommitted)
+        .map_err(|e| first_line(&e))?;
+    Ok(format!(
+        "Opened {}pull request #{number}",
+        if draft { "draft " } else { "" }
+    ))
+}
+
+/// `origin`, else the repository's first remote.
+fn remote(app: &App) -> Result<String, String> {
+    let remotes = app.repo()?.remotes();
+    remotes
+        .iter()
+        .find(|r| *r == "origin")
+        .or(remotes.first())
+        .cloned()
+        .ok_or_else(|| "This repository has no remote".to_string())
+}
+
+/// Push the agent's new commits to the task's pull request.
+#[tauri::command(async)]
+pub(crate) fn push_task(app: State<App>, id: String) -> Result<String, String> {
+    let (tasks, task) = app.task(&id)?;
+    let n = tasks.stats(&task).unpushed;
+    tasks
+        .push(&task, &remote(&app)?)
+        .map_err(|e| first_line(&e))?;
+    Ok(match (n, task.pull) {
+        (0, _) => format!("{} is up to date", task.branch),
+        (n, Some(pr)) => format!(
+            "Pushed {n} {} to #{pr}",
+            if n == 1 { "commit" } else { "commits" }
+        ),
+        (n, None) => format!("Pushed {n} {}", if n == 1 { "commit" } else { "commits" }),
+    })
+}
+
+#[derive(Serialize)]
+pub(crate) struct TaskPull {
+    task: String,
+    pull: crate::github::Pull,
+    /// The commit it was merged as, once merged.
+    merge_commit: Option<String>,
+}
+
+/// The pull requests of every open task: the one it was published as, or
+/// one opened from its branch some other way (which it then remembers).
+/// One `gh` call for all of them.
+#[tauri::command(async)]
+pub(crate) fn task_pulls(app: State<App>) -> Result<Vec<TaskPull>, String> {
+    let tasks = app.tasks()?;
+    let open: Vec<Task> = tasks
+        .list()
+        .into_iter()
+        .filter(|t| t.state == TaskState::Open)
+        .collect();
+    if open.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pulls =
+        spor::github::pulls_for_branches(tasks.root(), "agent/").map_err(|e| first_line(&e))?;
+    let mut out = Vec::new();
+    for task in open {
+        let found = match task.pull {
+            Some(n) => pulls.iter().find(|p| p.pull.number == n),
+            // Newest first; an open one beats an old closed one, and a PR
+            // older than the task belongs to an earlier branch of that name.
+            None => pulls
+                .iter()
+                .filter(|p| p.pull.head == task.branch && p.pull.updated >= task.created)
+                .min_by_key(|p| {
+                    matches!(
+                        p.pull.state,
+                        spor::remote::PrState::Closed | spor::remote::PrState::Merged
+                    )
+                }),
+        };
+        let Some(found) = found else { continue };
+        if task.pull.is_none() {
+            let _ = tasks.link_pull(&task, found.pull.number);
+        }
+        out.push(TaskPull {
+            task: task.id.clone(),
+            pull: found.pull.clone().into(),
+            merge_commit: found.merge_commit.clone(),
+        });
+    }
+    Ok(out)
+}
+
+/// What reviewers said on the task's pull request since its agent last
+/// started, as a follow-up for the agent.
+#[tauri::command(async)]
+pub(crate) fn review_feedback(app: State<App>, id: String) -> Result<String, String> {
+    let (tasks, task) = app.task(&id)?;
+    let number = task
+        .pull
+        .ok_or_else(|| format!("{} has no pull request", task.id))?;
+    let dir = tasks.root().to_path_buf();
+    let detail = spor::github::pull_detail(&dir, number).map_err(|e| first_line(&e))?;
+    let notes = spor::github::line_notes(&dir, number).map_err(|e| first_line(&e))?;
+    let since = Runs::of(&tasks, &task)
+        .latest()
+        .map_or(task.created, |r| r.started);
+    spor::github::review_feedback(&detail, &notes, since)
+        .ok_or_else(|| format!("Nothing new on #{number} since the agent last worked on it"))
+}
+
+/// The task's pull request was merged: mark it landed and remove its folder
+/// and branch. ⌘Z brings them back.
+#[tauri::command(async)]
+pub(crate) fn settle_task(app: State<App>, id: String, commit: String) -> Result<String, String> {
+    let (tasks, task) = app.task(&id)?;
+    if Runs::of(&tasks, &task)
+        .latest()
+        .is_some_and(|r| r.state == RunState::Running)
+    {
+        return Err("Stop the agent first".into());
+    }
+    let undo = tasks.settle(&task, &commit).map_err(|e| first_line(&e))?;
+    let message = format!("Cleaned up {} — its pull request was merged", task.id);
+    app.undo.push(message.clone(), Undo::Task(undo));
+    Ok(message)
 }

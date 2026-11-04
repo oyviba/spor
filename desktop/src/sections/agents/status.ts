@@ -1,7 +1,7 @@
 // One status per task, in priority order, as in issue #30: what needs you
 // first; finished and failed only until you've looked.
 
-import type { TaskSummary } from "../../types";
+import type { Pull, TaskSummary } from "../../types";
 import { duration } from "./transcript";
 
 import type { Status } from "../../shared/StatusPill";
@@ -11,7 +11,19 @@ export function activityAt(t: TaskSummary): number {
   return t.run?.ended ?? t.run?.started ?? t.created;
 }
 
-export function statusOf(t: TaskSummary, seenAt: number | undefined, nowMs: number): Status | null {
+/** Once it's a pull request and you've seen the agent's work, what the PR
+ * is waiting on (#24). */
+function pullStatus(pr: Pull): Status {
+  if (pr.state === "merged") return { label: "PR merged", tone: "violet", live: false };
+  if (pr.state === "closed") return { label: "PR closed", tone: "muted", live: false };
+  if (pr.checks === "failing") return { label: "Checks failing", tone: "red", live: false };
+  if (pr.review === "changesrequested") return { label: "Changes requested", tone: "amber", live: false };
+  if (pr.checks === "pending") return { label: "Checks running", tone: "sky", live: true };
+  if (pr.review === "approved") return { label: "Approved", tone: "emerald", live: false };
+  return { label: `#${pr.number}`, tone: "muted", live: false };
+}
+
+export function statusOf(t: TaskSummary, seenAt: number | undefined, nowMs: number, pull?: Pull): Status | null {
   if (t.landed) return null;
   if (t.stats.missing) return { label: "Folder gone", tone: "amber", live: false };
   const run = t.run;
@@ -22,5 +34,5 @@ export function statusOf(t: TaskSummary, seenAt: number | undefined, nowMs: numb
   if (run?.state === "failed" && unseen) return { label: "Failed", tone: "red", live: false };
   if (run?.state === "stopped" && unseen) return { label: "Stopped", tone: "muted", live: false };
   if (run?.state === "finished" && unseen) return { label: "Ready", tone: "emerald", live: false };
-  return null;
+  return pull ? pullStatus(pull) : null;
 }

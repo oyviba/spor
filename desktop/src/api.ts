@@ -4,6 +4,8 @@ import type {
   CommitDetail,
   FileEntry,
   Graph,
+  Issue,
+  IssueDetail,
   LogLine,
   Mode,
   Pull,
@@ -16,6 +18,7 @@ import type {
   RunPatch,
   TaskDetail,
   TaskSummary,
+  TaskPull,
 } from "./types";
 import type { Place } from "./shared/DiffView";
 
@@ -86,6 +89,10 @@ export const api = {
   runDetail: (id: number) => call<RunDetail>("run_detail", { id }),
   runAction: (id: number, action: "rerun" | "rerun_failed" | "cancel") => call<string>("run_action", { id, action }),
   jobLog: (id: number) => call<LogLine[]>("job_log", { id }),
+  issues: (filter: "assigned" | "yours" | "open" | "closed") => call<Issue[]>("issues", { filter }),
+  issueDetail: (number: number) => call<IssueDetail>("issue_detail", { number }),
+  issueAction: (number: number, action: "comment" | "close" | "reopen", body?: string) =>
+    call<string>("issue_action", { number, action, body: body ?? null }),
 
   // Agents
   listTasks: () => call<TaskSummary[]>("list_tasks"),
@@ -93,6 +100,20 @@ export const api = {
   taskPatch: (id: string) => call<string>("task_patch", { id }),
   createTask: (prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
     call<TaskSummary>("create_task", { prompt, base, agent, mode }),
+  /** A task on a GitHub issue; `prompt` is the issue's (editable) prompt. */
+  createIssueTask: (number: number, prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
+    call<TaskSummary>("create_issue_task", { number, prompt, base, agent, mode }),
+  /** Push the task's branch and open a pull request for it. */
+  publishTask: (id: string, draft: boolean, commitUncommitted: boolean) =>
+    call<string>("publish_task", { id, draft, commitUncommitted }),
+  /** Push the agent's new commits to the task's pull request. */
+  pushTask: (id: string) => call<string>("push_task", { id }),
+  /** Every open task's pull request (one `gh` call). */
+  taskPulls: () => call<TaskPull[]>("task_pulls"),
+  /** New review on the task's PR, written as a follow-up for its agent. */
+  reviewFeedback: (id: string) => call<string>("review_feedback", { id }),
+  /** Its PR merged: mark it landed and remove its folder and branch (⌘Z undoes). */
+  settleTask: (id: string, commit: string) => call<string>("settle_task", { id, commit }),
   /** `message` null starts the task's own prompt; otherwise it's a follow-up. */
   sendToAgent: (id: string, message: string | null, agent: AgentChoice, mode: Mode) =>
     call<void>("send_to_agent", { id, message, agent, mode }),

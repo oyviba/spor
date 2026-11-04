@@ -722,6 +722,26 @@ kbd {
 .composer textarea::placeholder {
   color: var(--faint);
 }
+/* An issue's prompt, folded to one line until you want to edit it. */
+.issue-prompt-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: left;
+}
+.issue-prompt-preview > svg {
+  flex-shrink: 0;
+}
+.issue-prompt-preview .link {
+  margin-left: auto;
+  flex-shrink: 0;
+}
 .composer-footer {
   display: flex;
   align-items: center;

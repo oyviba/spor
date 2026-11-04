@@ -2,7 +2,7 @@
 // It keeps a few tasks in memory, one of which is "working" and grows its
 // transcript over time, and answers the same commands as src-tauri.
 
-import type { AgentChoice, Ask, Item, Mode, RepoInfo, RunInfo, TaskDetail, TaskSummary } from "./types";
+import type { AgentChoice, Ask, Issue, IssueDetail, Item, Mode, Pull, RepoInfo, RunInfo, TaskDetail, TaskPull, TaskSummary } from "./types";
 
 const now = () => Math.floor(Date.now() / 1000);
 const t0 = now();
@@ -36,6 +36,7 @@ const stats = (over: Partial<TaskSummary["stats"]> = {}): TaskSummary["stats"] =
   base_moved: false,
   last_commit: t0,
   missing: false,
+  unpushed: 0,
   ...over,
 });
 
@@ -69,6 +70,8 @@ const summary = (id: string, prompt: string, created: number, over: Partial<Task
   command: `cd /Users/you/code/postplan.spor/${id} && claude '${prompt}'`,
   asks: 0,
   mode: "acceptEdits",
+  issue: null,
+  pull: null,
   ...over,
 });
 
@@ -174,6 +177,8 @@ const tasks: MockTask[] = [
       stats: stats({ files: 1, additions: 3, deletions: 1, commits: 1, last_commit: t0 - 3000 }),
       run: run({ started: t0 - 3400, ended: t0 - 3010, cost_usd: 0.18 }),
       runs: 1,
+      issue: 31,
+      pull: 40,
     }),
     transcript: [
       { kind: "prompt", text: "Send people back where they were after logging in" },
@@ -228,6 +233,88 @@ const tasks: MockTask[] = [
 ];
 
 let undoable: { message: string; task: MockTask; index: number } | null = null;
+
+// ---- Issues and the tasks' pull requests ----
+
+const issue = (number: number, title: string, over: Partial<Issue> = {}): Issue => ({
+  number,
+  title,
+  author: "ada",
+  open: true,
+  labels: [],
+  assignees: ["you"],
+  comments: 0,
+  updated: t0 - 3600,
+  url: `https://github.com/you/postplan/issues/${number}`,
+  ...over,
+});
+
+const issues: IssueDetail[] = [
+  {
+    issue: issue(31, "Logging in always lands on the dashboard", { labels: ["bug", "auth"], comments: 2, updated: t0 - 7200 }),
+    body: "When a signed-out person opens a link to a draft, they're sent to log in and then end up on the dashboard instead of the draft.\n\n**Expected:** back to the page they asked for.",
+    comments: [
+      { author: "grace", body: "Same with share links. Careful not to make it an open redirect.", at: t0 - 8000, verdict: null },
+      { author: "ada", body: "Agreed — only relative paths.", at: t0 - 7300, verdict: null },
+    ],
+    prompt: "",
+  },
+  {
+    issue: issue(34, "Scheduled posts ignore the account's time zone", { labels: ["bug"], comments: 1, updated: t0 - 1800 }),
+    body: "A post scheduled for 09:00 goes out at 09:00 UTC, not 09:00 in the account's time zone (Europe/Oslo here).",
+    comments: [{ author: "linus", body: "The cron job reads `scheduledAt` as UTC. The account has `timeZone` already.", at: t0 - 1900, verdict: null }],
+    prompt: "",
+  },
+  {
+    issue: issue(35, "Keyboard shortcut to duplicate a post", { labels: ["enhancement"], assignees: [], updated: t0 - 86400 }),
+    body: "⌘D on a post in the calendar should duplicate it to the next free slot.",
+    comments: [],
+    prompt: "",
+  },
+  {
+    issue: issue(29, "Export analytics as CSV", { open: false, labels: ["enhancement"], updated: t0 - 86400 * 2 }),
+    body: "A button on the analytics table that downloads what it shows.",
+    comments: [],
+    prompt: "",
+  },
+];
+for (const d of issues) {
+  const i = d.issue;
+  d.prompt =
+    `${i.title} (#${i.number})\n\nGitHub issue #${i.number}: ${i.url}\n` +
+    (i.labels.length ? `Labels: ${i.labels.join(", ")}\n` : "") +
+    `\n${d.body}\n` +
+    (d.comments.length ? `\nComments on the issue:\n\n${d.comments.map((c) => `${c.author} wrote:\n> ${c.body}`).join("\n\n")}\n` : "") +
+    `\nResolve this issue in this folder. Keep the change focused on it, add or update tests where it makes sense, make sure it builds and the tests pass, and commit. The pull request will close #${i.number}.`;
+}
+
+const pull = (number: number, t: TaskSummary, over: Partial<Pull> = {}): Pull => ({
+  number,
+  title: t.title,
+  author: "you",
+  head: t.branch,
+  base: t.base,
+  state: "open",
+  review: "none",
+  checks: "pending",
+  updated: now(),
+  additions: t.stats.additions,
+  deletions: t.stats.deletions,
+  url: `https://github.com/you/postplan/pull/${number}`,
+  ...over,
+});
+
+const taskPulls: Record<string, TaskPull> = {};
+let nextPull = 41;
+{
+  const login = tasks.find((t) => t.summary.id === "login-redirect")!.summary;
+  taskPulls[login.id] = {
+    task: login.id,
+    pull: pull(40, login, { review: "changesrequested", checks: "passing", updated: t0 - 1200 }),
+    merge_commit: null,
+  };
+}
+
 
 // The working task makes progress every few seconds, then finishes.
 setInterval(() => {
@@ -294,7 +381,7 @@ const slug = (s: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .split("-")
-    .filter(Boolean)
+    .filter((w) => w && !["the", "a", "an", "to", "on", "in", "of", "for", "and", "so", "it"].includes(w))
     .slice(0, 4)
     .join("-") || "task";
 
@@ -405,6 +492,83 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
         return null;
       case "run_patch":
         return { patch: find(id).patch, from_base: [] };
+      case "issues": {
+        const filter = args.filter as string;
+        return issues
+          .map((d) => d.issue)
+          .filter((i) =>
+            filter === "closed" ? !i.open : i.open && (filter !== "assigned" || i.assignees.includes("you")) && (filter !== "yours" || i.author === "you"),
+          );
+      }
+      case "issue_detail": {
+        const d = issues.find((x) => x.issue.number === args.number);
+        if (!d) throw `No issue #${args.number}`;
+        return structuredClone(d);
+      }
+      case "issue_action": {
+        const d = issues.find((x) => x.issue.number === args.number)!;
+        if (args.action === "comment") {
+          d.comments.push({ author: "you", body: args.body as string, at: now(), verdict: null });
+          return `Commented on #${args.number}`;
+        }
+        d.issue.open = args.action === "reopen";
+        return `${d.issue.open ? "Reopened" : "Closed"} #${args.number}`;
+      }
+      case "create_issue_task": {
+        const n = args.number as number;
+        const d = issues.find((x) => x.issue.number === n)!;
+        if (tasks.some((t) => t.summary.issue === n && !t.summary.landed)) throw `#${n} already has a task`;
+        const prompt = (args.prompt as string).trim();
+        const sid = `${n}-${slug(d.issue.title)}`;
+        const t: MockTask = {
+          summary: summary(sid, prompt, now(), { base: args.base as string, issue: n }),
+          transcript: [],
+          runs: [],
+          patch: "",
+          script: [],
+        };
+        tasks.unshift(t);
+        const agent = args.agent as AgentChoice;
+        if (agent.kind !== "none") start(t, prompt, agent);
+        return t.summary;
+      }
+      case "publish_task": {
+        const t = find(id);
+        if (t.summary.run?.state === "running") throw "The agent is still working";
+        if (t.summary.stats.commits === 0 && t.summary.stats.uncommitted === 0) throw `${id} has no commits to publish`;
+        const n = nextPull++;
+        t.summary.pull = n;
+        t.summary.stats = { ...t.summary.stats, uncommitted: 0, unpushed: 0 };
+        taskPulls[id] = { task: id, pull: pull(n, t.summary, { state: args.draft ? "draft" : "open" }), merge_commit: null };
+        // CI passes after a while, and then someone merges it.
+        setTimeout(() => (taskPulls[id].pull.checks = "passing"), 8000);
+        setTimeout(() => {
+          taskPulls[id].pull = { ...taskPulls[id].pull, state: "merged", review: "approved" };
+          taskPulls[id].merge_commit = "c0ffee1d2e3f";
+        }, 20000);
+        return `Opened ${args.draft ? "draft " : ""}pull request #${n}`;
+      }
+      case "push_task": {
+        const t = find(id);
+        const k = t.summary.stats.unpushed;
+        t.summary.stats = { ...t.summary.stats, unpushed: 0 };
+        return k ? `Pushed ${k} commits to #${t.summary.pull}` : `${t.summary.branch} is up to date`;
+      }
+      case "task_pulls":
+        return Object.values(taskPulls).filter((p) => tasks.some((t) => t.summary.id === p.task && !t.summary.landed));
+      case "review_feedback": {
+        const t = find(id);
+        if (t.summary.pull == null) throw `${id} has no pull request`;
+        return `Review on pull request #${t.summary.pull}:\n\ngrace (requested changes):\n> Keep \`next\` relative — reject \`//evil.example\` too.\n\nOn the diff:\n- \`src/routes/login.ts:12\` — Add a test for a protocol-relative URL. (grace)\n\nAddress each point (or say why not), make sure it still builds and the tests pass, and commit.`;
+      }
+      case "settle_task": {
+        const t = find(id);
+        const index = tasks.indexOf(t);
+        const message = `Cleaned up ${id} — its pull request was merged`;
+        undoable = { message, task: structuredClone(t), index };
+        t.summary.landed = /^[0-9a-f]{7,}$/.test(args.commit as string) ? (args.commit as string) : "e3b9a10";
+        return message;
+      }
       case "undo_run": {
         const t = find(id);
         const last = t.runs.at(-1);

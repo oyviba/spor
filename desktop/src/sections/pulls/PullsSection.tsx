@@ -10,6 +10,7 @@ import { StatusPill, type Status } from "../../shared/StatusPill";
 import { CiIcon } from "../../shared/ci";
 import { ago } from "../agents/transcript";
 import { Bot, Branch, Check, ChevronDown, External, MessageSquare, Play, X } from "../../shared/Icons";
+import { choiceOf, useAgentSettings } from "../agents/Composer";
 
 type Filter = "review" | "yours" | "open" | "closed";
 const FILTERS: { id: Filter; label: string }[] = [
@@ -298,6 +299,20 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
       return label;
     });
   const merge = (method: string) => (confirm === method ? act(method) : setConfirm(method));
+  const [settings] = useAgentSettings();
+  // Reviews and line comments since the agent last ran, as its follow-up.
+  const sendReview = async () => {
+    if (!task) return;
+    const ok = await shell.act(
+      async () => {
+        const text = await api.reviewFeedback(task.id);
+        await api.sendToAgent(task.id, text, choiceOf(settings), settings.mode);
+        return `Sent the review to ${task.id}`;
+      },
+      { undo: false },
+    );
+    if (ok) shell.go({ section: "agents", taskId: task.id });
+  };
   return (
     <DetailsCard>
       <div className="inspector-section">
@@ -340,6 +355,16 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
         )}
       </div>
       <div className="inspector-actions">
+        {task && open && (
+          <button
+            className="ghost"
+            disabled={task.run?.state === "running"}
+            title={task.run?.state === "running" ? "The agent is working — send it when it's done" : "Send reviews and line comments since the agent last ran"}
+            onClick={sendReview}
+          >
+            <Bot size={12} /> Send review to agent
+          </button>
+        )}
         {open && (
           <div className="split">
             <button

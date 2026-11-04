@@ -5,7 +5,7 @@ import { useNow } from "../../shared/hooks";
 import { DiffView } from "../../shared/DiffView";
 import { Composer, type AgentSettings, type ComposerHandle } from "./Composer";
 import { Conversation } from "./Conversation";
-import { Inspector } from "./Inspector";
+import { Inspector, type GithubActions } from "./Inspector";
 import { MessageSquare, PanelRight } from "../../shared/Icons";
 import { StatusPill } from "../../shared/StatusPill";
 
@@ -50,6 +50,7 @@ interface Props {
   onSteer: (text: string) => void;
   onRetrySetup: () => void;
   onSkipSetup: () => void;
+  github: GithubActions;
 }
 
 export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, composerRef) {
@@ -61,7 +62,7 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
       <header className="task-header">
         <div className="task-title">
           <h2 title={t.prompt}>{t.title}</h2>
-          <StatusPill status={statusOf(t, p.seenAt, now)} />
+          <StatusPill status={statusOf(t, p.seenAt, now, p.github.pull?.pull)} />
         </div>
         <nav className="tabs" role="tablist">
           <button role="tab" aria-selected={p.tab === "conversation"} onClick={() => p.onTab("conversation")}>
@@ -143,6 +144,7 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
             onDiscard={p.onDiscard}
             onAskRebase={p.onAskRebase}
             onShowBranch={p.onShowBranch}
+            {...p.github}
           />
         )}
       </div>

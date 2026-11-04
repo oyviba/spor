@@ -18,6 +18,8 @@ export interface Stats {
   base_moved: boolean;
   last_commit: number;
   missing: boolean;
+  /** Commits its published branch doesn't have yet. */
+  unpushed: number;
 }
 
 export type RunStateName = "running" | "finished" | "failed" | "stopped";
@@ -53,6 +55,10 @@ export interface TaskSummary {
   /** Questions the agent is waiting on. */
   asks: number;
   mode: Mode | null;
+  /** The GitHub issue it was started from. */
+  issue: number | null;
+  /** The pull request it was published as. */
+  pull: number | null;
 }
 
 /** How much an agent may do without asking (#21). */
@@ -278,4 +284,32 @@ export interface RunDetail {
 export interface LogLine {
   kind: "plain" | "group" | "command" | "error" | "warning" | "notice";
   text: string;
+}
+
+/** An open task's pull request (#24, #47). */
+export interface TaskPull {
+  task: string;
+  pull: Pull;
+  /** The commit it was merged as, once merged. */
+  merge_commit: string | null;
+}
+
+export interface Issue {
+  number: number;
+  title: string;
+  author: string;
+  open: boolean;
+  labels: string[];
+  assignees: string[];
+  comments: number;
+  updated: number;
+  url: string;
+}
+
+export interface IssueDetail {
+  issue: Issue;
+  body: string;
+  comments: PullComment[];
+  /** The prompt an agent task on it starts from. */
+  prompt: string;
 }

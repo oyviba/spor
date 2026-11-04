@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
-import type { LineComment, RunPatch, TaskDetail, TaskSummary } from "../../types";
+import type { LineComment, RunPatch, TaskDetail, TaskPull, TaskSummary } from "../../types";
 import { activityAt } from "./status";
 import { usePoll, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
@@ -44,6 +44,30 @@ export function AgentsSection() {
     setTasks(await api.listTasks());
   }, []);
   usePoll(refreshTasks, 1500, [repo.root]);
+
+  // Open tasks' pull requests (one `gh` call), and a note when one merges.
+  const [pulls, setPulls] = useState<Record<string, TaskPull>>({});
+  const merged = useRef<Set<string> | null>(null);
+  const openTasks = tasks.filter((t) => !t.landed).length;
+  const refreshPulls = useCallback(async () => {
+    let list: TaskPull[];
+    try {
+      list = await api.taskPulls();
+    } catch {
+      return; // Not GitHub, or no `gh`: tasks just have no PRs.
+    }
+    setPulls(Object.fromEntries(list.map((p) => [p.task, p])));
+    const now = new Set(list.filter((p) => p.pull.state === "merged").map((p) => p.task));
+    if (merged.current)
+      for (const p of list)
+        if (now.has(p.task) && !merged.current.has(p.task))
+          toast(`#${p.pull.number} merged — ${p.task} can be cleaned up`, "ok", false, {
+            label: "Clean up",
+            run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`),
+          });
+    merged.current = now;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  usePoll(refreshPulls, 30_000, [repo.root, openTasks], openTasks > 0);
 
   const selected = tasks.find((t) => t.id === selectedId);
   const running = selected?.run?.state === "running";
@@ -166,6 +190,32 @@ export function AgentsSection() {
       .then(afterChange, fail);
   };
 
+  const settle = (id: string, commit: string) =>
+    shell.act(() => api.settleTask(id, commit)).then(async () => {
+      await refreshTasks();
+      await refreshPulls();
+    });
+
+  const github = (id: string) => ({
+    pull: pulls[id],
+    onShowIssue: (n: number) => shell.go({ section: "issues", number: n }),
+    onShowPull: (n: number) => shell.go({ section: "pulls", number: n }),
+    onPublish: (draft: boolean, commitUncommitted: boolean) =>
+      shell
+        .act(() => api.publishTask(id, draft, commitUncommitted), { undo: false })
+        .then(async () => {
+          await afterChange();
+          await refreshPulls();
+        }),
+    onPush: () => shell.act(() => api.pushTask(id), { undo: false }).then(afterChange),
+    onSendReview: () =>
+      api.reviewFeedback(id).then((text) => {
+        send(text);
+        toast(shown?.task.run?.state === "running" ? "The review is queued for when the agent is done" : `Sent the review to ${id}`);
+      }, fail),
+    onSettle: (commit: string) => settle(id, commit),
+  });
+
   const askRebase = () => {
     if (!shown) return;
     const base = shown.task.base;
@@ -182,6 +232,7 @@ export function AgentsSection() {
     <>
       <Sidebar
         tasks={tasks}
+        pulls={pulls}
         selected={selectedId}
         seen={seen}
         shelves={shelves}
@@ -277,6 +328,7 @@ export function AgentsSection() {
             onOpenFolder={() => api.openFolder(shown.task.id).catch(fail)}
             onCopy={(text, what) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), fail)}
             onShowBranch={() => shell.go({ section: "history", branch: shown.task.branch })}
+            github={github(shown.task.id)}
           />
         ) : (
           <div className="boot" />

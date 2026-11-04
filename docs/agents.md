@@ -204,7 +204,12 @@ Each phase is useful on its own.
 4. **Many at once** — *collision radar done*, with *Ask Agent to Rebase*
    for conflicts with the base. Still to do: Rebase All with conflicts handed back
    to the agent, and landing in order with checks.
-5. **Remote agents.** Agents running in the cloud already work on branches
+
+   **From issues** (#47): a task can start from a GitHub issue (the
+   issue is its prompt), opens its pull request with `Closes #n`, follows
+   that PR's state, sends its reviews back to the agent, and is cleaned up
+   when the PR merges (#24). Built in the Tauri app.
+5. **Remote agents** (#44). Agents running in the cloud already work on branches
    and open pull requests. A task can follow a remote branch or PR instead
    of a local worktree, so cloud and local agents share one panel.
 

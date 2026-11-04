@@ -3,10 +3,11 @@ import { api, errorText } from "./api";
 import type { RepoInfo, RepoState } from "./types";
 import { usePoll, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
-import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, Play, PullRequest, X } from "./shared/Icons";
+import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { AgentsSection } from "./sections/agents/AgentsSection";
 import { HistorySection } from "./sections/history/HistorySection";
 import { ChangesSection } from "./sections/changes/ChangesSection";
+import { IssuesSection } from "./sections/issues/IssuesSection";
 import { PullsSection } from "./sections/pulls/PullsSection";
 import { ActionsSection } from "./sections/actions/ActionsSection";
 
@@ -21,9 +22,10 @@ interface Toast {
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string }[] = [
   { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "1" },
   { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "2" },
-  { id: "pulls", label: "Pull requests", icon: <PullRequest size={17} />, key: "3" },
-  { id: "actions", label: "Actions", icon: <Play size={17} />, key: "4" },
-  { id: "agents", label: "Agents", icon: <Bot size={17} />, key: "5" },
+  { id: "issues", label: "Issues", icon: <IssueIcon size={17} />, key: "3" },
+  { id: "pulls", label: "Pull requests", icon: <PullRequest size={17} />, key: "4" },
+  { id: "actions", label: "Actions", icon: <Play size={17} />, key: "5" },
+  { id: "agents", label: "Agents", icon: <Bot size={17} />, key: "6" },
 ];
 
 /** Is the task open on screen (Agents, its page)? Then it needs no toast. */
@@ -175,7 +177,7 @@ export function App() {
     [repo, state, refresh, toast, fail, undo, target], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  // ⌘1–⌘5 switch sections; ⌘Z undoes the last change anywhere (not while
+  // ⌘1–⌘6 switch sections; ⌘Z undoes the last change anywhere (not while
   // typing, where it undoes the typing).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -231,6 +233,7 @@ export function App() {
             {section === "agents" && <AgentsSection />}
             {section === "history" && <HistorySection />}
             {section === "changes" && <ChangesSection />}
+            {section === "issues" && <IssuesSection />}
             {section === "pulls" && <PullsSection />}
             {section === "actions" && <ActionsSection />}
           </div>
@@ -324,7 +327,7 @@ function OpenRepo({ onOpen, toasts }: { onOpen: (path: string) => void; toasts: 
       >
         <h1>Open a repository</h1>
         <p className="lede">
-          <Branch size={12} /> Spor shows its history, changes, pull requests, Actions and agent tasks.
+          <Branch size={12} /> Spor shows its history, changes, issues, pull requests, Actions and agent tasks.
         </p>
         <input name="path" autoFocus placeholder="~/code/my-project" />
         <button className="primary" type="submit">
