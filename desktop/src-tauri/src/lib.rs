@@ -75,15 +75,40 @@ fn open_repo(app: State<App>, path: String) -> Result<RepoInfo, String> {
     let path = expand_home(path.trim());
     let repo = Repo::discover(&path).map_err(|e| first_line(&e))?;
     let info = repo_info(&repo);
+    tidy(&repo);
     *app.repo.lock().unwrap() = Some(repo);
     app.undo.clear();
     Ok(info)
+}
+
+/// Opening a repository starts with nothing to undo, so the checkpoints of
+/// landed and discarded tasks have outlived their undo window (#41).
+fn tidy(repo: &Repo) {
+    let repo = repo.clone();
+    std::thread::spawn(move || {
+        if let Ok(tasks) = spor::tasks::Tasks::open(&repo) {
+            tasks.clean_up();
+        }
+    });
 }
 
 /// What the window chrome shows about the repository, and fingerprints the
 /// sections compare to know when to reload: `refs` changes when any branch,
 /// tag or HEAD moves; `index` when anything is staged, committed or checked
 /// out. Cheap enough to poll every couple of seconds.
+/// A notification from the operating system, for when the window is in
+/// the background (an agent needs you, #41).
+#[tauri::command]
+fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt as _;
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 #[derive(Serialize)]
 struct RepoState {
     branch: Option<String>,
@@ -210,9 +235,11 @@ pub fn run() {
         .map(|p| expand_home(&p))
         .or_else(|| std::env::current_dir().ok());
     if let Some(repo) = start.and_then(|p| Repo::discover(&p).ok()) {
+        tidy(&repo);
         *app.repo.lock().unwrap() = Some(repo);
     }
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(app)
         .invoke_handler(tauri::generate_handler![
             current_repo,
@@ -220,6 +247,7 @@ pub fn run() {
             repo_state,
             undo,
             open_url,
+            notify,
             agents::list_tasks,
             agents::task_detail,
             agents::task_patch,
@@ -237,6 +265,11 @@ pub fn run() {
             agents::set_mode,
             agents::steer,
             agents::skip_setup,
+            agents::rerun_setup,
+            agents::queue_follow_up,
+            agents::unqueue,
+            agents::send_queued,
+            agents::clean_up_tasks,
             history::graph,
             history::search_commits,
             history::commit_detail,

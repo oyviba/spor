@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import type { TaskDetail } from "../../types";
+import type { SetupInfo, TaskDetail } from "../../types";
 import { duration } from "./transcript";
-import { AgentIcon, Alert, Branch, ChevronDown, Copy, Folder, Merge, Trash } from "../../shared/Icons";
+import { AgentIcon, Alert, Branch, ChevronDown, Copy, Folder, Merge, Refresh, Terminal, Trash } from "../../shared/Icons";
 
 interface Props {
   detail: TaskDetail;
@@ -13,6 +13,7 @@ interface Props {
   onDiscard: () => void;
   onAskRebase: () => void;
   onShowBranch: () => void;
+  onRerunSetup: () => void;
 }
 
 /** The task's details and landing actions, in a small floating card. */
@@ -65,6 +66,7 @@ export function Inspector({ detail, ...p }: Props) {
           <Copy size={13} />
           <span>Copy agent command</span>
         </button>
+        {detail.setup && <SetupRow setup={detail.setup} running={running} onRerun={p.onRerunSetup} />}
       </div>
       <div className="inspector-section">
         <button className="inspector-row action" onClick={p.onShowBranch} title="Show it in History">
@@ -169,5 +171,45 @@ export function Inspector({ detail, ...p }: Props) {
       </div>
       {landBlocked && hasWork && !running && <div className="inspector-note">{landBlocked}</div>}
     </aside>
+  );
+}
+
+/** The folder's setup script (#23): which, how it went, and Re-run. */
+function SetupRow({ setup, running, onRerun }: { setup: SetupInfo; running: boolean; onRerun: () => void }) {
+  const [label, tone] = ((): [string, string] => {
+    switch (setup.state) {
+      case "running":
+        return ["running", ""];
+      case "worked":
+        return ["worked", "ok"];
+      case "failed":
+        return [setup.code != null ? `failed (exit ${setup.code})` : "failed", "bad"];
+      case "skipped":
+        return ["skipped", "muted"];
+      case "due":
+        return ["runs before the next agent", "muted"];
+      default:
+        return ["runs before the first agent", "muted"];
+    }
+  })();
+  const canRerun = setup.state === "worked" || setup.state === "skipped";
+  return (
+    <div className={`inspector-row setup-row ${tone}`}>
+      <Terminal size={13} />
+      <span className="truncate" title={setup.script}>
+        <code>{setup.script}</code> <span className="setup-state">{label}</span>
+      </span>
+      {canRerun && (
+        <button
+          className="icon-button tiny"
+          onClick={onRerun}
+          disabled={running}
+          title="Run it again before the next agent"
+          aria-label="Re-run setup"
+        >
+          <Refresh size={11} />
+        </button>
+      )}
+    </div>
   );
 }

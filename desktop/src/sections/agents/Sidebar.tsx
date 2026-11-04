@@ -3,7 +3,7 @@ import { statusOf } from "./status";
 import { ago } from "./transcript";
 import { useNow } from "../../shared/hooks";
 import { StatusPill } from "../../shared/StatusPill";
-import { AgentIcon, Branch, Chevron, Plus } from "../../shared/Icons";
+import { AgentIcon, Archive, Branch, Chevron, Plus } from "../../shared/Icons";
 import { SidebarHeader } from "../../shared/Layout";
 
 interface Props {
@@ -14,6 +14,8 @@ interface Props {
   onShelves: (s: { working: boolean; settled: boolean }) => void;
   onSelect: (id: string) => void;
   onNew: () => void;
+  /** Delete landed and discarded tasks' checkpoints and transcripts. */
+  onCleanUp: () => void;
 }
 
 export function Sidebar(p: Props) {
@@ -77,6 +79,14 @@ export function Sidebar(p: Props) {
   return (
     <aside className="sidebar">
       <SidebarHeader>
+        <button
+          className="icon-button"
+          onClick={p.onCleanUp}
+          title="Clean up old tasks: delete the run checkpoints of landed and discarded tasks, and discarded tasks' transcripts. They can't be undone afterwards."
+          aria-label="Clean up old tasks"
+        >
+          <Archive />
+        </button>
         <button className="icon-button" onClick={p.onNew} title="New task (⌘N)" aria-label="New task">
           <Plus />
         </button>

@@ -86,15 +86,19 @@ export function App() {
         asking: waiting.length,
       });
       if (asking.current) {
-        for (const t of waiting)
-          if (!asking.current.has(t.id) && !viewing(t.id))
-            toast(`${t.title} is waiting for you`, "ok", false, {
+        for (const t of waiting) {
+          if (asking.current.has(t.id) || viewing(t.id)) continue;
+          // With the window in the background nobody sees a toast: ask the
+          // operating system (#41).
+          if (!document.hasFocus()) api.notify(`${t.title} needs you`, "An agent is waiting for an answer").catch(() => {});
+          toast(`${t.title} is waiting for you`, "ok", false, {
               label: "Answer",
               run: () => {
                 setSection("agents");
                 setTarget((old) => ({ section: "agents", taskId: t.id, seq: old.seq + 1 }));
               },
             });
+        }
       }
       asking.current = new Set(waiting.map((t) => t.id));
     },

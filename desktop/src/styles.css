@@ -897,6 +897,19 @@ kbd {
 .inspector-row.bad > svg {
   color: var(--red);
 }
+.setup-row .setup-state {
+  color: var(--muted);
+}
+.setup-row.ok .setup-state {
+  color: var(--emerald);
+}
+.setup-row.bad .setup-state {
+  color: var(--red);
+}
+.setup-row .icon-button {
+  margin-left: auto;
+  flex-shrink: 0;
+}
 .inspector-row .link {
   display: block;
   margin: 2px 0 0;

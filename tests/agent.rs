@@ -751,3 +751,137 @@ fn land_and_discard_say_what_they_did() {
         .unwrap();
     assert_eq!(undo.label(), format!("Landed {} on main", task.id));
 }
+
+// ---- Follow-ups from #19–#23 (#41) ---------------------------------------
+
+#[test]
+fn queued_follow_ups_are_kept_with_the_task() {
+    let f = fixture();
+    let task = f.tasks.create("Queue", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    assert!(runs.queued().is_empty());
+    runs.queue("first\nwith two lines").unwrap();
+    runs.queue("second").unwrap();
+    runs.queue("third").unwrap();
+    // Another app (another Runs) sees the same queue.
+    let other = Runs::of(&f.tasks, &task);
+    assert_eq!(other.queued(), ["first\nwith two lines", "second", "third"]);
+    other.unqueue(1).unwrap();
+    assert!(other.unqueue(5).is_err());
+    assert_eq!(runs.take_queued().as_deref(), Some("first\nwith two lines"));
+    assert_eq!(runs.take_queued().as_deref(), Some("third"));
+    assert_eq!(runs.take_queued(), None);
+    assert!(!f.tasks.run_dir(&task.id).join("queue").exists());
+}
+
+#[test]
+fn undo_from_an_earlier_run_takes_back_everything_after_it() {
+    let f = fixture();
+    let task = f.tasks.create("Marks", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let wt = &task.worktree;
+    run_command(&task, &runs, "echo 1 > one.txt");
+    run_command(&task, &runs, "echo 2 > two.txt");
+    run_command(&task, &runs, "echo 3 > three.txt");
+    assert_eq!(runs.undoable_from(), [0, 1, 2]);
+
+    // The last on its own, then from the second: the second batch is runs
+    // 1 (and 2, already undone).
+    runs.undo_last().unwrap();
+    assert_eq!(runs.undo_from(1).unwrap(), [1]);
+    assert!(read(wt, "one.txt").is_some());
+    assert!(read(wt, "two.txt").is_none());
+    assert!(read(wt, "three.txt").is_none());
+    assert_eq!(runs.undoable_from(), [0]);
+    assert!(runs.undo_from(2).is_err(), "already undone");
+
+    // Redo brings back that batch only.
+    runs.redo(1).unwrap();
+    assert!(read(wt, "two.txt").is_some());
+    assert!(read(wt, "three.txt").is_none());
+    let undone: Vec<bool> = runs.list().iter().map(|r| r.undone).collect();
+    assert_eq!(undone, [false, false, true]);
+
+    // From the first: everything.
+    runs.redo(2).unwrap();
+    assert_eq!(runs.undo_from(0).unwrap(), [0, 1, 2]);
+    assert!(read(wt, "one.txt").is_none() && read(wt, "three.txt").is_none());
+    runs.redo(0).unwrap();
+    assert!(read(wt, "one.txt").is_some() && read(wt, "three.txt").is_some());
+    assert!(runs.list().iter().all(|r| !r.undone));
+}
+
+#[test]
+fn cleaning_up_removes_landed_and_discarded_tasks_checkpoints() {
+    let f = fixture();
+    let open = f.tasks.create("Keep", "main").unwrap();
+    let landed = f.tasks.create("Land", "main").unwrap();
+    let gone = f.tasks.create("Throw", "main").unwrap();
+    for t in [&open, &landed, &gone] {
+        run_command(t, &Runs::of(&f.tasks, t), &format!("echo x > {}.txt", t.id));
+    }
+    let landed_ref = Runs::of(&f.tasks, &landed).checkpoint_ref(0, "before");
+    let gone_ref = Runs::of(&f.tasks, &gone).checkpoint_ref(0, "before");
+    let open_ref = Runs::of(&f.tasks, &open).checkpoint_ref(0, "before");
+    f.tasks
+        .land(&landed, spor::tasks::LandMode::Squash, true)
+        .unwrap();
+    f.tasks.discard(&gone).unwrap();
+    // Until cleaned up, an undo still has everything.
+    assert!(checkpoint::resolve(f.repo.root(), &gone_ref).is_some());
+    assert!(f.tasks.run_dir(&gone.id).exists());
+
+    assert_eq!(f.tasks.clean_up(), 2);
+    assert!(checkpoint::resolve(f.repo.root(), &landed_ref).is_none());
+    assert!(checkpoint::resolve(f.repo.root(), &gone_ref).is_none());
+    assert!(!f.tasks.run_dir(&gone.id).exists());
+    // A landed task keeps its transcript; an open one keeps everything.
+    assert!(f.tasks.run_dir(&landed.id).exists());
+    assert!(checkpoint::resolve(f.repo.root(), &open_ref).is_some());
+    assert_eq!(f.tasks.clean_up(), 0);
+}
+
+#[test]
+fn the_setup_script_reports_how_it_went() {
+    use spor::agent::SetupState;
+    let f = fixture();
+    commit_spor_file(&f, "setup", "echo ok\n");
+    let task = f.tasks.create("Setup status", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let setup = runs.setup(&task);
+    assert_eq!(setup.script.as_deref(), Some(Path::new(".spor/setup")));
+    assert_eq!(setup.state, None);
+    run_command(&task, &runs, "true");
+    assert_eq!(runs.setup(&task).state, Some(SetupState::Worked));
+    // Run again: due before the next agent, and it runs.
+    runs.rerun_setup().unwrap();
+    assert_eq!(runs.setup(&task).state, Some(SetupState::Due));
+    assert!(runs.setup_script(&task).is_some());
+    run_command(&task, &runs, "true");
+    assert_eq!(runs.setup(&task).state, Some(SetupState::Worked));
+    runs.skip_setup().unwrap();
+    assert_eq!(runs.setup(&task).state, Some(SetupState::Skipped));
+}
+
+#[test]
+fn a_queued_follow_up_goes_once_the_agent_is_idle() {
+    let f = fixture();
+    let task = f.tasks.create("Write a note", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let kind = AgentKind::Command("sleep 0.3; echo \"$SPOR_PROMPT\" > note.txt".into());
+    runs.follow_up(&task, None, Some(&kind), NO_COMMANDS)
+        .unwrap();
+    runs.queue("Shorter").unwrap();
+    // Still working: it waits.
+    assert!(!runs.send_queued(&task, None, NO_COMMANDS).unwrap());
+    assert_eq!(runs.queued(), ["Shorter"]);
+    wait_until_done(&runs);
+    assert!(runs.send_queued(&task, None, NO_COMMANDS).unwrap());
+    assert!(runs.queued().is_empty());
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    assert_eq!(
+        read(&task.worktree, "note.txt").as_deref(),
+        Some("Write a note\n\nFeedback on the work so far:\nShorter\n")
+    );
+    assert!(!runs.send_queued(&task, None, NO_COMMANDS).unwrap());
+}
