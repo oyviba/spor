@@ -80,7 +80,8 @@ export type Item =
   | { kind: "output"; text: string }
   | { kind: "ask"; id: string; tool: string; detail: string }
   | { kind: "answer"; id: string; allow: boolean; message: string }
-  | { kind: "steer"; text: string };
+  | { kind: "steer"; text: string }
+  | { kind: "setup"; ok: boolean | null; code: number | null };
 
 export interface TaskDetail {
   task: TaskSummary;

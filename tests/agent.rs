@@ -487,3 +487,132 @@ fn forgetting_a_task_deletes_its_checkpoints() {
     f.tasks.forget(&task.id).unwrap();
     assert!(checkpoint::resolve(f.repo.root(), &before).is_none());
 }
+
+// ---- Setup scripts (#23) ----------------------------------------------------
+
+/// Commit `.spor/<name>` with `content` in the main checkout.
+fn commit_spor_file(f: &Fixture, name: &str, content: &str) {
+    let root = f.repo.root();
+    std::fs::create_dir_all(root.join(".spor")).unwrap();
+    std::fs::write(root.join(".spor").join(name), content).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", &format!("Add .spor/{name}")]);
+}
+
+#[test]
+fn the_setup_script_runs_before_the_first_agent_only() {
+    let f = fixture();
+    commit_spor_file(
+        &f,
+        "setup",
+        "echo \"setting up $SPOR_TASK from $SPOR_BASE\"\necho ready > prepared.txt\necho x >> setups.txt\ntest -d \"$SPOR_REPO/.git\"\n",
+    );
+    let task = f.tasks.create("Use the setup", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    assert!(runs.setup_script(&task).is_some());
+    run_command(&task, &runs, "cat prepared.txt > seen.txt");
+    assert_eq!(
+        read(&task.worktree, "seen.txt").as_deref(),
+        Some("ready\n"),
+        "the agent ran after setup"
+    );
+    let t = runs.transcript();
+    let start = t
+        .iter()
+        .position(|e| {
+            *e == Entry::Setup {
+                ok: None,
+                code: None,
+            }
+        })
+        .unwrap();
+    let done = t
+        .iter()
+        .position(|e| {
+            *e == Entry::Setup {
+                ok: Some(true),
+                code: Some(0),
+            }
+        })
+        .unwrap();
+    assert!(start < done);
+    assert!(
+        t[start..done].contains(&Entry::Output(format!("setting up {} from main", task.id))),
+        "{t:?}"
+    );
+    // Later runs don't set up again.
+    assert!(runs.setup_script(&task).is_none());
+    run_command(&task, &runs, "true");
+    assert_eq!(read(&task.worktree, "setups.txt").as_deref(), Some("x\n"));
+}
+
+#[test]
+fn a_failing_setup_stops_the_agent_until_skipped() {
+    let f = fixture();
+    commit_spor_file(&f, "setup", "echo 'npm: not found'\nexit 3\n");
+    let task = f.tasks.create("Broken setup", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    runs.start(
+        &task,
+        &AgentKind::Command("echo ran > ran.txt".into()),
+        "x",
+        None,
+        NO_COMMANDS,
+    )
+    .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Failed(3));
+    assert!(
+        read(&task.worktree, "ran.txt").is_none(),
+        "the agent didn't run"
+    );
+    let t = runs.transcript();
+    assert!(t.contains(&Entry::Setup {
+        ok: Some(false),
+        code: Some(3)
+    }));
+    assert!(t.contains(&Entry::Output("npm: not found".into())));
+    // Retrying runs setup again; skipping it lets the agent start.
+    assert!(runs.setup_script(&task).is_some());
+    runs.skip_setup().unwrap();
+    run_command(&task, &runs, "echo ran > ran.txt");
+    assert_eq!(read(&task.worktree, "ran.txt").as_deref(), Some("ran\n"));
+}
+
+#[test]
+fn a_private_setup_script_wins() {
+    let f = fixture();
+    commit_spor_file(&f, "setup", "echo committed > which.txt\n");
+    let private = f.repo.root().join(".git/spor");
+    std::fs::create_dir_all(&private).unwrap();
+    std::fs::write(private.join("setup"), "echo private > which.txt\n").unwrap();
+    let task = f.tasks.create("Which setup", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    run_command(&task, &runs, "true");
+    assert_eq!(
+        read(&task.worktree, "which.txt").as_deref(),
+        Some("private\n")
+    );
+}
+
+#[test]
+fn listed_ignored_files_are_copied_into_a_new_folder() {
+    let f = fixture();
+    let root = f.repo.root().to_path_buf();
+    std::fs::write(root.join(".gitignore"), ".env\nconfig/local.toml\n").unwrap();
+    commit_spor_file(&f, "copy", "# secrets the checkout doesn't bring\n.env\nconfig/local.toml\nmissing.txt\n../outside.txt\n");
+    std::fs::write(root.join(".env"), "TOKEN=1\n").unwrap();
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::write(root.join("config/local.toml"), "debug = true\n").unwrap();
+    std::fs::write(f.dir.join("outside.txt"), "nope\n").unwrap();
+    let task = f.tasks.create("Copy secrets", "main").unwrap();
+    assert_eq!(read(&task.worktree, ".env").as_deref(), Some("TOKEN=1\n"));
+    assert_eq!(
+        read(&task.worktree, "config/local.toml").as_deref(),
+        Some("debug = true\n")
+    );
+    assert!(read(&task.worktree, "missing.txt").is_none());
+    assert!(
+        !task.worktree.parent().unwrap().join("outside.txt").exists(),
+        "paths outside the checkout are refused"
+    );
+}

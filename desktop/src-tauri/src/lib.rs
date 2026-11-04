@@ -234,6 +234,7 @@ pub fn run() {
             agents::answer_ask,
             agents::set_mode,
             agents::steer,
+            agents::skip_setup,
             history::graph,
             history::search_commits,
             history::commit_detail,

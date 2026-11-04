@@ -99,6 +99,8 @@ export const api = {
   /** Answer a question the agent asked; `message` says what to do instead. */
   answerAsk: (id: string, requestId: string, allow: boolean, message = "") =>
     call<void>("answer_ask", { id, requestId, allow, message }),
+  /** Start the next agent without the folder's setup script (#23). */
+  skipSetup: (id: string) => call<void>("skip_setup", { id }),
   /** A message into the turn the agent is on (#22). */
   steer: (id: string, text: string) => call<void>("steer", { id, text }),
   /** Change the running agent's permission mode. */

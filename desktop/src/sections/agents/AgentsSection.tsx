@@ -220,6 +220,15 @@ export function AgentsSection() {
             onAnswer={(ask, allow, message) =>
               api.answerAsk(shown.task.id, ask.id, allow, message ?? "").then(afterChange, fail)
             }
+            onRetrySetup={() =>
+              api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode).then(afterChange, fail)
+            }
+            onSkipSetup={() =>
+              api
+                .skipSetup(shown.task.id)
+                .then(() => api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode))
+                .then(afterChange, fail)
+            }
             onSteer={(text) => {
               setComments((c) => ({ ...c, [shown.task.id]: [] }));
               api.steer(shown.task.id, text).then(afterChange, fail);

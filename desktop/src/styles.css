@@ -1999,3 +1999,27 @@ kbd {
 .live-line.waiting {
   color: var(--amber);
 }
+
+/* ---- Setup script (#23) ---- */
+
+.setup-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.setup-block.bad .tools-summary {
+  color: var(--red);
+}
+.setup-block.good .tools-summary > svg:first-child {
+  color: var(--emerald);
+}
+.setup-output {
+  margin: 0;
+  background: var(--raised);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font: 12px/1.45 var(--mono);
+  white-space: pre-wrap;
+  max-height: 280px;
+  overflow: auto;
+}

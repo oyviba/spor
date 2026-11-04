@@ -15,7 +15,9 @@ export type Block =
   /** A question the agent asked, and how it was answered (null: waiting). */
   | { kind: "ask"; id: string; tool: string; detail: string; answer: { allow: boolean; message: string } | null }
   /** A message sent while it worked. */
-  | { kind: "steer"; text: string };
+  | { kind: "steer"; text: string }
+  /** The folder's setup script and its output (ok null: still going). */
+  | { kind: "setup"; ok: boolean | null; code: number | null; lines: string[] };
 
 export interface RunView {
   index: number;
@@ -34,6 +36,8 @@ export interface RunView {
 export function runs(items: Item[], running: boolean): RunView[] {
   const out: RunView[] = [];
   let current: RunView | null = null;
+  // Output between the setup markers is the setup script's.
+  let setup: Extract<Block, { kind: "setup" }> | null = null;
   const push = (block: Block) => {
     if (!current) {
       current = { index: out.length, prompt: "", blocks: [], done: null, live: false, fold: null };
@@ -58,7 +62,18 @@ export function runs(items: Item[], running: boolean): RunView[] {
         push({ kind: "tools", tools: [item] });
         break;
       case "output":
-        push({ kind: "output", lines: [item.text] });
+        if (setup) setup.lines.push(item.text);
+        else push({ kind: "output", lines: [item.text] });
+        break;
+      case "setup":
+        if (item.ok == null) {
+          setup = { kind: "setup", ok: null, code: null, lines: [] };
+          push(setup);
+        } else if (setup) {
+          setup.ok = item.ok;
+          setup.code = item.code;
+          setup = null;
+        }
         break;
       case "ask":
         push({ kind: "ask", id: item.id, tool: item.tool, detail: item.detail, answer: null });
@@ -90,7 +105,8 @@ function foldOf(run: RunView): RunView["fold"] {
     run.blocks.some(
       (b) =>
         (b.kind === "tools" && b.tools.some((t) => t.kind === "tool_error")) ||
-        (b.kind === "ask" && !b.answer?.allow),
+        (b.kind === "ask" && !b.answer?.allow) ||
+        (b.kind === "setup" && b.ok === false),
     )
   )
     return null;

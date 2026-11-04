@@ -178,6 +178,9 @@ pub enum Entry {
     },
     /// A message sent to the agent while it worked (steering, #22).
     Steer(String),
+    /// The folder's setup script (#23): started (`ok` None), or done. Its
+    /// output is the `Output` lines between.
+    Setup { ok: Option<bool>, code: Option<i32> },
 }
 
 /// A question the agent is waiting on.
@@ -196,6 +199,8 @@ pub struct Runs {
     refs: String,
     worktree: PathBuf,
     base: String,
+    /// The main checkout, for setup scripts that copy from it.
+    repo_root: PathBuf,
 }
 
 impl Runs {
@@ -205,7 +210,31 @@ impl Runs {
             refs: checkpoint_prefix(&task.id),
             worktree: task.worktree.clone(),
             base: task.base.clone(),
+            repo_root: tasks.root().to_path_buf(),
         }
+    }
+
+    /// The setup script a new task's folder still needs (#23): the
+    /// repository's own `.git/spor/setup` if there is one, else the
+    /// committed `.spor/setup`; none once setup worked (or was skipped).
+    pub fn setup_script(&self, task: &Task) -> Option<PathBuf> {
+        if self.dir.join("setup.ok").exists() {
+            return None;
+        }
+        let private = crate::git::Repo::new(&self.repo_root)
+            .common_dir()
+            .ok()
+            .map(|d| d.join("spor").join("setup"));
+        private
+            .into_iter()
+            .chain([task.worktree.join(".spor").join("setup")])
+            .find(|p| p.is_file())
+    }
+
+    /// Don't run the setup script: start the next agent without it.
+    pub fn skip_setup(&self) -> Result<(), String> {
+        std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
+        std::fs::write(self.dir.join("setup.ok"), "skipped\n").map_err(|e| e.to_string())
     }
 
     /// The ref of one of run `index`'s checkpoints: before, after, undone.
@@ -240,34 +269,56 @@ impl Runs {
         // "$@" is the agent; its exit code lands in the exit file however
         // it ends, short of the machine going down. The after checkpoint is
         // taken first, so a finished run always has one.
-        let script = r#""$@" > "$SPOR_LOG" 2>&1; code=$?
+        let script = r#""$@" >> "$SPOR_LOG" 2>&1; code=$?
 SPOR_REF="$SPOR_AFTER" sh -c "$SPOR_SNAPSHOT" > /dev/null 2>&1
 echo $code > "$SPOR_EXIT""#;
         let hosted = *kind == AgentKind::Claude && host::program().is_some();
-        let mut cmd = match host::program().filter(|_| hosted) {
-            // Claude under the host: it can ask, and be steered (#20).
-            Some(host_program) => {
-                let mut cmd = Command::new(host_program);
-                cmd.arg(host::ARG)
-                    .arg(&log)
-                    .arg(&exit)
-                    .arg(self.file(index, "sock"))
-                    .arg(self.checkpoint_ref(index, "after"))
-                    .arg("--")
-                    .arg(&program)
-                    .args(hosted_args(&args));
+        // The agent's command line: Claude under the host (it can ask, and
+        // be steered, #20), or anything under the plain wrapper.
+        let agent: Vec<std::ffi::OsString> = match host::program().filter(|_| hosted) {
+            Some(host_program) => [
+                host_program.as_os_str().to_owned(),
+                host::ARG.into(),
+                log.clone().into(),
+                exit.clone().into(),
+                self.file(index, "sock").into(),
+                self.checkpoint_ref(index, "after").into(),
+                "--".into(),
+                program.clone().into(),
+            ]
+            .into_iter()
+            .chain(hosted_args(&args).into_iter().map(Into::into))
+            .collect(),
+            None => ["sh", "-c", script, "spor-agent", &program]
+                .into_iter()
+                .map(Into::into)
+                .chain(args.iter().map(Into::into))
+                .collect(),
+        };
+        // A new folder's setup script runs first, in the same detached
+        // process, and the agent only if it worked (#23).
+        let setup = self.setup_script(task);
+        let mut cmd = match &setup {
+            Some(_) => {
+                let mut cmd = Command::new("sh");
+                cmd.arg("-c")
+                    .arg(SETUP_THEN_AGENT)
+                    .arg("spor-setup")
+                    .args(&agent);
                 cmd
             }
             None => {
-                let mut cmd = Command::new("sh");
-                cmd.arg("-c")
-                    .arg(script)
-                    .arg("spor-agent")
-                    .arg(&program)
-                    .args(&args);
+                let mut cmd = Command::new(&agent[0]);
+                cmd.args(&agent[1..]);
                 cmd
             }
         };
+        if let Some(path) = &setup {
+            cmd.env("SPOR_SETUP", path)
+                .env("SPOR_SETUP_OK", self.dir.join("setup.ok"))
+                .env("SPOR_REPO", &self.repo_root)
+                .env("SPOR_BASE", &task.base);
+        }
         cmd.current_dir(&task.worktree)
             .env("SPOR_LOG", &log)
             .env("SPOR_EXIT", &exit)
@@ -579,7 +630,16 @@ echo $code > "$SPOR_EXIT""#;
                     if skip > 0 {
                         out.push(Entry::Output(format!("… {skip} earlier lines")));
                     }
-                    out.extend(lines[skip..].iter().map(|l| Entry::Output(l.to_string())));
+                    // spor's own marker lines (setup) are events; the rest
+                    // is the command's output, as it printed it.
+                    out.extend(lines[skip..].iter().map(|l| {
+                        if l.starts_with(r#"{"type":"spor_"#) {
+                            if let Some(e) = parse_claude(l).pop() {
+                                return e;
+                            }
+                        }
+                        Entry::Output(l.to_string())
+                    }));
                 }
             }
             match &run.state {
@@ -723,6 +783,16 @@ fn command_for(
     }
 }
 
+/// Run the setup script, its output in the run's log between two markers,
+/// then the agent (`"$@"`) only if it worked. A failed setup ends the run
+/// with its exit code.
+const SETUP_THEN_AGENT: &str = r#"printf '%s\n' '{"type":"spor_setup","state":"start"}' >> "$SPOR_LOG"
+sh "$SPOR_SETUP" >> "$SPOR_LOG" 2>&1 < /dev/null; code=$?
+printf '{"type":"spor_setup","state":"done","code":%s}\n' "$code" >> "$SPOR_LOG"
+if [ "$code" -ne 0 ]; then echo "$code" > "$SPOR_EXIT"; exit "$code"; fi
+: > "$SPOR_SETUP_OK"
+exec "$@""#;
+
 /// Claude's arguments under the host: the prompt goes on stdin (as
 /// stream-json, like follow-ups), and questions come back as control
 /// requests instead of being refused.
@@ -827,6 +897,19 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                     .to_string(),
                 allow: event.get("allow").bool() == Some(true),
                 message: event.get("message").str().unwrap_or_default().to_string(),
+            }),
+            Some("spor_setup") => out.push(match event.get("state").str() {
+                Some("done") => {
+                    let code = event.get("code").num().map(|c| c as i32);
+                    Entry::Setup {
+                        ok: Some(code == Some(0)),
+                        code,
+                    }
+                }
+                _ => Entry::Setup {
+                    ok: None,
+                    code: None,
+                },
             }),
             Some("spor_message") => out.push(Entry::Steer(
                 event.get("text").str().unwrap_or_default().to_string(),

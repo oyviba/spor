@@ -160,6 +160,7 @@ impl Tasks {
             .map_err(|e| format!("Couldn't create {}: {e}", worktree.display()))?;
         self.repo
             .add_worktree(&worktree, &branch, Some(&base_sha))?;
+        self.copy_ignored(&worktree);
         let task = Task {
             id,
             prompt: prompt.to_string(),
@@ -171,6 +172,38 @@ impl Tasks {
         };
         self.save(&task)?;
         Ok(task)
+    }
+
+    /// The main checkout.
+    pub fn root(&self) -> &Path {
+        self.repo.root()
+    }
+
+    /// Copy the files listed in the new folder's `.spor/copy` (one path per
+    /// line, `#` for comments) from the main checkout: ignored files a
+    /// checkout doesn't bring, like `.env` (#23). Missing ones are skipped.
+    fn copy_ignored(&self, worktree: &Path) {
+        let Ok(list) = std::fs::read_to_string(worktree.join(".spor").join("copy")) else {
+            return;
+        };
+        for rel in list
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            // Only paths inside the checkout.
+            if Path::new(rel).is_absolute() || rel.split('/').any(|c| c == "..") {
+                continue;
+            }
+            let from = self.repo.root().join(rel);
+            let to = worktree.join(rel);
+            if from.is_file() {
+                if let Some(dir) = to.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::copy(&from, &to);
+            }
+        }
     }
 
     pub fn save(&self, task: &Task) -> Result<(), String> {

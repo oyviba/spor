@@ -48,6 +48,8 @@ interface Props {
   onAnswer: (ask: Ask, allow: boolean, message?: string) => void;
   onLiveMode: (mode: Mode) => void;
   onSteer: (text: string) => void;
+  onRetrySetup: () => void;
+  onSkipSetup: () => void;
 }
 
 export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, composerRef) {
@@ -86,7 +88,14 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
       </header>
       <div className="task-body">
         {p.tab === "conversation" ? (
-          <Conversation detail={p.detail} onStop={p.onStop} onRunChanges={p.onRunChanges} onUndoRun={p.onUndoRun} />
+          <Conversation
+            detail={p.detail}
+            onStop={p.onStop}
+            onRunChanges={p.onRunChanges}
+            onUndoRun={p.onUndoRun}
+            onRetrySetup={p.onRetrySetup}
+            onSkipSetup={p.onSkipSetup}
+          />
         ) : (
           <div className="changes">
             <div className="changes-column">

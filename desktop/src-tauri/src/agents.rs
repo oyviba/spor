@@ -177,6 +177,10 @@ pub(crate) enum Item {
     Steer {
         text: String,
     },
+    Setup {
+        ok: Option<bool>,
+        code: Option<i32>,
+    },
 }
 
 impl Item {
@@ -211,6 +215,7 @@ impl Item {
             },
             Entry::Answer { id, allow, message } => Item::Answer { id, allow, message },
             Entry::Steer(text) => Item::Steer { text },
+            Entry::Setup { ok, code } => Item::Setup { ok, code },
         }
     }
 }
@@ -539,4 +544,11 @@ pub(crate) fn set_mode(app: State<App>, id: String, mode: String) -> Result<(), 
     Runs::of(&tasks, &task)
         .set_mode(mode_of(&mode)?)
         .map_err(|e| first_line(&e))
+}
+
+/// Start the next agent without the folder's setup script (#23).
+#[tauri::command(async)]
+pub(crate) fn skip_setup(app: State<App>, id: String) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task).skip_setup()
 }

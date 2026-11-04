@@ -106,6 +106,20 @@ test("questions take their answers, and a refusal keeps the run open", () => {
   assert.notEqual(allowed[0].fold, null, "an allowed question folds like any work");
 });
 
+test("the setup script's output goes with it", () => {
+  const [run] = runs(
+    [
+      { kind: "prompt", text: "a" },
+      { kind: "setup", ok: null, code: null },
+      { kind: "output", text: "npm install" },
+      { kind: "setup", ok: false, code: 3 },
+      { kind: "done", ok: false, summary: "Exited with code 3", cost_usd: null, turns: null, seconds: 1 },
+    ],
+    false,
+  );
+  assert.deepEqual(run.blocks, [{ kind: "setup", ok: false, code: 3, lines: ["npm install"] }]);
+});
+
 test("duration formats", () => {
   assert.equal(duration(42), "42s");
   assert.equal(duration(125), "2m 05s");

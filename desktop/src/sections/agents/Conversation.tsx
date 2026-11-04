@@ -3,7 +3,7 @@ import type { RunInfo, TaskDetail } from "../../types";
 import { duration, runs as toRuns, stoppedLabel, summarize, type Block, type RunView, type Tool } from "./transcript";
 import { useNow } from "../../shared/hooks";
 import { Markdown } from "../../shared/Markdown";
-import { Alert, Check, Chevron, Square, ToolIcon, X } from "../../shared/Icons";
+import { Alert, Check, Chevron, Square, Terminal, ToolIcon, X } from "../../shared/Icons";
 import { verbOf } from "./Composer";
 
 interface Props {
@@ -11,9 +11,13 @@ interface Props {
   onStop: () => void;
   onRunChanges: (index: number) => void;
   onUndoRun: () => void;
+  /** After a failed setup: run it again, or start without it. */
+  onRetrySetup: () => void;
+  onSkipSetup: () => void;
 }
 
-export function Conversation({ detail, onStop, onRunChanges, onUndoRun }: Props) {
+export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetrySetup, onSkipSetup }: Props) {
+  const setupActions = { onRetrySetup, onSkipSetup, last: detail.runs.length };
   const latest = detail.runs.at(-1);
   const running = latest?.state === "running";
   const views = toRuns(detail.transcript, running);
@@ -74,6 +78,7 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun }: Props)
             canUndo={detail.undoable === run.index}
             onRunChanges={() => onRunChanges(run.index)}
             onUndoRun={onUndoRun}
+            setup={run.index === setupActions.last - 1 && !running ? setupActions : null}
           />
         ))}
         {running && latest && <LiveLine run={latest} waiting={detail.asks.length > 0} onStop={onStop} />}
@@ -90,6 +95,7 @@ function RunBlock({
   canUndo,
   onRunChanges,
   onUndoRun,
+  setup,
 }: {
   run: RunView;
   info: RunInfo | undefined;
@@ -98,12 +104,27 @@ function RunBlock({
   canUndo: boolean;
   onRunChanges: () => void;
   onUndoRun: () => void;
+  /** Retry / skip for a failed setup, on the latest run only. */
+  setup: { onRetrySetup: () => void; onSkipSetup: () => void } | null;
 }) {
   const [confirm, setConfirm] = useState(false);
   const undone = !!info?.undone;
+  // Setup failed: the agent never started, so there's nothing of its own to
+  // show or undo; the setup block says what happened.
+  const setupFailed = run.blocks.some((b) => b.kind === "setup" && b.ok === false);
   const key = `run-${run.index}`;
   const blocks = (list: Block[]) =>
-    list.map((b, i) => <BlockView key={i} block={b} id={`${key}-${i}`} live={run.live && i === list.length - 1} open={open} toggle={toggle} />);
+    list.map((b, i) => (
+      <BlockView
+        key={i}
+        block={b}
+        id={`${key}-${i}`}
+        live={run.live && i === list.length - 1}
+        open={open}
+        toggle={toggle}
+        setup={setup}
+      />
+    ));
   const stopped = stoppedLabel(run);
   return (
     <section className={`run${undone ? " undone" : ""}`}>
@@ -127,7 +148,7 @@ function RunBlock({
       ) : (
         <>
           {blocks(run.blocks)}
-          {run.done && (
+          {run.done && !setupFailed && (
             <div className={`run-end${run.done.ok ? "" : " bad"}`}>
               {!run.done.ok && <Alert size={13} />}
               <span>{stopped ?? (run.done.ok ? "Done" : run.done.summary)}</span>
@@ -137,7 +158,7 @@ function RunBlock({
           )}
         </>
       )}
-      {run.done && !undone && (
+      {run.done && !undone && !setupFailed && (
         <div className="run-actions">
           <button className="link small-text" onClick={onRunChanges}>
             Changes in this run
@@ -173,13 +194,47 @@ function BlockView({
   live,
   open,
   toggle,
+  setup = null,
 }: {
   block: Block;
   id: string;
   live: boolean;
   open: Set<string>;
   toggle: (key: string) => void;
+  setup?: { onRetrySetup: () => void; onSkipSetup: () => void } | null;
 }) {
+  if (block.kind === "setup") {
+    // A failure shows its output; success folds it away.
+    const shown = block.ok === false || open.has(id) || block.ok == null;
+    return (
+      <div className={`setup-block${block.ok === false ? " bad" : block.ok ? " good" : ""}`}>
+        <button className="tools-summary" onClick={() => toggle(id)} aria-expanded={shown}>
+          {block.ok === false ? <Alert size={13} /> : block.ok ? <Check size={13} /> : <Terminal size={13} />}
+          <span>
+            {block.ok == null
+              ? "Setting up the folder…"
+              : block.ok
+                ? "Set up the folder"
+                : `Setup failed (exit ${block.code ?? 1}) — the agent didn't start`}
+          </span>
+          {block.lines.length > 0 && <Chevron size={12} className={`chev${shown ? " open" : ""}`} />}
+        </button>
+        {shown && block.lines.length > 0 && (
+          <pre className="setup-output">{block.lines.slice(-40).join("\n")}</pre>
+        )}
+        {block.ok === false && setup && (
+          <div className="run-actions">
+            <button className="link small-text" onClick={setup.onRetrySetup}>
+              Retry
+            </button>
+            <button className="link small-text" onClick={setup.onSkipSetup}>
+              Start without setup
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
   if (block.kind === "text") return <Markdown text={block.text} />;
   if (block.kind === "steer")
     return (
