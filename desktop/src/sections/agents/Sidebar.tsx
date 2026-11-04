@@ -22,8 +22,10 @@ export function Sidebar(p: Props) {
   const nowMinute = useNow(30_000);
   // Active keeps a stable order (newest first): activity never moves a row.
   // Working and settled tasks sit in shelves at the bottom.
-  const working = p.tasks.filter((t) => !t.landed && t.run?.state === "running");
-  const active = p.tasks.filter((t) => !t.landed && t.run?.state !== "running");
+  // Waiting on you comes first, above everything (#21).
+  const needsYou = p.tasks.filter((t) => !t.landed && t.asks > 0);
+  const working = p.tasks.filter((t) => !t.landed && t.run?.state === "running" && t.asks === 0);
+  const active = p.tasks.filter((t) => !t.landed && t.run?.state !== "running" && t.asks === 0);
   const settled = p.tasks.filter((t) => t.landed);
 
   const row = (t: TaskSummary) => {
@@ -82,6 +84,12 @@ export function Sidebar(p: Props) {
       <div className="task-list">
         {p.tasks.length === 0 && (
           <div className="sidebar-empty">No tasks yet. Give an agent its own branch and folder with ⌘N.</div>
+        )}
+        {needsYou.length > 0 && (
+          <>
+            <div className="list-label needs-you">Needs you</div>
+            {needsYou.map(row)}
+          </>
         )}
         {active.map(row)}
         <div className="shelves">

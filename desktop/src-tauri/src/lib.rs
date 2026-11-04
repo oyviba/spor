@@ -112,7 +112,11 @@ fn repo_state(app: State<App>) -> Result<RepoState, String> {
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_default()
     };
-    let refs = fingerprint(&(git(&["for-each-ref", "--format=%(refname) %(objectname)"]), git(&["rev-parse", "HEAD"]), tracking.branch.clone()));
+    let refs = fingerprint(&(
+        git(&["for-each-ref", "--format=%(refname) %(objectname)"]),
+        git(&["rev-parse", "HEAD"]),
+        tracking.branch.clone(),
+    ));
     // The worktree's own git dir: a linked worktree keeps its index there.
     let git_dir = PathBuf::from(git(&["rev-parse", "--absolute-git-dir"]).trim());
     let index_mtime = std::fs::metadata(git_dir.join("index"))
@@ -192,6 +196,11 @@ pub(crate) fn name_of(value: &impl std::fmt::Debug) -> String {
 }
 
 pub fn run() {
+    // Claude Code runs under this same executable as its host, so agents
+    // can ask before acting and be steered (spor::host, #20).
+    if let Ok(me) = std::env::current_exe() {
+        spor::host::set_program(me);
+    }
     let app = App::default();
     // The repository to open: the first argument, else $SPOR_REPO, else the
     // current directory if it's in one.
@@ -220,6 +229,12 @@ pub fn run() {
             agents::land_task,
             agents::discard_task,
             agents::open_folder,
+            agents::run_patch,
+            agents::undo_run,
+            agents::answer_ask,
+            agents::set_mode,
+            agents::steer,
+            agents::skip_setup,
             history::graph,
             history::search_commits,
             history::commit_detail,

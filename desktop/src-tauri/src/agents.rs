@@ -5,7 +5,7 @@
 use crate::undo::Undo;
 use crate::{first_line, App};
 use serde::{Deserialize, Serialize};
-use spor::agent::{self, AgentKind, Entry, Permissions, Run, RunState, Runs};
+use spor::agent::{self, AgentKind, Entry, Mode, Permissions, Run, RunState, Runs};
 use spor::tasks::{LandMode, Task, TaskState, TaskStats, Tasks};
 use tauri::State;
 
@@ -55,12 +55,16 @@ pub(crate) struct RunInfo {
     index: usize,
     agent: &'static str,
     label: String,
+    /// What it was asked: the task's prompt, or a follow-up.
+    prompt: String,
     state: &'static str,
     exit_code: Option<i32>,
     started: i64,
     ended: Option<i64>,
     cost_usd: Option<f64>,
     resumable: bool,
+    /// Taken back: its changes are gone and follow-ups resume from before it.
+    undone: bool,
 }
 
 impl From<Run> for RunInfo {
@@ -78,12 +82,14 @@ impl From<Run> for RunInfo {
                 AgentKind::Command(_) => "command",
             },
             label: r.kind.label().to_string(),
+            prompt: r.prompt.clone(),
             state,
             exit_code,
             started: r.started,
             ended: r.ended,
             cost_usd: r.cost_usd,
             resumable: r.session.is_some(),
+            undone: r.undone,
         }
     }
 }
@@ -102,6 +108,10 @@ pub(crate) struct TaskSummary {
     run: Option<RunInfo>,
     runs: usize,
     command: String,
+    /// Questions the agent is waiting on: "Needs you".
+    asks: usize,
+    /// The permission mode of its latest run.
+    mode: Option<&'static str>,
 }
 
 fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
@@ -120,19 +130,30 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
             TaskState::Open => None,
         },
         stats: tasks.stats(task).into(),
+        mode: list.last().and_then(|r| runs.mode(r.index)).map(mode_name),
         runs: list.len(),
         run: list.into_iter().last().map(RunInfo::from),
         command: task.agent_command(),
+        asks: runs.asks().len(),
     }
 }
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum Item {
-    Prompt { text: String },
-    Text { text: String },
-    Tool { name: String, detail: String },
-    ToolError { text: String },
+    Prompt {
+        text: String,
+    },
+    Text {
+        text: String,
+    },
+    Tool {
+        name: String,
+        detail: String,
+    },
+    ToolError {
+        text: String,
+    },
     Done {
         ok: bool,
         summary: String,
@@ -140,7 +161,26 @@ pub(crate) enum Item {
         turns: Option<u32>,
         seconds: Option<f64>,
     },
-    Output { text: String },
+    Output {
+        text: String,
+    },
+    Ask {
+        id: String,
+        tool: String,
+        detail: String,
+    },
+    Answer {
+        id: String,
+        allow: bool,
+        message: String,
+    },
+    Steer {
+        text: String,
+    },
+    Setup {
+        ok: Option<bool>,
+        code: Option<i32>,
+    },
 }
 
 impl Item {
@@ -168,6 +208,14 @@ impl Item {
                 seconds,
             },
             Entry::Output(text) => Item::Output { text },
+            Entry::Ask { id, tool, detail } => Item::Ask {
+                id,
+                tool,
+                detail: detail.replace(folder, ""),
+            },
+            Entry::Answer { id, allow, message } => Item::Answer { id, allow, message },
+            Entry::Steer(text) => Item::Steer { text },
+            Entry::Setup { ok, code } => Item::Setup { ok, code },
         }
     }
 }
@@ -179,6 +227,36 @@ pub(crate) struct TaskDetail {
     runs: Vec<RunInfo>,
     /// Files that would conflict if the task landed on its base now.
     conflicts: Vec<String>,
+    /// The run "Undo this run" would take back, if any.
+    undoable: Option<usize>,
+    /// Questions the agent is waiting on.
+    asks: Vec<AskInfo>,
+    /// The running agent can be answered, steered and interrupted.
+    listening: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct AskInfo {
+    id: String,
+    tool: String,
+    detail: String,
+}
+
+/// The UI's names for permission modes.
+fn mode_name(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Supervised => "supervised",
+        Mode::AcceptEdits => "acceptEdits",
+        Mode::Auto => "auto",
+        Mode::Full => "full",
+    }
+}
+
+fn mode_of(name: &str) -> Result<Mode, String> {
+    Mode::ALL
+        .into_iter()
+        .find(|m| mode_name(*m) == name)
+        .ok_or_else(|| format!("Unknown permission mode {name}"))
 }
 
 /// Which agent to run, as the UI names it.
@@ -237,6 +315,17 @@ pub(crate) fn task_detail(app: State<App>, id: String) -> Result<TaskDetail, Str
             .into_iter()
             .map(|e| Item::from(e, &folder))
             .collect(),
+        undoable: runs.undoable().map(|r| r.index),
+        asks: runs
+            .asks()
+            .into_iter()
+            .map(|a| AskInfo {
+                id: a.id,
+                tool: a.tool,
+                detail: a.detail.replace(&folder, ""),
+            })
+            .collect(),
+        listening: runs.listening(),
         runs: runs.list().into_iter().map(RunInfo::from).collect(),
         conflicts,
     })
@@ -257,8 +346,9 @@ pub(crate) fn create_task(
     prompt: String,
     base: String,
     agent: AgentChoice,
-    allow_commands: bool,
+    mode: String,
 ) -> Result<TaskSummary, String> {
+    let mode = mode_of(&mode)?;
     let kind = agent.kind();
     if let Some(e) = kind.as_ref().and_then(missing) {
         return Err(e);
@@ -268,15 +358,7 @@ pub(crate) fn create_task(
         .create(&prompt, &base)
         .map_err(|e| format!("Couldn't create the task: {}", first_line(&e)))?;
     if let Some(kind) = kind {
-        Runs::of(&tasks, &task).start(
-            &task,
-            &kind,
-            &task.prompt,
-            None,
-            Permissions {
-                commands: allow_commands,
-            },
-        )?;
+        Runs::of(&tasks, &task).start(&task, &kind, &task.prompt, None, Permissions { mode })?;
     }
     Ok(summary(&tasks, &task))
 }
@@ -289,8 +371,9 @@ pub(crate) fn send_to_agent(
     id: String,
     message: Option<String>,
     agent: AgentChoice,
-    allow_commands: bool,
+    mode: String,
 ) -> Result<(), String> {
+    let mode = mode_of(&mode)?;
     let (tasks, task) = app.task(&id)?;
     let runs = Runs::of(&tasks, &task);
     let follow_up = message.is_some();
@@ -320,9 +403,7 @@ pub(crate) fn send_to_agent(
         &kind,
         &prompt,
         session.as_deref(),
-        Permissions {
-            commands: allow_commands,
-        },
+        Permissions { mode },
     )
     .map(|_| ())
 }
@@ -330,7 +411,22 @@ pub(crate) fn send_to_agent(
 #[tauri::command(async)]
 pub(crate) fn stop_agent(app: State<App>, id: String) -> Result<(), String> {
     let (tasks, task) = app.task(&id)?;
-    Runs::of(&tasks, &task).stop()
+    // An interrupt when it listens (it keeps its session); else, or if that
+    // doesn't land, the old kill.
+    Runs::of(&tasks, &task).finish(std::time::Duration::from_secs(4))
+}
+
+/// A message into the turn the agent is on (steering, #22).
+#[tauri::command(async)]
+pub(crate) fn steer(app: State<App>, id: String, text: String) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Write something to send".into());
+    }
+    Runs::of(&tasks, &task)
+        .send(text)
+        .map_err(|e| first_line(&e))
 }
 
 #[tauri::command(async)]
@@ -384,4 +480,75 @@ pub(crate) fn open_folder(app: State<App>, id: String) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("Couldn't open the folder: {e}"))
+}
+
+#[derive(Serialize)]
+pub(crate) struct RunPatch {
+    patch: String,
+    from_base: Vec<String>,
+}
+
+/// One run's changes, from its checkpoint before to its checkpoint after.
+#[tauri::command(async)]
+pub(crate) fn run_patch(app: State<App>, id: String, index: usize) -> Result<RunPatch, String> {
+    let (tasks, task) = app.task(&id)?;
+    let p = Runs::of(&tasks, &task).patch(index)?;
+    Ok(RunPatch {
+        patch: p.patch,
+        from_base: p.from_base,
+    })
+}
+
+/// Take back the task's last run: its folder as it was before, and the
+/// conversation resumed from before it. ⌘Z brings it back.
+#[tauri::command(async)]
+pub(crate) fn undo_run(app: State<App>, id: String) -> Result<String, String> {
+    let (tasks, task) = app.task(&id)?;
+    let index = Runs::of(&tasks, &task)
+        .undo_last()
+        .map_err(|e| first_line(&e))?;
+    let label = format!("Undo run {} of {}", index + 1, task.id);
+    app.undo.push(
+        label.clone(),
+        Undo::RunUndone {
+            task: task.id.clone(),
+            index,
+        },
+    );
+    Ok(format!(
+        "Undid run {} — its changes are gone, and follow-ups start from before it",
+        index + 1
+    ))
+}
+
+/// Answer a question the agent asked: allow, or deny (with what to do
+/// instead, if `message` says).
+#[tauri::command(async)]
+pub(crate) fn answer_ask(
+    app: State<App>,
+    id: String,
+    request_id: String,
+    allow: bool,
+    message: String,
+) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task)
+        .answer(&request_id, allow, message.trim())
+        .map_err(|e| first_line(&e))
+}
+
+/// Change the running agent's permission mode.
+#[tauri::command(async)]
+pub(crate) fn set_mode(app: State<App>, id: String, mode: String) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task)
+        .set_mode(mode_of(&mode)?)
+        .map_err(|e| first_line(&e))
+}
+
+/// Start the next agent without the folder's setup script (#23).
+#[tauri::command(async)]
+pub(crate) fn skip_setup(app: State<App>, id: String) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task).skip_setup()
 }

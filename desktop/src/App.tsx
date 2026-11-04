@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
 import type { RepoInfo, RepoState } from "./types";
 import { usePoll, useStored } from "./shared/hooks";
@@ -26,13 +26,30 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: stri
   { id: "agents", label: "Agents", icon: <Bot size={17} />, key: "5" },
 ];
 
+/** Is the task open on screen (Agents, its page)? Then it needs no toast. */
+function viewing(taskId: string): boolean {
+  try {
+    const section = JSON.parse(localStorage.getItem("spor.section") ?? "null");
+    const view = JSON.parse(localStorage.getItem("spor.agents.view") ?? "null");
+    return section === "agents" && view?.kind === "task" && view.id === taskId && document.hasFocus();
+  } catch {
+    return false;
+  }
+}
+
 export function App() {
   const [repo, setRepo] = useState<RepoInfo | null | undefined>(undefined);
   const [state, setState] = useState<RepoState | null>(null);
   const [section, setSection] = useStored<SectionId>("section", "agents");
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "agents", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [badges, setBadges] = useState<{ changes: number; working: number }>({ changes: 0, working: 0 });
+  const [badges, setBadges] = useState<{ changes: number; working: number; asking: number }>({
+    changes: 0,
+    working: 0,
+    asking: 0,
+  });
+  // Tasks known to be waiting, so a new question toasts once.
+  const asking = useRef<Set<string> | null>(null);
 
   const toast = useCallback((text: string, tone: Toast["tone"] = "ok", undo = false, action?: ToastAction) => {
     const id = Date.now() + Math.random();
@@ -62,12 +79,26 @@ export function App() {
   usePoll(
     async () => {
       const [files, tasks] = await Promise.all([api.status(), api.listTasks()]);
+      const waiting = tasks.filter((t) => t.asks > 0);
       setBadges({
         changes: new Set(files.map((f) => f.path)).size,
         working: tasks.filter((t) => t.run?.state === "running").length,
+        asking: waiting.length,
       });
+      if (asking.current) {
+        for (const t of waiting)
+          if (!asking.current.has(t.id) && !viewing(t.id))
+            toast(`${t.title} is waiting for you`, "ok", false, {
+              label: "Answer",
+              run: () => {
+                setSection("agents");
+                setTarget((old) => ({ section: "agents", taskId: t.id, seq: old.seq + 1 }));
+              },
+            });
+      }
+      asking.current = new Set(waiting.map((t) => t.id));
     },
-    4000,
+    2000,
     [repo?.root, state?.index],
     !!repo,
   );
@@ -172,7 +203,13 @@ export function App() {
       <div className="app">
         <nav className="rail" aria-label="Sections">
           {SECTIONS.map((s) => {
-            const count = s.id === "changes" ? badges.changes : s.id === "agents" ? badges.working : 0;
+            const count =
+              s.id === "changes"
+                ? badges.changes
+                : s.id === "agents"
+                  ? badges.asking || badges.working
+                  : 0;
+            const tone = s.id === "agents" ? (badges.asking ? " asking" : " live") : "";
             return (
               <button
                 key={s.id}
@@ -183,7 +220,7 @@ export function App() {
                 aria-current={section === s.id ? "page" : undefined}
               >
                 {s.icon}
-                {count > 0 && <span className={`rail-badge num${s.id === "agents" ? " live" : ""}`}>{count}</span>}
+                {count > 0 && <span className={`rail-badge num${tone}`}>{count}</span>}
               </button>
             );
           })}

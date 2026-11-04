@@ -152,8 +152,10 @@ pub(crate) fn pull_action(
     let n = number;
     let result = match action.as_str() {
         "merge" => gh::merge_pull(&dir, n, gh::MergeMethod::Merge).map(|_| format!("Merged #{n}")),
-        "squash" => gh::merge_pull(&dir, n, gh::MergeMethod::Squash).map(|_| format!("Squashed and merged #{n}")),
-        "rebase" => gh::merge_pull(&dir, n, gh::MergeMethod::Rebase).map(|_| format!("Rebased and merged #{n}")),
+        "squash" => gh::merge_pull(&dir, n, gh::MergeMethod::Squash)
+            .map(|_| format!("Squashed and merged #{n}")),
+        "rebase" => gh::merge_pull(&dir, n, gh::MergeMethod::Rebase)
+            .map(|_| format!("Rebased and merged #{n}")),
         "approve" => {
             if let Some(b) = body.as_deref().filter(|b| !b.trim().is_empty()) {
                 gh::comment_on_pull(&dir, n, b)?;
@@ -218,11 +220,13 @@ pub(crate) fn runs(
     branch: Option<String>,
     workflow: Option<String>,
 ) -> Result<Vec<Run>, String> {
-    Ok(gh::list_runs(&root(&app)?, branch.as_deref(), workflow.as_deref())
-        .map_err(|e| first_line(&e))?
-        .into_iter()
-        .map(Run::from)
-        .collect())
+    Ok(
+        gh::list_runs(&root(&app)?, branch.as_deref(), workflow.as_deref())
+            .map_err(|e| first_line(&e))?
+            .into_iter()
+            .map(Run::from)
+            .collect(),
+    )
 }
 
 #[tauri::command(async)]

@@ -7,7 +7,17 @@
 //! it ends). The agent runs under a small `sh` wrapper that writes the exit
 //! file, so a run's state survives spor quitting and starting again, and the
 //! agent keeps working if spor quits.
+//!
+//! Each run is bracketed by checkpoints (`crate::checkpoint`): the task's
+//! folder as it was before (`refs/spor/tasks/<id>/run-N/before`) and after
+//! (`…/after`, taken by the wrapper once the agent exits). They give each
+//! run its own diff, and let the last run be undone: its folder goes back to
+//! `before`, and the next follow-up resumes the conversation from before it
+//! (follow-ups fork the agent's session, so an earlier run's session is a
+//! snapshot of the conversation up to it).
 
+use crate::checkpoint;
+use crate::host;
 use crate::json::Json;
 use crate::tasks::{Task, Tasks};
 use std::path::{Path, PathBuf};
@@ -32,12 +42,66 @@ impl AgentKind {
     }
 }
 
-/// How much the agent may do without asking (headless agents can't ask).
+/// How much the agent may do without asking (#21). Under the host (see
+/// `host`) Claude Code asks about the rest and spor shows the question;
+/// without it nobody can answer, and what it would ask about is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Asks before commands and file edits.
+    Supervised,
+    /// Edits freely, asks before commands.
+    AcceptEdits,
+    /// Claude Code's own review approves routine actions and asks about
+    /// the rest.
+    Auto,
+    /// Never asks.
+    Full,
+}
+
+impl Mode {
+    pub const ALL: [Mode; 4] = [Mode::Supervised, Mode::AcceptEdits, Mode::Auto, Mode::Full];
+
+    /// Claude Code's `--permission-mode`.
+    pub fn flag(self) -> &'static str {
+        match self {
+            Mode::Supervised => "manual",
+            Mode::AcceptEdits => "acceptEdits",
+            Mode::Auto => "auto",
+            Mode::Full => "bypassPermissions",
+        }
+    }
+
+    pub fn from_flag(flag: &str) -> Option<Mode> {
+        Mode::ALL.into_iter().find(|m| m.flag() == flag)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Supervised => "Supervised",
+            Mode::AcceptEdits => "Auto-accept edits",
+            Mode::Auto => "Auto",
+            Mode::Full => "Full access",
+        }
+    }
+}
+
+/// How much the agent may do without asking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Permissions {
-    /// Run shell commands. Without it Claude Code may edit files but its
-    /// commands are refused, which it reports and works around.
-    pub commands: bool,
+    pub mode: Mode,
+}
+
+impl Permissions {
+    /// Edits only, or edits and commands: the GPUI app's checkbox.
+    pub fn commands(allowed: bool) -> Self {
+        Self {
+            mode: if allowed {
+                Mode::Full
+            } else {
+                Mode::AcceptEdits
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +127,19 @@ pub struct Run {
     /// The agent's session, for sending follow-ups (Claude Code).
     pub session: Option<String>,
     pub cost_usd: Option<f64>,
+    /// Undone: its changes were taken back, and follow-ups resume from
+    /// before it.
+    pub undone: bool,
+}
+
+/// One run's changes, from its `before` checkpoint to its `after` (or to
+/// the folder now, while it runs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunPatch {
+    pub patch: String,
+    /// Files left out because they came from the base (the run rebased or
+    /// merged it in) rather than from the agent.
+    pub from_base: Vec<String>,
 }
 
 /// One line of a task's transcript.
@@ -86,19 +163,83 @@ pub enum Entry {
     },
     /// Raw output: a custom command's, or anything that wasn't an event.
     Output(String),
+    /// The agent asks to use a tool its permission mode doesn't allow
+    /// (through the host, #20): the question's id, the tool, the gist.
+    Ask {
+        id: String,
+        tool: String,
+        detail: String,
+    },
+    /// How a question was answered (`message`: what the user said instead).
+    Answer {
+        id: String,
+        allow: bool,
+        message: String,
+    },
+    /// A message sent to the agent while it worked (steering, #22).
+    Steer(String),
+    /// The folder's setup script (#23): started (`ok` None), or done. Its
+    /// output is the `Output` lines between.
+    Setup { ok: Option<bool>, code: Option<i32> },
+}
+
+/// A question the agent is waiting on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ask {
+    pub id: String,
+    pub tool: String,
+    pub detail: String,
 }
 
 /// The runs of one task.
 #[derive(Debug, Clone)]
 pub struct Runs {
     dir: PathBuf,
+    /// Where the task's checkpoints live: `refs/spor/tasks/<id>`.
+    refs: String,
+    worktree: PathBuf,
+    base: String,
+    /// The main checkout, for setup scripts that copy from it.
+    repo_root: PathBuf,
 }
 
 impl Runs {
     pub fn of(tasks: &Tasks, task: &Task) -> Self {
         Self {
             dir: tasks.run_dir(&task.id),
+            refs: checkpoint_prefix(&task.id),
+            worktree: task.worktree.clone(),
+            base: task.base.clone(),
+            repo_root: tasks.root().to_path_buf(),
         }
+    }
+
+    /// The setup script a new task's folder still needs (#23): the
+    /// repository's own `.git/spor/setup` if there is one, else the
+    /// committed `.spor/setup`; none once setup worked (or was skipped).
+    pub fn setup_script(&self, task: &Task) -> Option<PathBuf> {
+        if self.dir.join("setup.ok").exists() {
+            return None;
+        }
+        let private = crate::git::Repo::new(&self.repo_root)
+            .common_dir()
+            .ok()
+            .map(|d| d.join("spor").join("setup"));
+        private
+            .into_iter()
+            .chain([task.worktree.join(".spor").join("setup")])
+            .find(|p| p.is_file())
+    }
+
+    /// Don't run the setup script: start the next agent without it.
+    pub fn skip_setup(&self) -> Result<(), String> {
+        std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
+        std::fs::write(self.dir.join("setup.ok"), "skipped\n").map_err(|e| e.to_string())
+    }
+
+    /// The ref of one of run `index`'s checkpoints: before, after, undone.
+    pub fn checkpoint_ref(&self, index: usize, which: &str) -> String {
+        format!("{}/run-{index}/{which}", self.refs)
     }
 
     /// Start an agent in the task's folder. With `resume`, Claude Code
@@ -122,18 +263,67 @@ impl Runs {
         let (program, args) = command_for(kind, prompt, resume, permissions);
         let log = self.file(index, "log");
         let exit = self.file(index, "exit");
+        // What the folder was like before, for this run's diff and undo.
+        // Best effort: a run without checkpoints still runs.
+        let _ = checkpoint::capture(&task.worktree, &self.checkpoint_ref(index, "before"));
         // "$@" is the agent; its exit code lands in the exit file however
-        // it ends, short of the machine going down.
-        let script = r#""$@" > "$SPOR_LOG" 2>&1; echo $? > "$SPOR_EXIT""#;
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(script)
-            .arg("spor-agent")
-            .arg(&program)
-            .args(&args)
-            .current_dir(&task.worktree)
+        // it ends, short of the machine going down. The after checkpoint is
+        // taken first, so a finished run always has one.
+        let script = r#""$@" >> "$SPOR_LOG" 2>&1; code=$?
+SPOR_REF="$SPOR_AFTER" sh -c "$SPOR_SNAPSHOT" > /dev/null 2>&1
+echo $code > "$SPOR_EXIT""#;
+        let hosted = *kind == AgentKind::Claude && host::program().is_some();
+        // The agent's command line: Claude under the host (it can ask, and
+        // be steered, #20), or anything under the plain wrapper.
+        let agent: Vec<std::ffi::OsString> = match host::program().filter(|_| hosted) {
+            Some(host_program) => [
+                host_program.as_os_str().to_owned(),
+                host::ARG.into(),
+                log.clone().into(),
+                exit.clone().into(),
+                self.file(index, "sock").into(),
+                self.checkpoint_ref(index, "after").into(),
+                "--".into(),
+                program.clone().into(),
+            ]
+            .into_iter()
+            .chain(hosted_args(&args).into_iter().map(Into::into))
+            .collect(),
+            None => ["sh", "-c", script, "spor-agent", &program]
+                .into_iter()
+                .map(Into::into)
+                .chain(args.iter().map(Into::into))
+                .collect(),
+        };
+        // A new folder's setup script runs first, in the same detached
+        // process, and the agent only if it worked (#23).
+        let setup = self.setup_script(task);
+        let mut cmd = match &setup {
+            Some(_) => {
+                let mut cmd = Command::new("sh");
+                cmd.arg("-c")
+                    .arg(SETUP_THEN_AGENT)
+                    .arg("spor-setup")
+                    .args(&agent);
+                cmd
+            }
+            None => {
+                let mut cmd = Command::new(&agent[0]);
+                cmd.args(&agent[1..]);
+                cmd
+            }
+        };
+        if let Some(path) = &setup {
+            cmd.env("SPOR_SETUP", path)
+                .env("SPOR_SETUP_OK", self.dir.join("setup.ok"))
+                .env("SPOR_REPO", &self.repo_root)
+                .env("SPOR_BASE", &task.base);
+        }
+        cmd.current_dir(&task.worktree)
             .env("SPOR_LOG", &log)
             .env("SPOR_EXIT", &exit)
+            .env("SPOR_AFTER", self.checkpoint_ref(index, "after"))
+            .env("SPOR_SNAPSHOT", checkpoint::SNAPSHOT_SH)
             .env("SPOR_PROMPT", prompt)
             .env("SPOR_TASK", &task.id)
             .stdin(Stdio::null())
@@ -152,6 +342,8 @@ impl Runs {
         let pid = child.id();
         let meta = [
             ("kind", kind_name(kind)),
+            ("hosted", hosted.to_string()),
+            ("mode", permissions.mode.flag().to_string()),
             ("prompt", prompt.to_string()),
             ("started", started.to_string()),
             ("pid", pid.to_string()),
@@ -174,7 +366,24 @@ impl Runs {
             ended: None,
             session: None,
             cost_usd: None,
+            undone: false,
         })
+    }
+
+    /// End the running agent's turn: interrupt it when it's listening (it
+    /// finishes cleanly and keeps its session, #22), and kill it only if
+    /// that doesn't land within `grace` or it can't be talked to.
+    pub fn finish(&self, grace: std::time::Duration) -> Result<(), String> {
+        if self.listening() && self.interrupt().is_ok() {
+            let until = std::time::Instant::now() + grace;
+            while std::time::Instant::now() < until {
+                if self.latest().is_none_or(|r| r.state != RunState::Running) {
+                    return Ok(());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+        self.stop()
     }
 
     /// Stop the running agent, and everything it started.
@@ -194,6 +403,10 @@ impl Runs {
                 .status()
                 .is_ok_and(|s| s.success());
         if ok {
+            // The wrapper went down with the agent, so its after checkpoint
+            // never happened: take it here, once the agent has let go.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let _ = checkpoint::capture(&self.worktree, &self.checkpoint_ref(run.index, "after"));
             Ok(())
         } else {
             Err("Couldn't stop the agent".into())
@@ -209,10 +422,198 @@ impl Runs {
         self.count().checked_sub(1).and_then(|i| self.run(i))
     }
 
-    /// The session to continue with feedback: the latest one any run
-    /// reported.
+    /// The session to continue with feedback: the latest one a run that
+    /// wasn't undone reported.
     pub fn session(&self) -> Option<String> {
-        self.list().into_iter().rev().find_map(|r| r.session)
+        self.list()
+            .into_iter()
+            .rev()
+            .filter(|r| !r.undone)
+            .find_map(|r| r.session)
+    }
+
+    /// Run `index`'s changes. While it runs, up to the folder as it is now.
+    /// When the run moved onto a new base (it rebased, or merged the base
+    /// in), files that now match the base are left out: they came with the
+    /// base, not from the agent.
+    pub fn patch(&self, index: usize) -> Result<RunPatch, String> {
+        let run = self.run(index).ok_or("No such run")?;
+        let wt = &self.worktree;
+        let before = checkpoint::resolve(wt, &self.checkpoint_ref(index, "before"))
+            .ok_or("This run has no checkpoint (it ran before spor took them)")?;
+        let after_ref = self.checkpoint_ref(index, "after");
+        let after = match checkpoint::resolve(wt, &after_ref) {
+            Some(a) if run.state != RunState::Running => a,
+            // Running: the folder now. Ended without one (stopped while spor
+            // was closed): take it now, as close as we can get.
+            _ => {
+                let live = if run.state == RunState::Running {
+                    self.checkpoint_ref(index, "live")
+                } else {
+                    after_ref
+                };
+                checkpoint::capture(wt, &live)?
+            }
+        };
+        let moved = |snapshot: &str| {
+            checkpoint::parent(wt, snapshot).and_then(|head| {
+                let repo = crate::git::Repo::new(wt);
+                repo.merge_base(&head, &self.base).ok()
+            })
+        };
+        let changed = checkpoint::changed(wt, &before, &after)?;
+        let mut from_base = Vec::new();
+        let paths = if moved(&before) != moved(&after) {
+            let differs: std::collections::HashSet<String> =
+                checkpoint::changed(wt, &self.base, &after)?
+                    .into_iter()
+                    .collect();
+            let (mine, theirs): (Vec<String>, Vec<String>) =
+                changed.into_iter().partition(|p| differs.contains(p));
+            from_base = theirs;
+            Some(mine)
+        } else {
+            None
+        };
+        Ok(RunPatch {
+            patch: checkpoint::diff(wt, &before, &after, paths.as_deref())?,
+            from_base,
+        })
+    }
+
+    /// Whether the running agent can be talked to: asked questions answered,
+    /// steered, interrupted (it runs under the host).
+    pub fn listening(&self) -> bool {
+        self.latest()
+            .is_some_and(|r| r.state == RunState::Running && self.file(r.index, "sock").exists())
+    }
+
+    fn command(&self, line: &str) -> Result<(), String> {
+        let run = self
+            .latest()
+            .filter(|r| r.state == RunState::Running)
+            .ok_or("No agent is working")?;
+        host::request(&self.file(run.index, "sock"), line)
+    }
+
+    /// Send a message to the agent while it works: it takes it into the
+    /// turn it's on (steering).
+    pub fn send(&self, text: &str) -> Result<(), String> {
+        self.command(&format!(r#"{{"message":{}}}"#, host::quote(text)))
+    }
+
+    /// Ask the agent to stop the turn it's on. It ends the run cleanly,
+    /// keeping the session, unlike [`Runs::stop`].
+    pub fn interrupt(&self) -> Result<(), String> {
+        self.command(r#"{"interrupt":true}"#)
+    }
+
+    /// Answer a question the agent asked: allow the tool, or not (with what
+    /// to do instead, if `message` says).
+    pub fn answer(&self, id: &str, allow: bool, message: &str) -> Result<(), String> {
+        self.command(&format!(
+            r#"{{"answer":{{"request_id":{},"allow":{allow},"message":{}}}}}"#,
+            host::quote(id),
+            host::quote(message)
+        ))
+    }
+
+    /// Change the running agent's permission mode (Claude Code under the
+    /// host). Takes effect for what it does next.
+    pub fn set_mode(&self, mode: Mode) -> Result<(), String> {
+        self.command(&format!(r#"{{"mode":{}}}"#, host::quote(mode.flag())))?;
+        if let Some(run) = self.latest() {
+            self.set_meta(run.index, "mode", mode.flag())?;
+        }
+        Ok(())
+    }
+
+    /// The permission mode run `index` was started with (or changed to).
+    pub fn mode(&self, index: usize) -> Option<Mode> {
+        self.meta(index, "mode").and_then(|m| Mode::from_flag(&m))
+    }
+
+    fn set_meta(&self, index: usize, key: &str, value: &str) -> Result<(), String> {
+        let path = self.file(index, "meta");
+        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let mut lines: Vec<String> = text
+            .lines()
+            .filter(|l| !l.starts_with(&format!("{key}\t")))
+            .map(String::from)
+            .collect();
+        lines.push(format!("{key}\t{}", escape(value)));
+        std::fs::write(&path, lines.join("\n") + "\n").map_err(|e| e.to_string())
+    }
+
+    /// The questions the running agent is waiting on.
+    pub fn asks(&self) -> Vec<Ask> {
+        let Some(run) = self.latest().filter(|r| r.state == RunState::Running) else {
+            return Vec::new();
+        };
+        let log = std::fs::read_to_string(self.file(run.index, "log")).unwrap_or_default();
+        let entries = parse_claude(&log);
+        let answered: std::collections::HashSet<&str> = entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Answer { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Ask { id, tool, detail } if !answered.contains(id.as_str()) => Some(Ask {
+                    id: id.clone(),
+                    tool: tool.clone(),
+                    detail: detail.clone(),
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The last run that can be undone: it ended, wasn't undone, and has a
+    /// before checkpoint.
+    pub fn undoable(&self) -> Option<Run> {
+        self.list()
+            .into_iter()
+            .rev()
+            .find(|r| !r.undone)
+            .filter(|r| r.state != RunState::Running)
+            .filter(|r| {
+                checkpoint::resolve(&self.worktree, &self.checkpoint_ref(r.index, "before"))
+                    .is_some()
+            })
+    }
+
+    /// Undo the last run: its folder goes back to how it was before it ran
+    /// (the branch included), and later follow-ups resume the conversation
+    /// from before it. The folder as it was is kept, for [`Runs::redo`].
+    pub fn undo_last(&self) -> Result<usize, String> {
+        let run = self
+            .undoable()
+            .ok_or("There's no run to undo (or an agent is still working)")?;
+        let wt = &self.worktree;
+        let before = checkpoint::resolve(wt, &self.checkpoint_ref(run.index, "before"))
+            .ok_or("This run has no checkpoint")?;
+        checkpoint::capture(wt, &self.checkpoint_ref(run.index, "undone"))?;
+        checkpoint::restore(wt, &before)?;
+        std::fs::write(self.file(run.index, "undone"), "").map_err(|e| e.to_string())?;
+        Ok(run.index)
+    }
+
+    /// Take back [`Runs::undo_last`]: the folder as it was, and the run
+    /// counts again.
+    pub fn redo(&self, index: usize) -> Result<(), String> {
+        let wt = &self.worktree;
+        let undone = checkpoint::resolve(wt, &self.checkpoint_ref(index, "undone"))
+            .ok_or("Nothing to redo")?;
+        if self.latest().is_some_and(|r| r.state == RunState::Running) {
+            return Err("An agent is working; stop it first".into());
+        }
+        checkpoint::restore(wt, &undone)?;
+        std::fs::remove_file(self.file(index, "undone")).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// What was asked and what the agents did, run after run.
@@ -229,7 +630,16 @@ impl Runs {
                     if skip > 0 {
                         out.push(Entry::Output(format!("… {skip} earlier lines")));
                     }
-                    out.extend(lines[skip..].iter().map(|l| Entry::Output(l.to_string())));
+                    // spor's own marker lines (setup) are events; the rest
+                    // is the command's output, as it printed it.
+                    out.extend(lines[skip..].iter().map(|l| {
+                        if l.starts_with(r#"{"type":"spor_"#) {
+                            if let Some(e) = parse_claude(l).pop() {
+                                return e;
+                            }
+                        }
+                        Entry::Output(l.to_string())
+                    }));
                 }
             }
             match &run.state {
@@ -268,7 +678,7 @@ impl Runs {
         out
     }
 
-    fn run(&self, index: usize) -> Option<Run> {
+    pub fn run(&self, index: usize) -> Option<Run> {
         let kind = match self.meta(index, "kind")?.as_str() {
             "claude" => AgentKind::Claude,
             other => AgentKind::Command(other.strip_prefix("command ").unwrap_or(other).into()),
@@ -316,6 +726,7 @@ impl Runs {
             ended,
             session,
             cost_usd,
+            undone: self.file(index, "undone").exists(),
         })
     }
 
@@ -351,16 +762,14 @@ fn command_for(
                 "stream-json",
                 "--verbose",
                 "--permission-mode",
-                if permissions.commands {
-                    "bypassPermissions"
-                } else {
-                    "acceptEdits"
-                },
+                permissions.mode.flag(),
             ]
             .map(String::from)
             .to_vec();
             if let Some(session) = resume {
-                args.extend(["--resume".into(), session.into()]);
+                // A new session id for each follow-up, so the one resumed
+                // stays as it was: undoing this run resumes from there.
+                args.extend(["--resume".into(), session.into(), "--fork-session".into()]);
             }
             // Publishing is always a person's call, from spor.
             args.extend(["--disallowedTools".into(), "Bash(git push:*)".into()]);
@@ -372,6 +781,46 @@ fn command_for(
             ("sh".into(), vec!["-c".into(), command])
         }
     }
+}
+
+/// Run the setup script, its output in the run's log between two markers,
+/// then the agent (`"$@"`) only if it worked. A failed setup ends the run
+/// with its exit code.
+const SETUP_THEN_AGENT: &str = r#"printf '%s\n' '{"type":"spor_setup","state":"start"}' >> "$SPOR_LOG"
+sh "$SPOR_SETUP" >> "$SPOR_LOG" 2>&1 < /dev/null; code=$?
+printf '{"type":"spor_setup","state":"done","code":%s}\n' "$code" >> "$SPOR_LOG"
+if [ "$code" -ne 0 ]; then echo "$code" > "$SPOR_EXIT"; exit "$code"; fi
+: > "$SPOR_SETUP_OK"
+exec "$@""#;
+
+/// Claude's arguments under the host: the prompt goes on stdin (as
+/// stream-json, like follow-ups), and questions come back as control
+/// requests instead of being refused.
+fn hosted_args(args: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(args.len() + 4);
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "-p" {
+            // `-p <prompt>`: keep print mode, drop the prompt.
+            out.push("-p".into());
+            i += 2;
+            continue;
+        }
+        out.push(args[i].clone());
+        i += 1;
+    }
+    out.extend([
+        "--input-format".into(),
+        "stream-json".into(),
+        "--permission-prompt-tool".into(),
+        "stdio".into(),
+    ]);
+    out
+}
+
+/// Where a task's checkpoints live.
+pub fn checkpoint_prefix(task_id: &str) -> String {
+    format!("refs/spor/tasks/{task_id}")
 }
 
 fn kind_name(kind: &AgentKind) -> String {
@@ -426,6 +875,45 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                     }
                 }
             }
+            Some("control_request")
+                if event.get("request").get("subtype").str() == Some("can_use_tool") =>
+            {
+                let request = event.get("request");
+                out.push(Entry::Ask {
+                    id: event
+                        .get("request_id")
+                        .str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    tool: request.get("tool_name").str().unwrap_or("Tool").to_string(),
+                    detail: tool_detail(request.get("input")),
+                });
+            }
+            Some("spor_answer") => out.push(Entry::Answer {
+                id: event
+                    .get("request_id")
+                    .str()
+                    .unwrap_or_default()
+                    .to_string(),
+                allow: event.get("allow").bool() == Some(true),
+                message: event.get("message").str().unwrap_or_default().to_string(),
+            }),
+            Some("spor_setup") => out.push(match event.get("state").str() {
+                Some("done") => {
+                    let code = event.get("code").num().map(|c| c as i32);
+                    Entry::Setup {
+                        ok: Some(code == Some(0)),
+                        code,
+                    }
+                }
+                _ => Entry::Setup {
+                    ok: None,
+                    code: None,
+                },
+            }),
+            Some("spor_message") => out.push(Entry::Steer(
+                event.get("text").str().unwrap_or_default().to_string(),
+            )),
             Some("result") => out.push(Entry::Done {
                 ok: event.get("is_error").bool() != Some(true)
                     && event.get("subtype").str().is_none_or(|s| s == "success"),
@@ -617,7 +1105,7 @@ not json at all
             &AgentKind::Claude,
             "Fix it",
             Some("s-1"),
-            Permissions { commands: false },
+            Permissions::commands(false),
         );
         assert_eq!(program, "claude");
         assert!(args
@@ -636,7 +1124,7 @@ not json at all
             &AgentKind::Command("codex exec {prompt}".into()),
             "Don't",
             None,
-            Permissions { commands: true },
+            Permissions::commands(true),
         );
         assert_eq!(program, "sh");
         assert_eq!(args, ["-c", r"codex exec 'Don'\''t'"]);

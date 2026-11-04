@@ -7,7 +7,7 @@ import { DetailsCard, EmptyState, PageHeader, SidebarHeader } from "../../shared
 import { StatusPill } from "../../shared/StatusPill";
 import { CiIcon, ciStatus, elapsed } from "../../shared/ci";
 import { ago } from "../agents/transcript";
-import { choiceOf, type AgentSettings } from "../agents/Composer";
+import { choiceOf, useAgentSettings } from "../agents/Composer";
 import { Bot, Branch, Chevron, Commit, External, Refresh, Square } from "../../shared/Icons";
 
 /** GitHub Actions: runs, their jobs and logs; re-run and cancel. */
@@ -254,7 +254,7 @@ function JobLog({ job }: { job: Job }) {
 
 function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | null; task?: TaskSummary; onChanged: () => void }) {
   const shell = useShell();
-  const [settings] = useStored<AgentSettings>("agent", { agent: "claude", template: "", allowCommands: false });
+  const [settings] = useAgentSettings();
   const r = run.run;
   const live = r.status === "running" || r.status === "queued";
   const failed = run.jobs.some((j) => j.status === "failure");
@@ -279,7 +279,7 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
       (excerpt ? `\n\nThe failing part of the log:\n\`\`\`\n${excerpt}\n\`\`\`` : "") +
       `\n\nFind the cause, fix it, check it passes locally, and commit.`;
     const ok = await shell.act(
-      () => api.sendToAgent(task.id, message, choiceOf(settings), settings.allowCommands).then(() => `Sent the failure to ${task.id}`),
+      () => api.sendToAgent(task.id, message, choiceOf(settings), settings.mode).then(() => `Sent the failure to ${task.id}`),
       { undo: false },
     );
     if (ok) shell.go({ section: "agents", taskId: task.id });

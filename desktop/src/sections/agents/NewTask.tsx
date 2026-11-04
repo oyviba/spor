@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { RepoInfo } from "../../types";
-import type { AgentSettings } from "./Composer";
+import { ModePicker, type AgentSettings } from "./Composer";
 import { ArrowUp, Branch } from "../../shared/Icons";
 
 interface Props {
@@ -72,14 +72,8 @@ export function NewTask({ repo, settings, onSettings, onCreate }: Props) {
               <option value="command">Custom command</option>
               <option value="none">No agent — I'll run one</option>
             </select>
-            {settings.agent !== "none" && (
-              <button
-                className={`chip-toggle${settings.allowCommands ? " on" : ""}`}
-                onClick={() => onSettings({ ...settings, allowCommands: !settings.allowCommands })}
-                title="Claude Code may always edit files. Shell commands are refused unless this is on; git push never runs."
-              >
-                {settings.allowCommands ? "Edits + commands" : "Edits only"}
-              </button>
+            {settings.agent === "claude" && (
+              <ModePicker mode={settings.mode} onChange={(mode) => onSettings({ ...settings, mode })} />
             )}
             <span className="flex-1" />
             <span className="hint-keys">↩ {verb.toLowerCase()} · ⌘↩ {verb.toLowerCase()} &amp; next</span>

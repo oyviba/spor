@@ -1,6 +1,7 @@
 //! Agents running in task folders: real processes, a fake `claude`.
 
 use spor::agent::{AgentKind, Entry, Permissions, RunState, Runs};
+use spor::checkpoint;
 use spor::git::Repo;
 use spor::tasks::Tasks;
 use std::path::{Path, PathBuf};
@@ -40,13 +41,18 @@ fn fake_claude() {
     ONCE.call_once(|| {
         let bin = std::env::temp_dir().join(format!("spor-fake-claude-{}", std::process::id()));
         std::fs::create_dir_all(&bin).unwrap();
+        // A new session id per run (as --fork-session gives), counted in
+        // the worktree's own git dir, where restoring a checkpoint can't
+        // reach it.
         let script = r#"#!/bin/sh
 printf '%s\n' "$@" > claude-args.txt
-echo "agent was here" > agent.txt
-echo '{"type":"system","subtype":"init","session_id":"sess-42"}'
+n_file="$(git rev-parse --git-dir)/fake-claude-n"
+n=$(( $(cat "$n_file" 2>/dev/null || echo 41) + 1 )); echo $n > "$n_file"
+echo "agent was here $n" >> agent.txt
+echo '{"type":"system","subtype":"init","session_id":"sess-'$n'"}'
 echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"agent.txt"}}]}}'
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Wrote agent.txt."}]}}'
-echo '{"type":"result","subtype":"success","is_error":false,"result":"Done.","total_cost_usd":0.01,"num_turns":2,"duration_ms":900,"session_id":"sess-42"}'
+echo '{"type":"result","subtype":"success","is_error":false,"result":"Done.","total_cost_usd":0.01,"num_turns":2,"duration_ms":900,"session_id":"sess-'$n'"}'
 "#;
         let path = bin.join("claude");
         std::fs::write(&path, script).unwrap();
@@ -99,7 +105,9 @@ fn wait_until_done(runs: &Runs) -> RunState {
     }
 }
 
-const NO_COMMANDS: Permissions = Permissions { commands: false };
+const NO_COMMANDS: Permissions = Permissions {
+    mode: spor::agent::Mode::AcceptEdits,
+};
 
 #[test]
 fn a_custom_command_runs_in_the_task_folder() {
@@ -172,6 +180,8 @@ fn stop_ends_the_agent_and_what_it_started() {
     assert_eq!(wait_until_done(&runs), RunState::Stopped);
     std::thread::sleep(Duration::from_millis(300));
     assert!(!task.worktree.join("late.txt").exists());
+    // The wrapper went down with the agent; stop took the after checkpoint.
+    assert!(checkpoint::resolve(&task.worktree, &runs.checkpoint_ref(0, "after")).is_some());
 }
 
 #[test]
@@ -204,10 +214,14 @@ fn claude_runs_and_follow_ups_resume_its_session() {
     assert_eq!(wait_until_done(&runs), RunState::Finished);
     let args = std::fs::read_to_string(task.worktree.join("claude-args.txt")).unwrap();
     let args: Vec<&str> = args.lines().collect();
+    // Each follow-up forks the session, so the one resumed stays as it
+    // was (undoing a run resumes from there).
     assert!(
-        args.windows(2).any(|w| w == ["--resume", "sess-42"]),
+        args.windows(3)
+            .any(|w| w == ["--resume", "sess-42", "--fork-session"]),
         "{args:?}"
     );
+    assert_eq!(runs.session().as_deref(), Some("sess-43"));
     assert_eq!(args.last(), Some(&"Now tidy up"));
     assert_eq!(runs.list().len(), 2);
     let prompts: Vec<_> = runs
@@ -268,4 +282,337 @@ fn merge_conflicts_between_branches() {
         .merge_conflicts("main", &a.branch)
         .unwrap()
         .is_empty());
+}
+
+// ---- Checkpoints ----------------------------------------------------------
+
+fn read(dir: &Path, path: &str) -> Option<String> {
+    std::fs::read_to_string(dir.join(path)).ok()
+}
+
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn a_checkpoint_holds_everything_and_restores_it() {
+    let f = fixture();
+    let root = f.repo.root().to_path_buf();
+    std::fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    git(&root, &["add", ".gitignore"]);
+    git(&root, &["commit", "-qm", "ignore build"]);
+    let head = git_out(&root, &["rev-parse", "HEAD"]);
+    // Staged, unstaged, untracked and ignored work.
+    std::fs::write(root.join("app.txt"), "one\nstaged\n").unwrap();
+    git(&root, &["add", "app.txt"]);
+    std::fs::write(root.join("app.txt"), "one\nstaged\nunstaged\n").unwrap();
+    std::fs::write(root.join("new.txt"), "untracked\n").unwrap();
+    std::fs::create_dir_all(root.join("build")).unwrap();
+    std::fs::write(root.join("build/out.bin"), "ignored\n").unwrap();
+    let staged = git_out(&root, &["diff", "--cached"]);
+
+    let snap = checkpoint::capture(&root, "refs/spor/test/snap").unwrap();
+    assert_eq!(
+        checkpoint::resolve(&root, "refs/spor/test/snap").as_deref(),
+        Some(snap.as_str())
+    );
+    assert_eq!(
+        git_out(&root, &["diff", "--cached"]),
+        staged,
+        "the index is left alone"
+    );
+    assert_eq!(
+        git_out(&root, &["rev-parse", "HEAD"]),
+        head,
+        "no commit on the branch"
+    );
+    let files = git_out(&root, &["ls-tree", "-r", "--name-only", &snap]);
+    assert!(
+        files.contains("new.txt") && !files.contains("build/"),
+        "{files}"
+    );
+    assert_eq!(
+        git_out(&root, &["show", &format!("{snap}:app.txt")]),
+        "one\nstaged\nunstaged"
+    );
+
+    // Move on: commit, delete, add files; then go back.
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "later"]);
+    std::fs::remove_file(root.join("new.txt")).unwrap();
+    std::fs::write(root.join("app.txt"), "rewritten\n").unwrap();
+    std::fs::write(root.join("stray.txt"), "made later\n").unwrap();
+    checkpoint::restore(&root, &snap).unwrap();
+    assert_eq!(
+        git_out(&root, &["rev-parse", "HEAD"]),
+        head,
+        "the branch is back"
+    );
+    assert_eq!(
+        read(&root, "app.txt").as_deref(),
+        Some("one\nstaged\nunstaged\n")
+    );
+    assert_eq!(read(&root, "new.txt").as_deref(), Some("untracked\n"));
+    assert!(
+        read(&root, "stray.txt").is_none(),
+        "files made later are gone"
+    );
+    assert_eq!(
+        read(&root, "build/out.bin").as_deref(),
+        Some("ignored\n"),
+        "ignored files stay"
+    );
+}
+
+fn run_command(task: &spor::tasks::Task, runs: &Runs, command: &str) -> usize {
+    let run = runs
+        .start(
+            task,
+            &AgentKind::Command(command.into()),
+            command,
+            None,
+            NO_COMMANDS,
+        )
+        .unwrap();
+    assert_eq!(wait_until_done(runs), RunState::Finished);
+    run.index
+}
+
+#[test]
+fn each_run_has_its_own_diff() {
+    let f = fixture();
+    let task = f.tasks.create("Notes", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let first = run_command(&task, &runs, "echo first > note.txt");
+    let second = run_command(&task, &runs, "echo second >> note.txt; echo two > app.txt");
+    for which in ["before", "after"] {
+        assert!(checkpoint::resolve(&task.worktree, &runs.checkpoint_ref(second, which)).is_some());
+    }
+    let one = runs.patch(first).unwrap().patch;
+    assert!(one.contains("+first") && !one.contains("app.txt"), "{one}");
+    let two = runs.patch(second).unwrap().patch;
+    assert!(
+        two.contains("+second") && !two.contains("+first") && two.contains("+two"),
+        "{two}"
+    );
+}
+
+#[test]
+fn a_rebase_onto_the_base_is_left_out_of_the_runs_diff() {
+    let f = fixture();
+    let task = f.tasks.create("Notes", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    run_command(
+        &task,
+        &runs,
+        "echo mine > note.txt; git add -A; git commit -qm note",
+    );
+    // main moves on; the next run rebases onto it and edits its own file.
+    let root = f.repo.root().to_path_buf();
+    std::fs::write(root.join("other.txt"), "from main\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "main moves"]);
+    let rebase = run_command(&task, &runs, "git rebase -q main && echo more >> note.txt");
+    let p = runs.patch(rebase).unwrap();
+    assert_eq!(p.from_base, vec!["other.txt".to_string()]);
+    assert!(
+        p.patch.contains("+more") && !p.patch.contains("other.txt"),
+        "{}",
+        p.patch
+    );
+}
+
+#[test]
+fn the_last_run_can_be_undone_and_redone() {
+    fake_claude();
+    let f = fixture();
+    let task = f.tasks.create("Leave marks", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let wt = &task.worktree;
+    runs.start(&task, &AgentKind::Claude, "First", None, NO_COMMANDS)
+        .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    let after_first = read(wt, "agent.txt").unwrap();
+    let first_session = runs.session().unwrap();
+    runs.start(
+        &task,
+        &AgentKind::Claude,
+        "Second",
+        Some(&first_session),
+        NO_COMMANDS,
+    )
+    .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    assert_ne!(runs.session().unwrap(), first_session);
+    assert_ne!(read(wt, "agent.txt").unwrap(), after_first);
+
+    assert_eq!(runs.undo_last().unwrap(), 1);
+    assert_eq!(
+        read(wt, "agent.txt").unwrap(),
+        after_first,
+        "the folder is as the first run left it"
+    );
+    assert!(runs.list()[1].undone);
+    assert_eq!(
+        runs.session().unwrap(),
+        first_session,
+        "follow-ups resume from before the undone run"
+    );
+
+    runs.redo(1).unwrap();
+    assert!(!runs.list()[1].undone);
+    assert_ne!(read(wt, "agent.txt").unwrap(), after_first);
+    assert_ne!(runs.session().unwrap(), first_session);
+
+    // Undo twice: back to before the first run.
+    runs.undo_last().unwrap();
+    runs.undo_last().unwrap();
+    assert!(read(wt, "agent.txt").is_none());
+    assert!(runs.undoable().is_none());
+}
+
+#[test]
+fn forgetting_a_task_deletes_its_checkpoints() {
+    let f = fixture();
+    let task = f.tasks.create("Note", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let run = run_command(&task, &runs, "echo hi > note.txt");
+    let before = runs.checkpoint_ref(run, "before");
+    assert!(checkpoint::resolve(f.repo.root(), &before).is_some());
+    f.tasks.forget(&task.id).unwrap();
+    assert!(checkpoint::resolve(f.repo.root(), &before).is_none());
+}
+
+// ---- Setup scripts (#23) ----------------------------------------------------
+
+/// Commit `.spor/<name>` with `content` in the main checkout.
+fn commit_spor_file(f: &Fixture, name: &str, content: &str) {
+    let root = f.repo.root();
+    std::fs::create_dir_all(root.join(".spor")).unwrap();
+    std::fs::write(root.join(".spor").join(name), content).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", &format!("Add .spor/{name}")]);
+}
+
+#[test]
+fn the_setup_script_runs_before_the_first_agent_only() {
+    let f = fixture();
+    commit_spor_file(
+        &f,
+        "setup",
+        "echo \"setting up $SPOR_TASK from $SPOR_BASE\"\necho ready > prepared.txt\necho x >> setups.txt\ntest -d \"$SPOR_REPO/.git\"\n",
+    );
+    let task = f.tasks.create("Use the setup", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    assert!(runs.setup_script(&task).is_some());
+    run_command(&task, &runs, "cat prepared.txt > seen.txt");
+    assert_eq!(
+        read(&task.worktree, "seen.txt").as_deref(),
+        Some("ready\n"),
+        "the agent ran after setup"
+    );
+    let t = runs.transcript();
+    let start = t
+        .iter()
+        .position(|e| {
+            *e == Entry::Setup {
+                ok: None,
+                code: None,
+            }
+        })
+        .unwrap();
+    let done = t
+        .iter()
+        .position(|e| {
+            *e == Entry::Setup {
+                ok: Some(true),
+                code: Some(0),
+            }
+        })
+        .unwrap();
+    assert!(start < done);
+    assert!(
+        t[start..done].contains(&Entry::Output(format!("setting up {} from main", task.id))),
+        "{t:?}"
+    );
+    // Later runs don't set up again.
+    assert!(runs.setup_script(&task).is_none());
+    run_command(&task, &runs, "true");
+    assert_eq!(read(&task.worktree, "setups.txt").as_deref(), Some("x\n"));
+}
+
+#[test]
+fn a_failing_setup_stops_the_agent_until_skipped() {
+    let f = fixture();
+    commit_spor_file(&f, "setup", "echo 'npm: not found'\nexit 3\n");
+    let task = f.tasks.create("Broken setup", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    runs.start(
+        &task,
+        &AgentKind::Command("echo ran > ran.txt".into()),
+        "x",
+        None,
+        NO_COMMANDS,
+    )
+    .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Failed(3));
+    assert!(
+        read(&task.worktree, "ran.txt").is_none(),
+        "the agent didn't run"
+    );
+    let t = runs.transcript();
+    assert!(t.contains(&Entry::Setup {
+        ok: Some(false),
+        code: Some(3)
+    }));
+    assert!(t.contains(&Entry::Output("npm: not found".into())));
+    // Retrying runs setup again; skipping it lets the agent start.
+    assert!(runs.setup_script(&task).is_some());
+    runs.skip_setup().unwrap();
+    run_command(&task, &runs, "echo ran > ran.txt");
+    assert_eq!(read(&task.worktree, "ran.txt").as_deref(), Some("ran\n"));
+}
+
+#[test]
+fn a_private_setup_script_wins() {
+    let f = fixture();
+    commit_spor_file(&f, "setup", "echo committed > which.txt\n");
+    let private = f.repo.root().join(".git/spor");
+    std::fs::create_dir_all(&private).unwrap();
+    std::fs::write(private.join("setup"), "echo private > which.txt\n").unwrap();
+    let task = f.tasks.create("Which setup", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    run_command(&task, &runs, "true");
+    assert_eq!(
+        read(&task.worktree, "which.txt").as_deref(),
+        Some("private\n")
+    );
+}
+
+#[test]
+fn listed_ignored_files_are_copied_into_a_new_folder() {
+    let f = fixture();
+    let root = f.repo.root().to_path_buf();
+    std::fs::write(root.join(".gitignore"), ".env\nconfig/local.toml\n").unwrap();
+    commit_spor_file(&f, "copy", "# secrets the checkout doesn't bring\n.env\nconfig/local.toml\nmissing.txt\n../outside.txt\n");
+    std::fs::write(root.join(".env"), "TOKEN=1\n").unwrap();
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::write(root.join("config/local.toml"), "debug = true\n").unwrap();
+    std::fs::write(f.dir.join("outside.txt"), "nope\n").unwrap();
+    let task = f.tasks.create("Copy secrets", "main").unwrap();
+    assert_eq!(read(&task.worktree, ".env").as_deref(), Some("TOKEN=1\n"));
+    assert_eq!(
+        read(&task.worktree, "config/local.toml").as_deref(),
+        Some("debug = true\n")
+    );
+    assert!(read(&task.worktree, "missing.txt").is_none());
+    assert!(
+        !task.worktree.parent().unwrap().join("outside.txt").exists(),
+        "paths outside the checkout are refused"
+    );
 }

@@ -3,10 +3,12 @@
 //! (`spor-app`, behind the `gui` feature) are both thin shells over this.
 
 pub mod agent;
+pub mod checkpoint;
 pub mod color;
 pub mod git;
 pub mod github;
 pub mod graph;
+pub mod host;
 pub mod json;
 pub mod patch;
 pub mod remote;

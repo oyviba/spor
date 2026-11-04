@@ -65,7 +65,7 @@ try {
   check(git("log", "-1", "--format=%s") === "Add notes and polish the README", "commits with ⌘↩");
   check(git("status", "--porcelain").trim() === "M greet.py", "leaves the unstaged edit alone");
   await w.shot("changes-2-committed");
-  await w.js(`document.querySelector(".toast .link").click()`);
+  await w.clickText(".toast .link", "Undo");
   await w.until(`return document.querySelectorAll(".file-row").length === 3`, "the commit's undo");
   check(git("rev-parse", "HEAD") === head, "Undo takes the commit back");
   check(git("status", "--porcelain", "NOTES.md").startsWith("A "), "…keeping its changes staged");

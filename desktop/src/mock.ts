@@ -2,7 +2,7 @@
 // It keeps a few tasks in memory, one of which is "working" and grows its
 // transcript over time, and answers the same commands as src-tauri.
 
-import type { AgentChoice, Item, RepoInfo, RunInfo, TaskDetail, TaskSummary } from "./types";
+import type { AgentChoice, Ask, Item, Mode, RepoInfo, RunInfo, TaskDetail, TaskSummary } from "./types";
 
 const now = () => Math.floor(Date.now() / 1000);
 const t0 = now();
@@ -14,6 +14,8 @@ interface MockTask {
   patch: string;
   /** Items still to "arrive" while it runs. */
   script: Item[];
+  /** Questions it's waiting on: it doesn't go on until they're answered. */
+  asks?: Ask[];
 }
 
 const repo: RepoInfo = {
@@ -47,6 +49,8 @@ const run = (over: Partial<RunInfo>): RunInfo => ({
   ended: t0 - 300,
   cost_usd: 0.42,
   resumable: true,
+  prompt: "",
+  undone: false,
   ...over,
 });
 
@@ -63,6 +67,8 @@ const summary = (id: string, prompt: string, created: number, over: Partial<Task
   run: null,
   runs: 0,
   command: `cd /Users/you/code/postplan.spor/${id} && claude '${prompt}'`,
+  asks: 0,
+  mode: "acceptEdits",
   ...over,
 });
 
@@ -154,6 +160,7 @@ const tasks: MockTask[] = [
       { kind: "tool", name: "Edit", detail: "src/routes/drafts.ts" },
     ],
     script: [
+      { kind: "ask", id: "req-1", tool: "Bash", detail: "pnpm tsc --noEmit" },
       { kind: "tool", name: "Bash", detail: "pnpm tsc --noEmit" },
       { kind: "tool", name: "Bash", detail: "pnpm test drafts" },
       { kind: "text", text: "Types check and the draft tests pass. Adding a test for expiry next." },
@@ -225,10 +232,14 @@ let undoable: { message: string; task: MockTask; index: number } | null = null;
 // The working task makes progress every few seconds, then finishes.
 setInterval(() => {
   const t = tasks.find((x) => x.summary.run?.state === "running");
-  if (!t) return;
+  if (!t || t.asks?.length) return;
   const next = t.script.shift();
   if (next) {
     t.transcript.push(next);
+    if (next.kind === "ask") {
+      t.asks = [{ id: next.id, tool: next.tool, detail: next.detail }];
+      t.summary.asks = 1;
+    }
     return;
   }
   const seconds = now() - (t.summary.run?.started ?? now());
@@ -241,6 +252,12 @@ setInterval(() => {
   t.summary.run = finished;
   t.runs[t.runs.length - 1] = finished;
 }, 4000);
+
+/** The prompt of a task's `i`th run, from its transcript. */
+function promptOf(t: MockTask, i: number): string {
+  const prompts = t.transcript.filter((x): x is Extract<Item, { kind: "prompt" }> => x.kind === "prompt");
+  return prompts[i]?.text ?? "";
+}
 
 function find(id: string): MockTask {
   const t = tasks.find((x) => x.summary.id === id);
@@ -299,11 +316,15 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
         ].map((t) => structuredClone(t.summary));
       case "task_detail": {
         const t = find(id);
+        const last = t.runs.at(-1);
         const detail: TaskDetail = {
           task: t.summary,
           transcript: t.transcript,
-          runs: t.runs,
+          runs: t.runs.map((r, i) => ({ ...r, prompt: r.prompt || promptOf(t, i) })),
           conflicts: t.summary.id === "dark-mode-dashboard" ? ["src/styles/theme.css"] : [],
+          undoable: last && !last.undone && last.state !== "running" ? last.index : null,
+          asks: t.asks ?? [],
+          listening: t.summary.run?.state === "running",
         };
         return structuredClone(detail);
       }
@@ -363,6 +384,34 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
       }
       case "open_folder":
         return null;
+      case "answer_ask": {
+        const t = find(id);
+        const ask = t.asks?.find((a) => a.id === args.requestId);
+        if (!ask) throw "That question was already answered";
+        t.asks = t.asks!.filter((a) => a !== ask);
+        t.summary.asks = t.asks.length;
+        t.transcript.push({ kind: "answer", id: ask.id, allow: !!args.allow, message: (args.message as string) ?? "" });
+        if (!args.allow) t.script = t.script.filter((x) => !(x.kind === "tool" && x.detail === ask.detail));
+        return null;
+      }
+      case "steer": {
+        const t = find(id);
+        if (t.summary.run?.state !== "running") throw "The run has finished";
+        t.transcript.push({ kind: "steer", text: args.text as string });
+        return null;
+      }
+      case "set_mode":
+        find(id).summary.mode = args.mode as Mode;
+        return null;
+      case "run_patch":
+        return { patch: find(id).patch, from_base: [] };
+      case "undo_run": {
+        const t = find(id);
+        const last = t.runs.at(-1);
+        if (!last || last.undone || last.state === "running") throw "There's no run to undo";
+        last.undone = true;
+        return `Undid run ${last.index + 1}`;
+      }
       default:
         throw `Unknown command ${cmd}`;
     }

@@ -794,9 +794,7 @@ impl Spor {
         } else {
             prompt
         };
-        let permissions = Permissions {
-            commands: self.agents.allow_commands,
-        };
+        let permissions = Permissions::commands(self.agents.allow_commands);
         match runs.start(task, &kind, &prompt, session.as_deref(), permissions) {
             Ok(_) => {
                 self.agents.pane = TaskPane::Transcript;
@@ -1864,6 +1862,40 @@ fn render_entry(entry: &Entry, cx: &App) -> AnyElement {
             .font_family(mono)
             .text_color(theme.muted_foreground)
             .child(line.clone())
+            .into_any_element(),
+        // Only agents run under the host ask or get steered; the GPUI app
+        // doesn't run them that way yet, so these show plainly.
+        Entry::Ask { tool, detail, .. } => div()
+            .text_xs()
+            .text_color(theme.yellow)
+            .child(format!("Asked to use {tool}: {detail}"))
+            .into_any_element(),
+        Entry::Answer { allow, message, .. } => div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(if *allow {
+                "Allowed".to_string()
+            } else if message.is_empty() {
+                "Denied".to_string()
+            } else {
+                format!("Denied: {message}")
+            })
+            .into_any_element(),
+        Entry::Steer(text) => div()
+            .text_sm()
+            .child(format!("You: {text}"))
+            .into_any_element(),
+        Entry::Setup { ok, code } => div()
+            .text_xs()
+            .text_color(match ok {
+                Some(false) => theme.red,
+                _ => theme.muted_foreground,
+            })
+            .child(match (ok, code) {
+                (None, _) => "Setting up the folder…".to_string(),
+                (Some(true), _) => "Folder set up".to_string(),
+                (Some(false), c) => format!("Setup failed (exit {})", c.unwrap_or(1)),
+            })
             .into_any_element(),
     }
 }

@@ -80,6 +80,46 @@ test("consecutive tool calls merge into one block", () => {
   );
 });
 
+test("questions take their answers, and a refusal keeps the run open", () => {
+  const items: Item[] = [
+    { kind: "prompt", text: "a" },
+    { kind: "ask", id: "q1", tool: "Bash", detail: "make test" },
+    { kind: "answer", id: "q1", allow: false, message: "use cargo" },
+    { kind: "steer", text: "also docs" },
+    { kind: "text", text: "ok" },
+    { kind: "done", ok: true, summary: "ok", cost_usd: null, turns: null, seconds: 3 },
+  ];
+  const [run] = runs(items, false);
+  assert.deepEqual(run.blocks[0], {
+    kind: "ask",
+    id: "q1",
+    tool: "Bash",
+    detail: "make test",
+    answer: { allow: false, message: "use cargo" },
+  });
+  assert.deepEqual(run.blocks[1], { kind: "steer", text: "also docs" });
+  assert.equal(run.fold, null);
+  const allowed = runs(
+    items.map((i) => (i.kind === "answer" ? { ...i, allow: true, message: "" } : i)),
+    false,
+  );
+  assert.notEqual(allowed[0].fold, null, "an allowed question folds like any work");
+});
+
+test("the setup script's output goes with it", () => {
+  const [run] = runs(
+    [
+      { kind: "prompt", text: "a" },
+      { kind: "setup", ok: null, code: null },
+      { kind: "output", text: "npm install" },
+      { kind: "setup", ok: false, code: 3 },
+      { kind: "done", ok: false, summary: "Exited with code 3", cost_usd: null, turns: null, seconds: 1 },
+    ],
+    false,
+  );
+  assert.deepEqual(run.blocks, [{ kind: "setup", ok: false, code: 3, lines: ["npm install"] }]);
+});
+
 test("duration formats", () => {
   assert.equal(duration(42), "42s");
   assert.equal(duration(125), "2m 05s");

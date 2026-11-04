@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
-import type { LineComment, TaskDetail, TaskSummary } from "../../types";
+import type { LineComment, RunPatch, TaskDetail, TaskSummary } from "../../types";
 import { activityAt } from "./status";
 import { usePoll, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { Sidebar } from "./Sidebar";
 import { NewTask } from "./NewTask";
 import { TaskPage, type Tab } from "./TaskPage";
-import { choiceOf, type AgentSettings, type ComposerHandle } from "./Composer";
+import { choiceOf, useAgentSettings, type ComposerHandle } from "./Composer";
 
 type View = { kind: "new" } | { kind: "task"; id: string };
 
@@ -20,12 +20,11 @@ export function AgentsSection() {
   const [view, setView] = useStored<View>("agents.view", { kind: "new" });
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
+  // The Changes tab: everything against the base, or one run's changes.
+  const [source, setSource] = useState<"all" | number>("all");
+  const [runPatch, setRunPatch] = useState<{ key: string; value: RunPatch } | null>(null);
   const [tab, setTab] = useState<Tab>("conversation");
-  const [settings, setSettings] = useStored<AgentSettings>("agent", {
-    agent: "claude",
-    template: "",
-    allowCommands: false,
-  });
+  const [settings, setSettings] = useAgentSettings();
   const [seen, setSeen] = useStored<Record<string, number>>("seen", {});
   const [shelves, setShelves] = useStored("shelves", { working: true, settled: false });
   const [inspector, setInspector] = useStored("inspector", true);
@@ -65,6 +64,7 @@ export function AgentsSection() {
     setDetail(null);
     setTab("conversation");
     setFocus(null);
+    setSource("all");
   }, [selectedId]);
 
   // The diff, reloaded when the task's numbers change.
@@ -73,9 +73,20 @@ export function AgentsSection() {
     ? `${shown.task.id}:${shown.task.stats.additions}:${shown.task.stats.deletions}:${shown.task.stats.files}`
     : "";
   useEffect(() => {
-    if (tab !== "changes" || !shown || patch?.key === patchKey) return;
+    if (tab !== "changes" || !shown || source !== "all" || patch?.key === patchKey) return;
     api.taskPatch(shown.task.id).then((text) => setPatch({ key: patchKey, text }), fail);
-  }, [tab, patchKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab, patchKey, source]); // eslint-disable-line react-hooks/exhaustive-deps
+  const runKey = shown && source !== "all" ? `${patchKey}:${source}:${shown.runs[source]?.state}:${shown.runs[source]?.undone}` : "";
+  useEffect(() => {
+    if (tab !== "changes" || !shown || source === "all" || runPatch?.key === runKey) return;
+    api.runPatch(shown.task.id, source).then(
+      (value) => setRunPatch({ key: runKey, value }),
+      (e) => {
+        setRunPatch({ key: runKey, value: { patch: "", from_base: [] } });
+        fail(e);
+      },
+    );
+  }, [tab, runKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Looking at a task marks what it did as seen.
   useEffect(() => {
@@ -97,7 +108,7 @@ export function AgentsSection() {
       sending.current.add(id);
       const [first, ...rest] = messages;
       api
-        .sendToAgent(id, first, choiceOf(settings), settings.allowCommands)
+        .sendToAgent(id, first, choiceOf(settings), settings.mode)
         .then(() => setQueue((q) => ({ ...q, [id]: rest })), fail)
         .then(refreshTasks)
         .finally(() => sending.current.delete(id));
@@ -130,7 +141,7 @@ export function AgentsSection() {
 
   const create = async (prompt: string, base: string, background: boolean) => {
     try {
-      const t = await api.createTask(prompt, base, choiceOf(settings), settings.allowCommands);
+      const t = await api.createTask(prompt, base, choiceOf(settings), settings.mode);
       await refreshTasks();
       if (background) toast(`Started ${t.id}`);
       else setView({ kind: "task", id: t.id });
@@ -150,7 +161,7 @@ export function AgentsSection() {
       return;
     }
     api
-      .sendToAgent(id, text, choiceOf(settings), settings.allowCommands)
+      .sendToAgent(id, text, choiceOf(settings), settings.mode)
       .then(() => setTab("conversation"))
       .then(afterChange, fail);
   };
@@ -189,7 +200,42 @@ export function AgentsSection() {
             seenAt={seen[shown.task.id]}
             tab={tab}
             onTab={setTab}
-            patch={patch?.key === patchKey ? patch.text : null}
+            patch={
+              source === "all"
+                ? patch?.key === patchKey
+                  ? patch.text
+                  : null
+                : runPatch?.key === runKey
+                  ? runPatch.value.patch
+                  : null
+            }
+            source={source}
+            onSource={setSource}
+            fromBase={source !== "all" && runPatch?.key === runKey ? runPatch.value.from_base : []}
+            onRunChanges={(index) => {
+              setSource(index);
+              setTab("changes");
+            }}
+            onUndoRun={() => shell.act(() => api.undoRun(shown.task.id)).then(afterChange)}
+            onAnswer={(ask, allow, message) =>
+              api.answerAsk(shown.task.id, ask.id, allow, message ?? "").then(afterChange, fail)
+            }
+            onRetrySetup={() =>
+              api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode).then(afterChange, fail)
+            }
+            onSkipSetup={() =>
+              api
+                .skipSetup(shown.task.id)
+                .then(() => api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode))
+                .then(afterChange, fail)
+            }
+            onSteer={(text) => {
+              setComments((c) => ({ ...c, [shown.task.id]: [] }));
+              api.steer(shown.task.id, text).then(afterChange, fail);
+            }}
+            onLiveMode={(mode) =>
+              api.setMode(shown.task.id, mode).then(() => toast(`The agent is now in ${mode === "acceptEdits" ? "auto-accept edits" : mode} mode`), fail)
+            }
             inspector={inspector}
             onInspector={setInspector}
             settings={settings}
@@ -214,7 +260,7 @@ export function AgentsSection() {
               setQueue((q) => ({ ...q, [shown.task.id]: (q[shown.task.id] ?? []).filter((_, j) => j !== i) }))
             }
             onStart={() =>
-              api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.allowCommands).then(afterChange, fail)
+              api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode).then(afterChange, fail)
             }
             onSend={send}
             onStop={() => api.stopAgent(shown.task.id).then(afterChange, fail)}

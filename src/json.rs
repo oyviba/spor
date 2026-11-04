@@ -27,6 +27,28 @@ impl Json {
     }
 
     /// A field of an object, or `Null`.
+    /// Back to JSON text (object keys come out sorted).
+    pub fn to_json(&self) -> String {
+        match self {
+            Json::Null => "null".into(),
+            Json::Bool(b) => b.to_string(),
+            Json::Number(n) if n.fract() == 0.0 && n.abs() < 1e15 => format!("{}", *n as i64),
+            Json::Number(n) => n.to_string(),
+            Json::String(s) => crate::host::quote(s),
+            Json::Array(a) => format!(
+                "[{}]",
+                a.iter().map(Json::to_json).collect::<Vec<_>>().join(",")
+            ),
+            Json::Object(o) => format!(
+                "{{{}}}",
+                o.iter()
+                    .map(|(k, v)| format!("{}:{}", crate::host::quote(k), v.to_json()))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        }
+    }
+
     pub fn get(&self, key: &str) -> &Json {
         match self {
             Json::Object(m) => m.get(key).unwrap_or(&NULL),

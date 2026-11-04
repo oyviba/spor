@@ -81,9 +81,10 @@ pub(crate) fn graph(app: State<App>, limit: usize) -> Result<Graph, String> {
     let rows = assign_lanes(&commits, &chain, &remotes);
     let main = repo.main_branch();
     // The default branch's tip row: lane 0 is bold from there down.
-    let main_tip = main
-        .as_ref()
-        .and_then(|m| rows.iter().position(|r| r.commit.refs.iter().any(|x| x == m)));
+    let main_tip = main.as_ref().and_then(|m| {
+        rows.iter()
+            .position(|r| r.commit.refs.iter().any(|x| x == m))
+    });
 
     let mut palette: Vec<String> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
@@ -101,7 +102,12 @@ pub(crate) fn graph(app: State<App>, limit: usize) -> Result<Graph, String> {
         .iter()
         .enumerate()
         .map(|(ix, row)| {
-            let hint = row.commit.refs.first().cloned().unwrap_or_else(|| row.commit.hash.clone());
+            let hint = row
+                .commit
+                .refs
+                .first()
+                .cloned()
+                .unwrap_or_else(|| row.commit.hash.clone());
             let family_of = |lane: usize| -> String {
                 if lane == row.lane {
                     row.branch_family.clone()
@@ -280,10 +286,15 @@ fn switching(
     if let Some(name) = created {
         app.undo.push(
             format!("Create {name}"),
-            Undo::Created { name: name.to_string() },
+            Undo::Created {
+                name: name.to_string(),
+            },
         );
     }
-    let now = repo.tracking()?.branch.unwrap_or_else(|| target.to_string());
+    let now = repo
+        .tracking()?
+        .branch
+        .unwrap_or_else(|| target.to_string());
     if let Some(from) = from {
         app.undo
             .push(format!("Switch to {now}"), Undo::Checkout { from });
@@ -292,7 +303,9 @@ fn switching(
         (Some(_), false) => format!("Created and switched to {now}"),
         (Some(_), true) => format!("Stashed your changes, created {now} and switched to it"),
         (None, false) => format!("Switched to {now}"),
-        (None, true) => format!("Stashed your changes and switched to {now} — they're under Stashes in Changes"),
+        (None, true) => {
+            format!("Stashed your changes and switched to {now} — they're under Stashes in Changes")
+        }
     })
 }
 
@@ -301,7 +314,9 @@ fn switching(
 #[tauri::command(async)]
 pub(crate) fn checkout(app: State<App>, branch: String, stash: bool) -> Result<String, String> {
     let repo = app.repo()?;
-    switching(&app, &repo, &branch, stash, None, || repo.checkout_branch(&branch))
+    switching(&app, &repo, &branch, stash, None, || {
+        repo.checkout_branch(&branch)
+    })
 }
 
 /// Create a branch at `at` and switch to it.
@@ -325,7 +340,9 @@ pub(crate) fn create_branch(
 #[tauri::command(async)]
 pub(crate) fn delete_branch(app: State<App>, name: String) -> Result<String, String> {
     let repo = app.repo()?;
-    let sha = repo.delete_branch(&name, true).map_err(|e| first_line(&e))?;
+    let sha = repo
+        .delete_branch(&name, true)
+        .map_err(|e| first_line(&e))?;
     app.undo.push(
         format!("Delete {name}"),
         Undo::Deleted {
@@ -374,14 +391,18 @@ fn moving(
 pub(crate) fn cherry_pick(app: State<App>, hash: String) -> Result<String, String> {
     let repo = app.repo()?;
     let short: String = hash.chars().take(7).collect();
-    moving(&app, &repo, format!("Cherry-pick {short}"), || repo.cherry_pick(&hash))
+    moving(&app, &repo, format!("Cherry-pick {short}"), || {
+        repo.cherry_pick(&hash)
+    })
 }
 
 #[tauri::command(async)]
 pub(crate) fn revert(app: State<App>, hash: String) -> Result<String, String> {
     let repo = app.repo()?;
     let short: String = hash.chars().take(7).collect();
-    moving(&app, &repo, format!("Revert {short}"), || repo.revert(&hash))
+    moving(&app, &repo, format!("Revert {short}"), || {
+        repo.revert(&hash)
+    })
 }
 
 #[tauri::command(async)]

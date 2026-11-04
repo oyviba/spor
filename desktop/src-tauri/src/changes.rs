@@ -42,7 +42,12 @@ pub(crate) fn file_diff(app: State<App>, path: String, staged: bool) -> Result<S
     let entry = status
         .iter()
         .find(|e| e.path == path && e.status.is_staged() == staged)
-        .ok_or_else(|| format!("{path} has no {} changes", if staged { "staged" } else { "unstaged" }))?;
+        .ok_or_else(|| {
+            format!(
+                "{path} has no {} changes",
+                if staged { "staged" } else { "unstaged" }
+            )
+        })?;
     repo.diff_entry(entry)
 }
 
@@ -60,10 +65,14 @@ pub(crate) fn stage(app: State<App>, paths: Vec<String>) -> Result<(), String> {
 pub(crate) fn unstage(app: State<App>, paths: Vec<String>) -> Result<(), String> {
     let repo = app.repo()?;
     let status = repo.status()?;
-    for e in status.iter().filter(|e| e.status.is_staged() && paths.contains(&e.path)) {
+    for e in status
+        .iter()
+        .filter(|e| e.status.is_staged() && paths.contains(&e.path))
+    {
         repo.unstage(e).map_err(|e| first_line(&e))?;
     }
-    app.undo.push(label("Unstage", &paths), Undo::Unstaged(paths));
+    app.undo
+        .push(label("Unstage", &paths), Undo::Unstaged(paths));
     Ok(())
 }
 
@@ -76,7 +85,14 @@ pub(crate) struct Pos {
 
 impl Pos {
     fn get(&self) -> LinePos {
-        LinePos::new(if self.side == "old" { Side::Old } else { Side::New }, self.line)
+        LinePos::new(
+            if self.side == "old" {
+                Side::Old
+            } else {
+                Side::New
+            },
+            self.line,
+        )
     }
 }
 
@@ -100,7 +116,8 @@ pub(crate) fn stage_lines(
     let applied = repo
         .apply_lines(&path, kind, action, from.get(), to.get())
         .map_err(|e| first_line(&e))?;
-    app.undo.push(format!("{verb} {path}"), Undo::Lines(applied));
+    app.undo
+        .push(format!("{verb} {path}"), Undo::Lines(applied));
     Ok(())
 }
 
@@ -277,7 +294,11 @@ pub(crate) fn resolve(app: State<App>, path: String, how: String) -> Result<(), 
 
 #[tauri::command(async)]
 pub(crate) fn continue_operation(app: State<App>) -> Result<String, String> {
-    match app.repo()?.continue_operation().map_err(|e| first_line(&e))? {
+    match app
+        .repo()?
+        .continue_operation()
+        .map_err(|e| first_line(&e))?
+    {
         Outcome::Done => Ok("Done".into()),
         Outcome::Conflicts(files) => Err(format!(
             "The next commit conflicts too, in {}",

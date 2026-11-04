@@ -1,11 +1,50 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import type { AgentChoice, LineComment, RepoInfo, RunInfo } from "../../types";
-import { AgentIcon, ArrowUp, Clock, MessageSquare, Square, X } from "../../shared/Icons";
+import type { AgentChoice, Ask, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
+import { useStored } from "../../shared/hooks";
+import { AgentIcon, Alert, ArrowUp, Check, Clock, CornerDownRight, MessageSquare, Square, X } from "../../shared/Icons";
 
 export interface AgentSettings {
   agent: "claude" | "command" | "none";
   template: string;
-  allowCommands: boolean;
+  mode: Mode;
+}
+
+export const MODES: { id: Mode; label: string; hint: string }[] = [
+  { id: "supervised", label: "Supervised", hint: "Asks before commands and file edits" },
+  { id: "acceptEdits", label: "Auto-accept edits", hint: "Edits freely, asks before commands" },
+  { id: "auto", label: "Auto", hint: "Claude's own review approves routine actions and asks about the rest" },
+  { id: "full", label: "Full access", hint: "Never asks. git push is refused in every mode" },
+];
+
+/** The agent settings new runs use, kept between sessions. Settings saved
+ * before modes existed ("Edits + commands") carry over. */
+export function useAgentSettings(): [AgentSettings, (s: AgentSettings) => void] {
+  const [stored, set] = useStored<AgentSettings & { allowCommands?: boolean }>("agent", {
+    agent: "claude",
+    template: "",
+    mode: "acceptEdits",
+  });
+  const mode = stored.mode ?? (stored.allowCommands ? "full" : "acceptEdits");
+  return [{ agent: stored.agent, template: stored.template, mode }, set];
+}
+
+export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
+  const current = MODES.find((m) => m.id === mode) ?? MODES[1];
+  return (
+    <select
+      className={`chip-select mode-${mode}`}
+      value={mode}
+      onChange={(e) => onChange(e.target.value as Mode)}
+      title={`${current.label}: ${current.hint}`}
+      aria-label="Permission mode"
+    >
+      {MODES.map((m) => (
+        <option key={m.id} value={m.id} title={m.hint}>
+          {m.label}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 export function choiceOf(s: AgentSettings): AgentChoice {
@@ -22,10 +61,19 @@ interface Props {
   onJumpToComment: (c: LineComment) => void;
   queued: string[];
   onUnqueue: (index: number) => void;
+  /** Questions the agent is waiting on (it runs under the host). */
+  asks: Ask[];
+  onAnswer: (ask: Ask, allow: boolean, message?: string) => void;
+  /** The running agent's mode, changeable while it works; null otherwise. */
+  liveMode: Mode | null;
+  onLiveMode: (m: Mode) => void;
   /** Start the task's own prompt (no runs yet). */
   onStart: () => void;
   /** A follow-up; queued by the caller when the agent is working. */
   onSend: (text: string) => void;
+  /** The running agent can take a message into the turn it's on (#22). */
+  canSteer: boolean;
+  onSteer: (text: string) => void;
   onStop: () => void;
 }
 
@@ -42,6 +90,25 @@ export function withComments(text: string, comments: LineComment[]): string {
   return `${text.trim()}${text.trim() ? "\n\n" : ""}Comments on the changes:\n${notes}`;
 }
 
+/** "run `make test`", "edit greet.py": what a tool use is, for a question. */
+export function verbOf(tool: string): string {
+  switch (tool) {
+    case "Bash":
+      return "run a command";
+    case "Edit":
+    case "MultiEdit":
+    case "Write":
+    case "NotebookEdit":
+      return "edit a file";
+    case "WebFetch":
+      return "fetch a page";
+    case "WebSearch":
+      return "search the web";
+    default:
+      return `use ${tool}`;
+  }
+}
+
 export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, ref) {
   const [text, setText] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
@@ -50,29 +117,50 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
   const running = p.latest?.state === "running";
   const hasContent = text.trim().length > 0 || p.comments.length > 0;
   const neverRan = p.latest == null;
-  // One button that follows the task's state.
-  const action: "start" | "send" | "queue" | "stop" = running
-    ? hasContent
-      ? "queue"
-      : "stop"
-    : neverRan && !hasContent
-      ? "start"
-      : "send";
+  const ask = p.asks[0];
+  // While it works, a message waits for the next turn (queue) or goes into
+  // this one (steer): your default on ↩, the other on ⌘↩ (#22).
+  const [followUp, setFollowUp] = useStored<"queue" | "steer">("followUp", "queue");
+  const later = followUp === "steer" && p.canSteer ? "steer" : "queue";
+  const other = later === "steer" ? "queue" : p.canSteer ? "steer" : "queue";
+  // One button that follows the task's state. A question waiting: typing
+  // answers it with a "no, do this instead".
+  const actionFor = (flip: boolean): "start" | "send" | "queue" | "steer" | "stop" | "reply" =>
+    ask && hasContent
+      ? "reply"
+      : running
+        ? hasContent
+          ? flip
+            ? other
+            : later
+          : "stop"
+        : neverRan && !hasContent
+          ? "start"
+          : "send";
+  const action = actionFor(false);
   const disabled = (action === "send" && !hasContent) || (action === "start" && p.settings.agent === "none");
 
-  const submit = () => {
+  const submit = (flip = false) => {
+    const act = actionFor(flip);
     if (disabled) return;
-    if (action === "stop") return p.onStop();
-    if (action === "start") return p.onStart();
-    p.onSend(withComments(text, p.comments));
+    if (act === "stop") return p.onStop();
+    if (act === "start") return p.onStart();
+    const message = withComments(text, p.comments);
+    if (act === "reply") p.onAnswer(ask!, false, message);
+    else if (act === "steer") p.onSteer(message);
+    else p.onSend(message);
     setText("");
   };
 
-  const placeholder = running
-    ? "Add a follow-up — it's sent when the agent finishes"
-    : neverRan
-      ? "Start the agent on this task, or add to the prompt first…"
-      : "Tell the agent what to change…";
+  const placeholder = ask
+    ? "Or say what to do instead — that answers no"
+    : running
+      ? p.canSteer
+        ? "Steer the agent, or queue a follow-up for when it's done"
+        : "Add a follow-up — it's sent when the agent finishes"
+      : neverRan
+        ? "Start the agent on this task, or add to the prompt first…"
+        : "Tell the agent what to change…";
 
   const followUpAgent = p.latest?.agent;
 
@@ -93,7 +181,25 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
             ))}
           </div>
         )}
-        <div className="composer">
+        <div className={`composer${ask ? " asking" : ""}`}>
+          {ask && (
+            <div className="ask-card" role="alert">
+              <Alert size={14} />
+              <div className="ask-text">
+                <div>
+                  <b>Wants to {verbOf(ask.tool)}</b>
+                  {p.asks.length > 1 && <span className="muted"> · {p.asks.length - 1} more waiting</span>}
+                </div>
+                {ask.detail && <code className="ask-detail">{ask.detail}</code>}
+              </div>
+              <button className="ghost small" onClick={() => p.onAnswer(ask, false)}>
+                <X size={11} /> Deny
+              </button>
+              <button className="primary small" onClick={() => p.onAnswer(ask, true)}>
+                <Check size={11} /> Allow
+              </button>
+            </div>
+          )}
           {p.comments.length > 0 && (
             <div className="chips">
               {p.comments.map((c) => (
@@ -126,7 +232,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
-                submit();
+                // ⌘↩ / Ctrl+↩: the other of queue and steer.
+                submit(e.metaKey || e.ctrlKey);
               }
             }}
           />
@@ -149,27 +256,46 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
                 <option value="none">No agent</option>
               </select>
             )}
-            <button
-              className={`chip-toggle${p.settings.allowCommands ? " on" : ""}`}
-              onClick={() => p.onSettings({ ...p.settings, allowCommands: !p.settings.allowCommands })}
-              title="Claude Code may always edit files. Shell commands are refused unless this is on; git push never runs."
-            >
-              {p.settings.allowCommands ? "Edits + commands" : "Edits only"}
-            </button>
+            <ModePicker
+              mode={p.liveMode ?? p.settings.mode}
+              onChange={(mode) => {
+                p.onSettings({ ...p.settings, mode });
+                if (p.liveMode) p.onLiveMode(mode);
+              }}
+            />
+            {running && p.canSteer && !ask && (
+              <button
+                className="chip-toggle"
+                onClick={() => setFollowUp(followUp === "steer" ? "queue" : "steer")}
+                title="What ↩ does while the agent works: queue the message for its next turn, or steer the turn it's on. ⌘↩ does the other."
+              >
+                ↩ {later === "steer" ? "steers" : "queues"}
+              </button>
+            )}
             <span className="flex-1" />
-            <span className="hint-keys">{action === "queue" ? "↩ queue" : "↩ send · ⇧↩ new line"}</span>
+            <span className="hint-keys">
+              {action === "queue" || action === "steer"
+                ? `↩ ${action}${other !== action ? ` · ⌘↩ ${other}` : ""}`
+                : action === "reply"
+                  ? "↩ deny with this reply"
+                  : "↩ send · ⇧↩ new line"}
+            </span>
             <button
               className={`send ${action}`}
-              onClick={submit}
+              onClick={() => submit()}
               disabled={disabled}
               title={
                 action === "stop"
-                  ? "Stop the agent"
+                  ? "Stop the agent: it ends the turn and keeps the conversation"
                   : action === "queue"
                     ? "Queue: sent when the agent finishes"
-                    : action === "start"
-                      ? "Start the agent on the task's prompt"
-                      : "Send to the agent"
+                    : action === "steer"
+                      ? "Steer: the agent takes it into the turn it's on"
+                      : action === "start"
+                        ? "Start the agent on the task's prompt"
+                        : action === "reply"
+                          ? "Deny, and tell the agent this instead"
+                          : "Send to the agent"
               }
             >
               {action === "stop" ? (
@@ -178,6 +304,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
                 <span className="send-label">Start</span>
               ) : action === "queue" ? (
                 <Clock size={13} />
+              ) : action === "steer" ? (
+                <CornerDownRight size={14} />
               ) : (
                 <ArrowUp size={14} />
               )}
