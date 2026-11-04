@@ -1885,6 +1885,18 @@ fn render_entry(entry: &Entry, cx: &App) -> AnyElement {
             .text_sm()
             .child(format!("You: {text}"))
             .into_any_element(),
+        Entry::Setup { ok, code } => div()
+            .text_xs()
+            .text_color(match ok {
+                Some(false) => theme.red,
+                _ => theme.muted_foreground,
+            })
+            .child(match (ok, code) {
+                (None, _) => "Setting up the folder…".to_string(),
+                (Some(true), _) => "Folder set up".to_string(),
+                (Some(false), c) => format!("Setup failed (exit {})", c.unwrap_or(1)),
+            })
+            .into_any_element(),
     }
 }
 
