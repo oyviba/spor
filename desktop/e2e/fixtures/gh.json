@@ -1,0 +1,391 @@
+{
+ "me": "you",
+ "pulls": [
+  {
+   "number": 12,
+   "title": "Let greet() take an optional title",
+   "author": {
+    "login": "you"
+   },
+   "headRefName": "agent/let-greet-take-optional",
+   "baseRefName": "main",
+   "state": "OPEN",
+   "isDraft": false,
+   "reviewDecision": "",
+   "statusCheckRollup": [
+    {
+     "__typename": "CheckRun",
+     "name": "lint",
+     "workflowName": "CI",
+     "status": "COMPLETED",
+     "conclusion": "SUCCESS",
+     "detailsUrl": "https://github.com/demo/greeter/actions/runs/501/job/9000",
+     "startedAt": "2026-11-04T09:00:00Z",
+     "completedAt": "2026-11-04T09:02:00Z"
+    },
+    {
+     "__typename": "CheckRun",
+     "name": "test",
+     "workflowName": "CI",
+     "status": "COMPLETED",
+     "conclusion": "FAILURE",
+     "detailsUrl": "https://github.com/demo/greeter/actions/runs/501/job/9001",
+     "startedAt": "2026-11-04T09:00:00Z",
+     "completedAt": "2026-11-04T09:02:00Z"
+    }
+   ],
+   "updatedAt": "2026-11-04T12:00:00Z",
+   "additions": 8,
+   "deletions": 2,
+   "url": "https://github.com/demo/greeter/pull/12",
+   "body": "Made by a spor agent task.",
+   "mergeable": "MERGEABLE",
+   "changedFiles": 2,
+   "commits": [
+    {
+     "oid": "a"
+    }
+   ],
+   "reviews": [
+    {
+     "author": {
+      "login": "ada"
+     },
+     "body": "Looks right; one nit: make title keyword-only.",
+     "submittedAt": "2026-11-04T10:30:00Z",
+     "state": "COMMENTED"
+    }
+   ],
+   "comments": [],
+   "reviewRequests": [
+    "you"
+   ],
+   "diff": "diff --git a/greet.py b/greet.py\n--- a/greet.py\n+++ b/greet.py\n@@ -1,3 +1,5 @@\n-def greet(name):\n-    \"\"\"Say hello.\"\"\"\n+def greet(name, title=None):\n+    \"\"\"Say hello, with a title if there is one.\"\"\"\n+    if title:\n+        name = f\"{title} {name}\"\n     return f\"Hello, {name}!\"\ndiff --git a/test_greet.py b/test_greet.py\nnew file mode 100644\n--- /dev/null\n+++ b/test_greet.py\n@@ -0,0 +1,5 @@\n+from greet import greet\n+\n+\n+def test_title():\n+    assert greet(\"Ada\", title=\"Dr\") == \"Hello, Dr Ada!\"\n"
+  },
+  {
+   "number": 11,
+   "title": "Fix the install line in the README",
+   "author": {
+    "login": "ada"
+   },
+   "headRefName": "fix/readme-install",
+   "baseRefName": "main",
+   "state": "OPEN",
+   "isDraft": false,
+   "reviewDecision": "APPROVED",
+   "statusCheckRollup": [
+    {
+     "__typename": "CheckRun",
+     "name": "lint",
+     "workflowName": "CI",
+     "status": "COMPLETED",
+     "conclusion": "SUCCESS",
+     "detailsUrl": "https://github.com/demo/greeter/actions/runs/500/job/8000",
+     "startedAt": "2026-11-04T09:00:00Z",
+     "completedAt": "2026-11-04T09:02:00Z"
+    },
+    {
+     "__typename": "CheckRun",
+     "name": "test",
+     "workflowName": "CI",
+     "status": "COMPLETED",
+     "conclusion": "SUCCESS",
+     "detailsUrl": "https://github.com/demo/greeter/actions/runs/500/job/8001",
+     "startedAt": "2026-11-04T09:00:00Z",
+     "completedAt": "2026-11-04T09:02:00Z"
+    }
+   ],
+   "updatedAt": "2026-11-04T11:00:00Z",
+   "additions": 1,
+   "deletions": 1,
+   "url": "https://github.com/demo/greeter/pull/11",
+   "body": "",
+   "mergeable": "MERGEABLE",
+   "changedFiles": 1,
+   "commits": [
+    {
+     "oid": "a"
+    }
+   ],
+   "reviews": [],
+   "comments": [],
+   "reviewRequests": [
+    "you"
+   ],
+   "diff": "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1,3 +1,3 @@\n # greeter\n Says hello.\n-Install with pip.\n+Install with uv.\n"
+  },
+  {
+   "number": 10,
+   "title": "Add farewell()",
+   "author": {
+    "login": "grace"
+   },
+   "headRefName": "feat/farewell",
+   "baseRefName": "main",
+   "state": "OPEN",
+   "isDraft": true,
+   "reviewDecision": "",
+   "statusCheckRollup": [
+    {
+     "__typename": "CheckRun",
+     "name": "test",
+     "workflowName": "CI",
+     "status": "IN_PROGRESS",
+     "conclusion": null,
+     "detailsUrl": "https://github.com/demo/greeter/actions/runs/502/job/9100",
+     "startedAt": "2026-11-04T09:00:00Z",
+     "completedAt": null
+    }
+   ],
+   "updatedAt": "2026-11-04T10:00:00Z",
+   "additions": 4,
+   "deletions": 0,
+   "url": "https://github.com/demo/greeter/pull/10",
+   "body": "",
+   "mergeable": "MERGEABLE",
+   "changedFiles": 1,
+   "commits": [
+    {
+     "oid": "a"
+    }
+   ],
+   "reviews": [],
+   "comments": [],
+   "reviewRequests": [],
+   "diff": ""
+  },
+  {
+   "number": 9,
+   "title": "Shout instead of greeting",
+   "author": {
+    "login": "grace"
+   },
+   "headRefName": "try/shout",
+   "baseRefName": "main",
+   "state": "CLOSED",
+   "isDraft": false,
+   "reviewDecision": "",
+   "statusCheckRollup": [],
+   "updatedAt": "2026-11-04T19:00:00Z",
+   "additions": 3,
+   "deletions": 1,
+   "url": "https://github.com/demo/greeter/pull/9",
+   "body": "",
+   "mergeable": "MERGEABLE",
+   "changedFiles": 1,
+   "commits": [
+    {
+     "oid": "a"
+    }
+   ],
+   "reviews": [],
+   "comments": [],
+   "reviewRequests": [],
+   "diff": ""
+  }
+ ],
+ "runs": [
+  {
+   "databaseId": 502,
+   "number": 89,
+   "workflowName": "CI",
+   "displayTitle": "Add farewell()",
+   "headBranch": "feat/farewell",
+   "headSha": "0000000000000000000000000000000000000000",
+   "event": "pull_request",
+   "status": "in_progress",
+   "conclusion": "",
+   "attempt": 1,
+   "createdAt": "2026-11-04T09:00:00Z",
+   "updatedAt": "2026-11-04T09:03:00Z",
+   "url": "https://github.com/demo/greeter/actions/runs/502",
+   "jobs": [
+    {
+     "databaseId": 9100,
+     "name": "test",
+     "status": "in_progress",
+     "conclusion": "",
+     "startedAt": "2026-11-04T09:00:10Z",
+     "completedAt": null,
+     "url": "https://github.com/demo/greeter/actions/runs/502/job/9100",
+     "steps": [
+      {
+       "number": 1,
+       "name": "Set up job",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "number": 2,
+       "name": "Checkout",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "number": 3,
+       "name": "Run tests",
+       "status": "in_progress",
+       "conclusion": ""
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "databaseId": 501,
+   "number": 88,
+   "workflowName": "CI",
+   "displayTitle": "Let greet() take an optional title",
+   "headBranch": "agent/let-greet-take-optional",
+   "headSha": "0000000000000000000000000000000000000000",
+   "event": "pull_request",
+   "status": "completed",
+   "conclusion": "failure",
+   "attempt": 1,
+   "createdAt": "2026-11-04T09:00:00Z",
+   "updatedAt": "2026-11-04T09:03:00Z",
+   "url": "https://github.com/demo/greeter/actions/runs/501",
+   "jobs": [
+    {
+     "databaseId": 9000,
+     "name": "lint",
+     "status": "completed",
+     "conclusion": "success",
+     "startedAt": "2026-11-04T09:00:10Z",
+     "completedAt": "2026-11-04T09:02:00Z",
+     "url": "https://github.com/demo/greeter/actions/runs/501/job/9000",
+     "steps": [
+      {
+       "number": 1,
+       "name": "Set up job",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "number": 2,
+       "name": "Checkout",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "number": 3,
+       "name": "Run ruff",
+       "status": "completed",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "databaseId": 9001,
+     "name": "test",
+     "status": "completed",
+     "conclusion": "failure",
+     "startedAt": "2026-11-04T09:00:10Z",
+     "completedAt": "2026-11-04T09:02:00Z",
+     "url": "https://github.com/demo/greeter/actions/runs/501/job/9001",
+     "steps": [
+      {
+       "number": 1,
+       "name": "Set up job",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "number": 2,
+       "name": "Checkout",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "number": 3,
+       "name": "Run tests",
+       "status": "completed",
+       "conclusion": "failure"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "databaseId": 500,
+   "number": 87,
+   "workflowName": "CI",
+   "displayTitle": "Fix the install line in the README",
+   "headBranch": "main",
+   "headSha": "0000000000000000000000000000000000000000",
+   "event": "push",
+   "status": "completed",
+   "conclusion": "success",
+   "attempt": 1,
+   "createdAt": "2026-11-04T09:00:00Z",
+   "updatedAt": "2026-11-04T09:03:00Z",
+   "url": "https://github.com/demo/greeter/actions/runs/500",
+   "jobs": [
+    {
+     "databaseId": 8000,
+     "name": "lint",
+     "status": "completed",
+     "conclusion": "success",
+     "startedAt": "2026-11-04T09:00:10Z",
+     "completedAt": "2026-11-04T09:02:00Z",
+     "url": "https://github.com/demo/greeter/actions/runs/500/job/8000",
+     "steps": [
+      {
+       "number": 1,
+       "name": "Set up job",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "number": 2,
+       "name": "Checkout",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "number": 3,
+       "name": "Run ruff",
+       "status": "completed",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "databaseId": 8001,
+     "name": "test",
+     "status": "completed",
+     "conclusion": "success",
+     "startedAt": "2026-11-04T09:00:10Z",
+     "completedAt": "2026-11-04T09:02:00Z",
+     "url": "https://github.com/demo/greeter/actions/runs/500/job/8001",
+     "steps": [
+      {
+       "number": 1,
+       "name": "Set up job",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "number": 2,
+       "name": "Checkout",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "number": 3,
+       "name": "Run tests",
+       "status": "completed",
+       "conclusion": "success"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "logs": {
+  "9001": "2026-11-04T09:01:00.0000000Z ##[group]Set up job\n2026-11-04T09:01:01.0000000Z Current runner version: '2.320.0'\n2026-11-04T09:01:02.0000000Z ##[endgroup]\n2026-11-04T09:01:03.0000000Z ##[group]Checkout\n2026-11-04T09:01:04.0000000Z Syncing repository: demo/greeter\n2026-11-04T09:01:05.0000000Z ##[endgroup]\n2026-11-04T09:01:06.0000000Z ##[group]Run python -m pytest -q\n2026-11-04T09:01:07.0000000Z [command]python -m pytest -q\n2026-11-04T09:01:08.0000000Z F.\n2026-11-04T09:01:09.0000000Z =================================== FAILURES ===================================\n2026-11-04T09:01:00.0000000Z ____________________________________ test_title ____________________________________\n2026-11-04T09:01:01.0000000Z     def test_title():\n2026-11-04T09:01:02.0000000Z >       assert greet(\"Ada\", title=\"Dr\") == \"Hello, Dr. Ada!\"\n2026-11-04T09:01:03.0000000Z E       AssertionError: assert 'Hello, Dr Ada!' == 'Hello, Dr. Ada!'\n2026-11-04T09:01:04.0000000Z 1 failed, 1 passed in 0.03s\n2026-11-04T09:01:05.0000000Z ##[error]Process completed with exit code 1.\n2026-11-04T09:01:06.0000000Z ##[endgroup]\n",
+  "9000": "2026-11-04T09:01:00.0000000Z ##[group]Run ruff check .\n2026-11-04T09:01:01.0000000Z [command]ruff check .\n2026-11-04T09:01:02.0000000Z All checks passed!\n2026-11-04T09:01:03.0000000Z ##[endgroup]\n",
+  "8000": "2026-11-04T09:01:00.0000000Z ##[group]Run ruff check .\n2026-11-04T09:01:01.0000000Z All checks passed!\n2026-11-04T09:01:02.0000000Z ##[endgroup]\n",
+  "8001": "2026-11-04T09:01:00.0000000Z ##[group]Run python -m pytest -q\n2026-11-04T09:01:01.0000000Z 2 passed in 0.02s\n2026-11-04T09:01:02.0000000Z ##[endgroup]\n"
+ }
+}
