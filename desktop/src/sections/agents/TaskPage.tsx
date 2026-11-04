@@ -46,6 +46,8 @@ interface Props {
   onRunChanges: (index: number) => void;
   onUndoRun: () => void;
   onAnswer: (ask: Ask, allow: boolean, message?: string) => void;
+  /** Allow it, and don't ask again about this kind of action this session. */
+  onAllowForSession: (ask: Ask) => void;
   onLiveMode: (mode: Mode) => void;
   onSteer: (text: string) => void;
   onRetrySetup: () => void;
@@ -162,6 +164,7 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
           onUnqueue={p.onUnqueue}
           asks={p.detail.asks}
           onAnswer={p.onAnswer}
+          onAllowForSession={p.onAllowForSession}
           liveMode={p.detail.listening ? (t.mode ?? null) : null}
           onLiveMode={p.onLiveMode}
           canSteer={p.detail.listening}

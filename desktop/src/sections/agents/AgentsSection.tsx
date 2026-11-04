@@ -271,6 +271,9 @@ export function AgentsSection() {
             onAnswer={(ask, allow, message) =>
               api.answerAsk(shown.task.id, ask.id, allow, message ?? "").then(afterChange, fail)
             }
+            onAllowForSession={(ask) =>
+              api.answerAsk(shown.task.id, ask.id, true, "", true).then(afterChange, fail)
+            }
             onRetrySetup={() =>
               api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode).then(afterChange, fail)
             }

@@ -176,11 +176,14 @@ pub(crate) enum Item {
         id: String,
         tool: String,
         detail: String,
+        /// What "Allow for this session" covers, if offered (#40).
+        session: Option<String>,
     },
     Answer {
         id: String,
         allow: bool,
         message: String,
+        always: bool,
     },
     Steer {
         text: String,
@@ -216,12 +219,28 @@ impl Item {
                 seconds,
             },
             Entry::Output(text) => Item::Output { text },
-            Entry::Ask { id, tool, detail } => Item::Ask {
+            Entry::Ask {
+                id,
+                tool,
+                detail,
+                session,
+            } => Item::Ask {
                 id,
                 tool,
                 detail: detail.replace(folder, ""),
+                session,
             },
-            Entry::Answer { id, allow, message } => Item::Answer { id, allow, message },
+            Entry::Answer {
+                id,
+                allow,
+                message,
+                always,
+            } => Item::Answer {
+                id,
+                allow,
+                message,
+                always,
+            },
             Entry::Steer(text) => Item::Steer { text },
             Entry::Setup { ok, code } => Item::Setup { ok, code },
         }
@@ -248,6 +267,8 @@ pub(crate) struct AskInfo {
     id: String,
     tool: String,
     detail: String,
+    /// What "Allow for this session" would cover; None: only once.
+    session: Option<String>,
 }
 
 /// The UI's names for permission modes.
@@ -331,6 +352,7 @@ pub(crate) fn task_detail(app: State<App>, id: String) -> Result<TaskDetail, Str
                 id: a.id,
                 tool: a.tool,
                 detail: a.detail.replace(&folder, ""),
+                session: a.session,
             })
             .collect(),
         listening: runs.listening(),
@@ -568,7 +590,8 @@ pub(crate) fn undo_run(app: State<App>, id: String) -> Result<String, String> {
 }
 
 /// Answer a question the agent asked: allow, or deny (with what to do
-/// instead, if `message` says).
+/// instead, if `message` says). `always`: allow it for the rest of the
+/// session (#40).
 #[tauri::command(async)]
 pub(crate) fn answer_ask(
     app: State<App>,
@@ -576,11 +599,16 @@ pub(crate) fn answer_ask(
     request_id: String,
     allow: bool,
     message: String,
+    always: bool,
 ) -> Result<(), String> {
     let (tasks, task) = app.task(&id)?;
-    Runs::of(&tasks, &task)
-        .answer(&request_id, allow, message.trim())
-        .map_err(|e| first_line(&e))
+    let runs = Runs::of(&tasks, &task);
+    if allow && always {
+        runs.allow_for_session(&request_id)
+    } else {
+        runs.answer(&request_id, allow, message.trim())
+    }
+    .map_err(|e| first_line(&e))
 }
 
 /// Change the running agent's permission mode.

@@ -259,7 +259,15 @@ function BlockView({
           )}
         </span>
         <span className="ask-outcome">
-          {a ? (a.allow ? "Allowed" : a.message ? `Denied: ${a.message}` : "Denied") : "Waiting for you"}
+          {a
+            ? a.allow
+              ? a.always
+                ? "Allowed for this session"
+                : "Allowed"
+              : a.message
+                ? `Denied: ${a.message}`
+                : "Denied"
+            : "Waiting for you"}
         </span>
       </div>
     );
