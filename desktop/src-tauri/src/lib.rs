@@ -8,6 +8,7 @@ mod changes;
 mod github;
 mod history;
 mod undo;
+mod watch;
 
 use serde::Serialize;
 use spor::git::Repo;
@@ -20,6 +21,17 @@ use tauri::State;
 pub(crate) struct App {
     repo: Mutex<Option<Repo>>,
     undo: undo::Stack,
+    /// The open repository's watch (#38); replaced when another opens.
+    watch: Mutex<Option<watch::Watch>>,
+}
+
+impl App {
+    /// Watch `repo` instead of whatever was watched. Without a watch (it
+    /// couldn't start) the UI's slow poll still notices changes.
+    fn watch(&self, handle: tauri::AppHandle, repo: &Repo) {
+        let new = watch::start(handle, repo).ok();
+        *self.watch.lock().unwrap() = new;
+    }
 }
 
 impl App {
@@ -71,10 +83,11 @@ fn current_repo(app: State<App>) -> Option<RepoInfo> {
 }
 
 #[tauri::command(async)]
-fn open_repo(app: State<App>, path: String) -> Result<RepoInfo, String> {
+fn open_repo(app: State<App>, handle: tauri::AppHandle, path: String) -> Result<RepoInfo, String> {
     let path = expand_home(path.trim());
     let repo = Repo::discover(&path).map_err(|e| first_line(&e))?;
     let info = repo_info(&repo);
+    app.watch(handle, &repo);
     *app.repo.lock().unwrap() = Some(repo);
     app.undo.clear();
     Ok(info)
@@ -213,6 +226,15 @@ pub fn run() {
         *app.repo.lock().unwrap() = Some(repo);
     }
     tauri::Builder::default()
+        .setup(|tauri_app| {
+            use tauri::Manager as _;
+            let app = tauri_app.state::<App>();
+            let repo = app.repo.lock().unwrap().clone();
+            if let Some(repo) = repo {
+                app.watch(tauri_app.handle().clone(), &repo);
+            }
+            Ok(())
+        })
         .manage(app)
         .invoke_handler(tauri::generate_handler![
             current_repo,

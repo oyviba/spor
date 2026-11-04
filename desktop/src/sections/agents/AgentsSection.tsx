@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { LineComment, RunPatch, TaskDetail, TaskSummary } from "../../types";
 import { activityAt } from "./status";
-import { usePoll, useStored } from "../../shared/hooks";
+import { useRepoChanges, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { Sidebar } from "./Sidebar";
 import { NewTask } from "./NewTask";
@@ -43,7 +43,8 @@ export function AgentsSection() {
   const refreshTasks = useCallback(async () => {
     setTasks(await api.listTasks());
   }, []);
-  usePoll(refreshTasks, 1500, [repo.root]);
+  // Task files, agents' logs, and task branches moving.
+  useRepoChanges(refreshTasks, ["tasks", "refs"], 1500, [repo.root]);
 
   const selected = tasks.find((t) => t.id === selectedId);
   const running = selected?.run?.state === "running";
@@ -59,7 +60,7 @@ export function AgentsSection() {
       if (String(e).startsWith("No task")) setView({ kind: "new" });
     }
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
-  usePoll(refreshDetail, running ? 1000 : 3000, [selectedId], !!selectedId);
+  useRepoChanges(refreshDetail, ["tasks", "refs"], running ? 1000 : 3000, [selectedId], !!selectedId);
   useEffect(() => {
     setDetail(null);
     setTab("conversation");

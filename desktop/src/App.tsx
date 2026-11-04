@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
 import type { RepoInfo, RepoState } from "./types";
-import { usePoll, useStored } from "./shared/hooks";
+import { useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, Play, PullRequest, X } from "./shared/Icons";
 import { AgentsSection } from "./sections/agents/AgentsSection";
@@ -73,10 +73,10 @@ export function App() {
       // Shown by whatever section fails next; the chrome just goes quiet.
     }
   }, [repo]);
-  usePoll(refresh, 2000, [repo?.root], !!repo);
+  useRepoChanges(refresh, ["refs", "index"], 2000, [repo?.root], !!repo);
 
   // Rail counts: files changed, agents working.
-  usePoll(
+  useRepoChanges(
     async () => {
       const [files, tasks] = await Promise.all([api.status(), api.listTasks()]);
       const waiting = tasks.filter((t) => t.asks > 0);
@@ -98,8 +98,9 @@ export function App() {
       }
       asking.current = new Set(waiting.map((t) => t.id));
     },
+    ["index", "worktree", "tasks"],
     2000,
-    [repo?.root, state?.index],
+    [repo?.root],
     !!repo,
   );
 
