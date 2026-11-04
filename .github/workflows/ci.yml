@@ -54,3 +54,60 @@ jobs:
         with:
           name: Spor-macos
           path: target/macos/Spor-*-macos.zip
+
+  # The Tauri app in desktop/: its own Cargo workspace (the root steps don't
+  # touch it), the web UI, and the end-to-end suites against the real app
+  # under Xvfb, with stand-in `claude` and `gh` from desktop/e2e/bin.
+  desktop:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: Install Tauri build and test dependencies
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            librsvg2-dev webkit2gtk-driver xvfb jq
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - name: Install UI dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build the UI (tsc + vite)
+        run: pnpm build
+      - name: UI tests
+        run: pnpm test
+      - name: Format (backend)
+        working-directory: desktop/src-tauri
+        run: cargo fmt --check
+      - name: Clippy (backend)
+        working-directory: desktop/src-tauri
+        run: cargo clippy --locked -- -D warnings
+      # custom-protocol embeds dist/ instead of loading the dev server.
+      - name: Build the app
+        working-directory: desktop/src-tauri
+        run: cargo build --locked --features tauri/custom-protocol
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+      - name: End-to-end suites
+        run: xvfb-run -a e2e/run-all.sh src-tauri/target/debug/spor-desktop e2e-shots
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-e2e-screenshots
+          path: desktop/e2e-shots
+          if-no-files-found: ignore

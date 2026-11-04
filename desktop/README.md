@@ -67,23 +67,27 @@ finishes while you watch.
 ## Tests
 
 - `pnpm test`: the transcript folding and summaries.
-- `e2e/run.mjs` (agent tasks) and `e2e/sections.mjs` (Changes, History, a
-  conflicting merge, stashes, pull requests and Actions) drive the real app
-  through WebDriver and check the repository with git at every step. They
-  need `tauri-driver` (`cargo install tauri-driver`) and, on Linux,
-  `WebKitWebDriver` (`webkit2gtk-driver`). Point them at **throwaway**
-  repositories: they commit, merge and land.
+- `e2e/run.mjs` (agent tasks), `e2e/setup.mjs` (setup scripts) and
+  `e2e/sections.mjs` (Changes, History, a conflicting merge, stashes, pull
+  requests and Actions) drive the real app through WebDriver and check the
+  repository with git at every step. CI runs all three on Linux under Xvfb.
+
+  They need no real agent or GitHub: `e2e/bin` has stand-ins. `claude` is a
+  Python script that speaks Claude Code's stream-json both ways (it edits,
+  asks before running the tests, takes steering), and `gh` answers from
+  `e2e/fixtures/gh.json`, running spor's own `--jq` expressions through
+  `jq` and recording what's done in `$FAKE_GH_STATE`. Spor's parsers treat
+  them exactly like the real tools. `e2e/make-repos.sh` builds the scratch
+  repositories each suite expects, and `e2e/run-all.sh` puts it together:
 
   ```sh
-  tauri-driver &
-  SPOR_REPO=/tmp/scratch node e2e/run.mjs "$PWD/src-tauri/target/debug/spor-desktop" shots/
-  SPOR_REPO=/tmp/demo FAKE_GH_STATE=/tmp/gh.json node e2e/sections.mjs "$PWD/src-tauri/target/debug/spor-desktop" shots/
+  cargo install tauri-driver   # Linux also needs WebKitWebDriver (webkit2gtk-driver)
+  pnpm build && (cd src-tauri && cargo build --features tauri/custom-protocol)
+  xvfb-run -a e2e/run-all.sh src-tauri/target/debug/spor-desktop e2e-shots   # or: … e2e-shots sections
   ```
 
-  `sections.mjs` describes the repository it expects at its top. Neither
-  needs a real agent or GitHub. Put stand-ins first on `PATH`: a `claude`
-  that prints Claude Code's `stream-json` events, and a `gh` that prints what
-  `gh … --jq` would. Spor's parsers treat them exactly like the real tools.
+  `custom-protocol` builds the UI into the app; without it a debug build
+  loads it from `pnpm dev`. Screenshots of each step land in `e2e-shots/`.
 
 ## Layout
 

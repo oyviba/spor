@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""A stand-in for Claude Code, for the end-to-end suites.
+
+It speaks the same stream-json both ways that spor's agent host talks to
+the real `claude -p --input-format stream-json --permission-prompt-tool
+stdio`: user messages and control requests come in on stdin, events and
+permission questions go out on stdout. What it does depends on what it's
+asked:
+
+- "...optional title..." (the task): edits greet.py and adds a test,
+  takes steering messages for a few seconds ("Noted: ..."), then asks to
+  run `python -m pytest -q` and says "The tests pass." if allowed.
+- "...farewell..." (feedback with a line comment): adds farewell().
+- anything else: says it looked, and finishes.
+
+Without `--input-format stream-json` (the one-shot wrapper) it does the
+same with the prompt from `-p`, and can't be asked or steered.
+"""
+
+import json
+import os
+import select
+import sys
+import time
+
+args = sys.argv[1:]
+streaming = "--input-format" in args
+session_n = 1
+if "--resume" in args:
+    # --fork-session: a new session each follow-up.
+    session_n = int(args[args.index("--resume") + 1].rsplit("-", 1)[-1]) + 1
+session = f"sess-{session_n}"
+
+
+def emit(event):
+    sys.stdout.write(json.dumps(event) + "\n")
+    sys.stdout.flush()
+
+
+def say(text):
+    emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+
+
+def tool(name, **inp):
+    emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}})
+
+
+def result(text, ok=True):
+    emit(
+        {
+            "type": "result",
+            "subtype": "success" if ok else "error_during_execution",
+            "is_error": not ok,
+            "result": text,
+            "total_cost_usd": 0.02,
+            "num_turns": 3,
+            "duration_ms": 4000,
+            "session_id": session,
+        }
+    )
+
+
+def read_line(timeout):
+    """One line from stdin within `timeout` seconds, or None."""
+    if not streaming:
+        time.sleep(timeout)
+        return None
+    ready, _, _ = select.select([sys.stdin], [], [], timeout)
+    if not ready:
+        return None
+    line = sys.stdin.readline()
+    if not line:
+        sys.exit(0)
+    return line
+
+
+def user_text(msg):
+    content = msg.get("message", {}).get("content", "")
+    if isinstance(content, list):
+        return " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+    return content
+
+
+class Interrupted(Exception):
+    pass
+
+
+def listen(seconds):
+    """Take steering messages for a while; an interrupt ends the turn."""
+    end = time.time() + seconds
+    while time.time() < end:
+        line = read_line(max(0.05, end - time.time()))
+        if not line:
+            continue
+        msg = json.loads(line)
+        if msg.get("type") == "user":
+            say(f"Noted: {user_text(msg).strip()}")
+        elif msg.get("type") == "control_request" and msg["request"].get("subtype") == "interrupt":
+            raise Interrupted()
+
+
+def ask(request_id, tool_name, **inp):
+    """Ask to use a tool; True if allowed."""
+    if not streaming:
+        return False
+    emit(
+        {
+            "type": "control_request",
+            "request_id": request_id,
+            "request": {
+                "subtype": "can_use_tool",
+                "tool_name": tool_name,
+                "input": inp,
+                "permission_suggestions": [
+                    {
+                        "type": "addRules",
+                        "rules": [{"toolName": tool_name, "ruleContent": "python -m pytest:*"}],
+                        "behavior": "allow",
+                        "destination": "session",
+                    }
+                ],
+                "tool_use_id": f"t-{request_id}",
+            },
+        }
+    )
+    while True:
+        line = read_line(3600)
+        if not line:
+            continue
+        msg = json.loads(line)
+        if msg.get("type") == "control_response":
+            response = msg["response"]
+            if response.get("request_id") == request_id:
+                return response["response"].get("behavior") == "allow"
+        elif msg.get("type") == "user":
+            say(f"Noted: {user_text(msg).strip()}")
+        elif msg.get("type") == "control_request" and msg["request"].get("subtype") == "interrupt":
+            raise Interrupted()
+
+
+def write(path, text):
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def the_task():
+    say("Looking at greet.py.")
+    tool("Read", file_path=os.path.abspath("greet.py"))
+    listen(1.5)
+    write(
+        "greet.py",
+        'def greet(name, title=None):\n'
+        '    """Say hello, with a title if there is one."""\n'
+        '    if title:\n'
+        '        name = f"{title} {name}"\n'
+        '    return f"Hello, {name}!"\n',
+    )
+    tool("Edit", file_path=os.path.abspath("greet.py"))
+    write(
+        "test_greet.py",
+        "from greet import greet\n\n\n"
+        "def test_title():\n"
+        '    assert greet("Ada", title="Dr") == "Hello, Dr Ada!"\n',
+    )
+    tool("Write", file_path=os.path.abspath("test_greet.py"))
+    listen(6)
+    if ask("req-tests", "Bash", command="python -m pytest -q"):
+        tool("Bash", command="python -m pytest -q")
+        say("greet() takes an optional title now. The tests pass.")
+    else:
+        say("greet() takes an optional title now. I didn't run the tests.")
+    result("Done.")
+
+
+def farewell():
+    say("Adding farewell() next to greet().")
+    with open("greet.py", "a") as f:
+        f.write('\n\ndef farewell(name):\n    """Say goodbye."""\n    return f"Goodbye, {name}!"\n')
+    tool("Edit", file_path=os.path.abspath("greet.py"))
+    listen(1)
+    say("Added `farewell()`.")
+    result("Done.")
+
+
+def anything(prompt):
+    say(f"Looked into it: {prompt.strip().splitlines()[0][:80]}")
+    listen(1)
+    result("Done.")
+
+
+def main():
+    if streaming:
+        prompt = ""
+        while not prompt:
+            msg = json.loads(sys.stdin.readline() or "{}")
+            if not msg:
+                return
+            if msg.get("type") == "control_request":
+                emit({"type": "control_response", "response": {"subtype": "success", "request_id": msg.get("request_id"), "response": {}}})
+            elif msg.get("type") == "user":
+                prompt = user_text(msg)
+    else:
+        prompt = args[args.index("-p") + 1] if "-p" in args else ""
+    emit({"type": "system", "subtype": "init", "session_id": session})
+    try:
+        if "optional title" in prompt and "farewell" not in prompt:
+            the_task()
+        elif "farewell" in prompt:
+            farewell()
+        else:
+            anything(prompt)
+    except Interrupted:
+        result("Interrupted", ok=False)
+    # Claude exits when its stdin closes; the host closes it after the result.
+    while streaming and sys.stdin.readline():
+        pass
+
+
+main()
