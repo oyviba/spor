@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { RepoInfo } from "../types";
+import type { RepoInfo } from "../../types";
 import type { AgentSettings } from "./Composer";
-import { ArrowUp, Branch } from "./Icons";
+import { ArrowUp, Branch } from "../../shared/Icons";
 
 interface Props {
   repo: RepoInfo;

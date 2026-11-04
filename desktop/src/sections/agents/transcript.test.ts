@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { duration, runs, summarize, type Tool } from "./transcript.ts";
-import type { Item } from "./types.ts";
+import type { Item } from "../../types.ts";
 
 const tool = (name: string, detail = ""): Tool => ({ kind: "tool", name, detail });
 

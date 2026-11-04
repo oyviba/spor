@@ -1,0 +1,344 @@
+import { useEffect, useMemo, useState } from "react";
+import { api, errorText } from "../../api";
+import type { Job, LogLine, Run, RunDetail, TaskSummary } from "../../types";
+import { useShell } from "../../shared/app";
+import { useNow, usePoll, useStored } from "../../shared/hooks";
+import { DetailsCard, EmptyState, PageHeader, SidebarHeader } from "../../shared/Layout";
+import { StatusPill } from "../../shared/StatusPill";
+import { CiIcon, ciStatus, elapsed } from "../../shared/ci";
+import { ago } from "../agents/transcript";
+import { choiceOf, type AgentSettings } from "../agents/Composer";
+import { Bot, Branch, Chevron, Commit, External, Refresh, Square } from "../../shared/Icons";
+
+/** GitHub Actions: runs, their jobs and logs; re-run and cancel. */
+export function ActionsSection() {
+  const shell = useShell();
+  const { fail, state } = shell;
+  const [workflow, setWorkflow] = useStored<string>("actions.workflow", "");
+  const [mine, setMine] = useStored("actions.mine", false);
+  const [workflows, setWorkflows] = useState<string[]>([]);
+  const [runs, setRuns] = useState<Run[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useStored<number | null>("actions.selected", null);
+  const [detail, setDetail] = useState<RunDetail | null>(null);
+  const [jobId, setJobId] = useState<number | null>(null);
+  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  // Bumped after a re-run or cancel: reload the list and the run now.
+  const [nonce, setNonce] = useState(0);
+  const now = useNow(1000, runs?.some((r) => r.status === "running" || r.status === "queued") ?? false);
+
+  const branch = mine ? (state?.branch ?? null) : null;
+  const anyLive = runs?.some((r) => r.status === "running" || r.status === "queued") ?? false;
+  usePoll(
+    async () => {
+      try {
+        setRuns(await api.runs(branch, workflow || null));
+        setError(null);
+      } catch (e) {
+        setError(errorText(e));
+        setRuns([]);
+      }
+    },
+    anyLive ? 10_000 : 30_000,
+    [workflow, branch, nonce],
+  );
+  useEffect(() => {
+    api.workflows().then(setWorkflows, () => {});
+    api.listTasks().then(setTasks, () => {});
+  }, []);
+
+  // Sent here from a PR's checks: that run, and that job.
+  useEffect(() => {
+    const t = shell.target;
+    if (t.section === "actions" && t.runId) {
+      setSelected(t.runId);
+      if (t.jobId) setJobId(t.jobId);
+    }
+  }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const live = detail?.run.status === "running" || detail?.run.status === "queued";
+  usePoll(
+    async () => {
+      if (selected == null) return;
+      try {
+        const d = await api.runDetail(selected);
+        setDetail(d);
+        // Open the job that failed, else the first.
+        setJobId((j) => (j && d.jobs.some((x) => x.id === j) ? j : (d.jobs.find((x) => x.status === "failure") ?? d.jobs[0])?.id ?? null));
+      } catch (e) {
+        fail(e);
+      }
+    },
+    live ? 5000 : 60_000,
+    [selected, nonce],
+    selected != null && !error,
+  );
+  useEffect(() => {
+    setDetail(null);
+  }, [selected]);
+
+  const run = detail?.run.id === selected ? detail : null;
+  const job = run?.jobs.find((j) => j.id === jobId) ?? null;
+  const task = run ? tasks.find((t) => t.branch === run.run.branch && !t.landed) : undefined;
+
+  return (
+    <>
+      <aside className="sidebar">
+        <SidebarHeader />
+        <div className="filters">
+          <select className="chip-select wide" value={workflow} onChange={(e) => setWorkflow(e.target.value)}>
+            <option value="">All workflows</option>
+            {workflows.map((w) => (
+              <option key={w}>{w}</option>
+            ))}
+          </select>
+          <button className={`chip-toggle${mine ? " on-accent" : ""}`} onClick={() => setMine(!mine)} title="Only runs for the checked-out branch">
+            <Branch size={11} /> {state?.branch ?? "this branch"}
+          </button>
+        </div>
+        <div className="task-list">
+          {error ? (
+            <div className="sidebar-empty">{error}</div>
+          ) : runs == null ? null : runs.length === 0 ? (
+            <div className="sidebar-empty">No runs.</div>
+          ) : (
+            runs.map((r) => (
+              <button key={r.id} className={`task-row${selected === r.id ? " selected" : ""}`} onClick={() => setSelected(r.id)} title={r.title}>
+                <div className="task-row-line">
+                  <CiIcon status={r.status} size={13} />
+                  <span className="task-row-title">{r.title}</span>
+                  <span className="task-row-time num">
+                    {r.status === "running" ? elapsed(r.created, now / 1000) : ago(r.updated, now)}
+                  </span>
+                </div>
+                <div className="task-row-line sub">
+                  <span className="truncate">
+                    {r.workflow} <span className="num">#{r.number}</span>
+                  </span>
+                  <span className="flex-1" />
+                  <Branch size={11} className="shrink-0" />
+                  <span className="truncate run-branch">{r.branch}</span>
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </aside>
+      <main className="main">
+        {selected == null || error ? (
+          <EmptyState title={error ? "Actions aren't available" : "Pick a run"}>{error}</EmptyState>
+        ) : !run ? (
+          <div className="boot" />
+        ) : (
+          <div className="task-page with-inspector">
+            <PageHeader
+              title={
+                <>
+                  <h2 title={run.run.title}>{run.run.title}</h2>
+                  <StatusPill status={ciStatus(run.run.status, live ? elapsed(run.run.created, now / 1000) : undefined)} />
+                </>
+              }
+            />
+            <div className="task-body">
+              <div className="changes">
+                <div className="changes-column">
+                  <div className="job-tabs">
+                    {run.jobs.map((j) => (
+                      <button key={j.id} className={`job-tab${j.id === jobId ? " active" : ""}`} onClick={() => setJobId(j.id)}>
+                        <CiIcon status={j.status} size={13} />
+                        <span className="truncate">{j.name}</span>
+                        {j.started > 0 && (
+                          <span className="muted num small-text">{elapsed(j.started, j.completed > 0 ? j.completed : now / 1000)}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  {job ? <JobLog job={job} /> : <p className="hint">This run has no jobs yet.</p>}
+                </div>
+              </div>
+              <RunCard run={run} job={job} task={task} onChanged={() => setNonce((n) => n + 1)} />
+            </div>
+          </div>
+        )}
+      </main>
+    </>
+  );
+}
+
+interface LogSection {
+  title: string;
+  lines: LogLine[];
+  failed: boolean;
+}
+
+/** A log as sections, one per `##[group]` (a step, mostly). */
+export function sections(lines: LogLine[]): LogSection[] {
+  const out: LogSection[] = [];
+  for (const l of lines) {
+    if (l.kind === "group" || out.length === 0) {
+      out.push({ title: l.kind === "group" ? l.text : "Setup", lines: l.kind === "group" ? [] : [l], failed: false });
+      continue;
+    }
+    const s = out[out.length - 1];
+    s.lines.push(l);
+    if (l.kind === "error") s.failed = true;
+  }
+  return out;
+}
+
+function JobLog({ job }: { job: Job }) {
+  const shell = useShell();
+  const [lines, setLines] = useState<LogLine[] | null>(null);
+  const [open, setOpen] = useState<Set<number>>(new Set());
+  const done = job.status !== "running" && job.status !== "queued";
+  // The log exists once the job finishes; reload it then.
+  useEffect(() => {
+    setLines(null);
+    if (!done) return;
+    api.jobLog(job.id).then(setLines, (e) => {
+      setLines([]);
+      shell.fail(e);
+    });
+  }, [job.id, done]); // eslint-disable-line react-hooks/exhaustive-deps
+  const secs = useMemo(() => sections(lines ?? []), [lines]);
+  // Failed sections start open, everything else folded.
+  useEffect(() => setOpen(new Set(secs.flatMap((s, i) => (s.failed ? [i] : [])))), [secs]);
+
+  if (!done)
+    return (
+      <div className="steps">
+        {job.steps.map((s) => (
+          <div key={s.number} className="step">
+            <CiIcon status={s.status} size={13} />
+            <span>{s.name}</span>
+          </div>
+        ))}
+        <p className="hint">The log appears when the job finishes.</p>
+      </div>
+    );
+  if (lines == null) return <p className="hint">Loading the log…</p>;
+  if (secs.length === 0) return <p className="hint">This job has no log.</p>;
+  return (
+    <div className="log">
+      {secs.map((s, i) => {
+        const isOpen = open.has(i);
+        return (
+          <section key={i} className={`log-section${s.failed ? " failed" : ""}`}>
+            <button
+              className="log-title"
+              onClick={() => setOpen((o) => (o.has(i) ? new Set([...o].filter((x) => x !== i)) : new Set([...o, i])))}
+              aria-expanded={isOpen}
+            >
+              <Chevron size={12} className={`chev${isOpen ? " open" : ""}`} />
+              <span className="truncate">{s.title}</span>
+              <span className="flex-1" />
+              <span className="muted num small-text">
+                {s.lines.length} {s.lines.length === 1 ? "line" : "lines"}
+              </span>
+            </button>
+            {isOpen && (
+              <pre className="log-lines">
+                {s.lines.map((l, j) => (
+                  <div key={j} className={`log-line ${l.kind}`}>
+                    {l.text || " "}
+                  </div>
+                ))}
+              </pre>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | null; task?: TaskSummary; onChanged: () => void }) {
+  const shell = useShell();
+  const [settings] = useStored<AgentSettings>("agent", { agent: "claude", template: "", allowCommands: false });
+  const r = run.run;
+  const live = r.status === "running" || r.status === "queued";
+  const failed = run.jobs.some((j) => j.status === "failure");
+  const act = (a: "rerun" | "rerun_failed" | "cancel") =>
+    shell.act(() => api.runAction(r.id, a), { undo: false }).then(onChanged);
+
+  // A failed run on an agent's branch: hand the failure to that agent.
+  const sendToAgent = async () => {
+    if (!task) return;
+    const failedJob = job?.status === "failure" ? job : run.jobs.find((j) => j.status === "failure");
+    let excerpt = "";
+    if (failedJob) {
+      const lines = await api.jobLog(failedJob.id).catch(() => []);
+      const bad = sections(lines).filter((s) => s.failed);
+      excerpt = bad
+        .map((s) => `${s.title}\n${s.lines.slice(-60).map((l) => l.text).join("\n")}`)
+        .join("\n\n")
+        .slice(-6000);
+    }
+    const message =
+      `CI failed: ${r.workflow} #${r.number}${failedJob ? `, job “${failedJob.name}”` : ""}.` +
+      (excerpt ? `\n\nThe failing part of the log:\n\`\`\`\n${excerpt}\n\`\`\`` : "") +
+      `\n\nFind the cause, fix it, check it passes locally, and commit.`;
+    const ok = await shell.act(
+      () => api.sendToAgent(task.id, message, choiceOf(settings), settings.allowCommands).then(() => `Sent the failure to ${task.id}`),
+      { undo: false },
+    );
+    if (ok) shell.go({ section: "agents", taskId: task.id });
+  };
+
+  return (
+    <DetailsCard>
+      <div className="inspector-section">
+        <div className="inspector-row">
+          <Refresh size={13} />
+          <span className="truncate">
+            {r.workflow} <span className="muted num">#{r.number}{r.attempt > 1 ? ` · attempt ${r.attempt}` : ""}</span>
+          </span>
+        </div>
+        <div className="inspector-row">
+          <Branch size={13} />
+          <span className="truncate">
+            <code>{r.branch}</code> <span className="muted">· {r.event.replace(/_/g, " ")}</span>
+          </span>
+        </div>
+        <button className="inspector-row action" onClick={() => shell.go({ section: "history", hash: r.sha })} title="Show the commit in History">
+          <Commit size={13} />
+          <span className="mono">{r.sha.slice(0, 7)}</span>
+        </button>
+        {task && (
+          <button className="inspector-row action" onClick={() => shell.go({ section: "agents", taskId: task.id })}>
+            <Bot size={13} />
+            <span className="truncate">
+              Agent task: <b>{task.title}</b>
+            </span>
+          </button>
+        )}
+      </div>
+      <div className="inspector-actions">
+        {task && failed && !live && (
+          <button className="primary" onClick={sendToAgent} title="Send the failing log to the agent working on this branch">
+            <Bot size={12} /> Send failure to agent
+          </button>
+        )}
+        {live ? (
+          <button className="ghost" onClick={() => act("cancel")}>
+            <Square size={10} /> Cancel
+          </button>
+        ) : (
+          <>
+            {failed && (
+              <button className={task ? "ghost" : "primary"} onClick={() => act("rerun_failed")}>
+                Re-run failed
+              </button>
+            )}
+            <button className="ghost" onClick={() => act("rerun")}>
+              Re-run all
+            </button>
+          </>
+        )}
+        <button className="icon-button" title="Open on GitHub" onClick={() => api.openUrl(r.url).catch(shell.fail)}>
+          <External size={13} />
+        </button>
+      </div>
+    </DetailsCard>
+  );
+}

@@ -1,312 +1,240 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, errorText } from "./api";
-import type { LineComment, RepoInfo, TaskDetail, TaskSummary } from "./types";
-import { activityAt } from "./status";
-import { usePoll, useStored } from "./hooks";
-import { Sidebar } from "./components/Sidebar";
-import { NewTask } from "./components/NewTask";
-import { TaskPage, type Tab } from "./components/TaskPage";
-import { choiceOf, type AgentSettings, type ComposerHandle } from "./components/Composer";
-import { X } from "./components/Icons";
-
-type View = { kind: "new" } | { kind: "task"; id: string };
+import type { RepoInfo, RepoState } from "./types";
+import { usePoll, useStored } from "./shared/hooks";
+import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
+import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, Play, PullRequest, X } from "./shared/Icons";
+import { AgentsSection } from "./sections/agents/AgentsSection";
+import { HistorySection } from "./sections/history/HistorySection";
+import { ChangesSection } from "./sections/changes/ChangesSection";
+import { PullsSection } from "./sections/pulls/PullsSection";
+import { ActionsSection } from "./sections/actions/ActionsSection";
 
 interface Toast {
   id: number;
   text: string;
   tone: "ok" | "error";
   undo?: boolean;
+  action?: ToastAction;
 }
+
+const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string }[] = [
+  { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "1" },
+  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "2" },
+  { id: "pulls", label: "Pull requests", icon: <PullRequest size={17} />, key: "3" },
+  { id: "actions", label: "Actions", icon: <Play size={17} />, key: "4" },
+  { id: "agents", label: "Agents", icon: <Bot size={17} />, key: "5" },
+];
 
 export function App() {
   const [repo, setRepo] = useState<RepoInfo | null | undefined>(undefined);
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
-  const [view, setView] = useStored<View>("view", { kind: "new" });
-  const [detail, setDetail] = useState<TaskDetail | null>(null);
-  const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
-  const [tab, setTab] = useState<Tab>("conversation");
-  const [settings, setSettings] = useStored<AgentSettings>("agent", {
-    agent: "claude",
-    template: "",
-    allowCommands: false,
-  });
-  const [seen, setSeen] = useStored<Record<string, number>>("seen", {});
-  const [shelves, setShelves] = useStored("shelves", { working: true, settled: false });
-  const [inspector, setInspector] = useStored("inspector", true);
-  const [comments, setComments] = useState<Record<string, LineComment[]>>({});
-  const [queue, setQueue] = useStored<Record<string, string[]>>("queue", {});
-  const [focus, setFocus] = useState<Pick<LineComment, "file" | "line" | "side"> | null>(null);
+  const [state, setState] = useState<RepoState | null>(null);
+  const [section, setSection] = useStored<SectionId>("section", "agents");
+  const [target, setTarget] = useState<Target & { seq: number }>({ section: "agents", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const composer = useRef<ComposerHandle>(null);
+  const [badges, setBadges] = useState<{ changes: number; working: number }>({ changes: 0, working: 0 });
 
-  const selectedId = view.kind === "task" ? view.id : null;
-
-  const toast = useCallback((text: string, tone: Toast["tone"] = "ok", undo = false) => {
+  const toast = useCallback((text: string, tone: Toast["tone"] = "ok", undo = false, action?: ToastAction) => {
     const id = Date.now() + Math.random();
-    setToasts((t) => [...t.slice(-2), { id, text, tone, undo }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), undo ? 6000 : 4000);
+    setToasts((t) => [...t.slice(-2), { id, text, tone, undo, action }]);
+    setTimeout(
+      () => setToasts((t) => t.filter((x) => x.id !== id)),
+      action ? 10000 : undo ? 6000 : tone === "error" ? 7000 : 4000,
+    );
   }, []);
   const fail = useCallback((e: unknown) => toast(errorText(e), "error"), [toast]);
-
-  // ---- Loading ----
 
   useEffect(() => {
     api.currentRepo().then(setRepo, () => setRepo(null));
   }, []);
 
-  const refreshTasks = useCallback(async () => {
+  const refresh = useCallback(async () => {
     if (!repo) return;
-    setTasks(await api.listTasks());
+    try {
+      setState(await api.repoState());
+    } catch {
+      // Shown by whatever section fails next; the chrome just goes quiet.
+    }
   }, [repo]);
-  usePoll(refreshTasks, 1500, [repo?.root], !!repo);
+  usePoll(refresh, 2000, [repo?.root], !!repo);
 
-  const selected = tasks.find((t) => t.id === selectedId);
-  const running = selected?.run?.state === "running";
-  const refreshDetail = useCallback(async () => {
-    if (!selectedId) return;
-    try {
-      const d = await api.taskDetail(selectedId);
-      setDetail((old) => (old?.task.id !== d.task.id || JSON.stringify(old) !== JSON.stringify(d) ? d : old));
-      // The open task polls faster than the list; keep its row in step.
-      setTasks((ts) => ts.map((t) => (t.id === d.task.id ? d.task : t)));
-    } catch (e) {
-      // The task was landed or discarded elsewhere.
-      if (String(e).startsWith("No task")) setView({ kind: "new" });
-    }
-  }, [selectedId]);
-  usePoll(refreshDetail, running ? 1000 : 3000, [selectedId], !!repo && !!selectedId);
-  useEffect(() => {
-    setDetail(null);
-    setTab("conversation");
-    setFocus(null);
-  }, [selectedId]);
+  // Rail counts: files changed, agents working.
+  usePoll(
+    async () => {
+      const [files, tasks] = await Promise.all([api.status(), api.listTasks()]);
+      setBadges({
+        changes: new Set(files.map((f) => f.path)).size,
+        working: tasks.filter((t) => t.run?.state === "running").length,
+      });
+    },
+    4000,
+    [repo?.root, state?.index],
+    !!repo,
+  );
 
-  // The diff, reloaded when the task's numbers change.
-  const shown = detail && detail.task.id === selectedId ? detail : null;
-  const patchKey = shown
-    ? `${shown.task.id}:${shown.task.stats.additions}:${shown.task.stats.deletions}:${shown.task.stats.files}`
-    : "";
-  useEffect(() => {
-    if (tab !== "changes" || !shown || patch?.key === patchKey) return;
-    api.taskPatch(shown.task.id).then((text) => setPatch({ key: patchKey, text }), fail);
-  }, [tab, patchKey]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Looking at a task marks what it did as seen.
-  useEffect(() => {
-    if (!shown) return;
-    const at = activityAt(shown.task);
-    if (seen[shown.task.id] !== at) setSeen((s) => ({ ...s, [shown.task.id]: at }));
-  }, [shown?.task.id, shown && activityAt(shown.task)]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Queued follow-ups go out, one per run, when their task's agent is idle.
-  const sending = useRef(new Set<string>());
-  useEffect(() => {
-    for (const [id, messages] of Object.entries(queue)) {
-      const t = tasks.find((x) => x.id === id);
-      if (!t || t.landed) {
-        if (!t && tasks.length > 0) setQueue(({ [id]: _, ...rest }) => rest);
-        continue;
-      }
-      if (messages.length === 0 || t.run?.state === "running" || sending.current.has(id)) continue;
-      sending.current.add(id);
-      const [first, ...rest] = messages;
-      api
-        .sendToAgent(id, first, choiceOf(settings), settings.allowCommands)
-        .then(() => setQueue((q) => ({ ...q, [id]: rest })), fail)
-        .then(refreshTasks)
-        .finally(() => sending.current.delete(id));
-    }
-  }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ---- Actions ----
-
-  const afterChange = async () => {
-    await refreshTasks();
-    await refreshDetail();
-  };
-
-  const create = async (prompt: string, base: string, background: boolean) => {
-    try {
-      const t = await api.createTask(prompt, base, choiceOf(settings), settings.allowCommands);
-      await refreshTasks();
-      if (background) toast(`Started ${t.id}`);
-      else setView({ kind: "task", id: t.id });
-      return true;
-    } catch (e) {
-      fail(e);
-      return false;
-    }
-  };
-
-  const send = (text: string) => {
-    if (!shown) return;
-    const id = shown.task.id;
-    setComments((c) => ({ ...c, [id]: [] }));
-    if (shown.task.run?.state === "running") {
-      setQueue((q) => ({ ...q, [id]: [...(q[id] ?? []), text] }));
-      return;
-    }
-    api
-      .sendToAgent(id, text, choiceOf(settings), settings.allowCommands)
-      .then(() => setTab("conversation"))
-      .then(afterChange, fail);
-  };
-
-  const undo = () =>
+  const undo = useCallback(() => {
     api
       .undo()
       .then(async (msg) => {
         toast(msg);
-        setRepo(await api.currentRepo());
-        await refreshTasks();
+        await refresh();
       })
       .catch(fail);
+  }, [toast, fail, refresh]);
 
-  const land = (merge: boolean, commitUncommitted: boolean) => {
-    if (!shown) return;
-    api
-      .landTask(shown.task.id, merge, commitUncommitted)
-      .then(async (msg) => {
-        toast(msg, "ok", true);
-        setRepo(await api.currentRepo());
-        await afterChange();
-      })
-      .catch(fail);
-  };
+  const shell: Shell | null = useMemo(
+    () =>
+      repo
+        ? {
+            repo,
+            state,
+            refresh,
+            toast,
+            fail,
+            undo,
+            act: async (run, opts) => {
+              try {
+                const msg = await run();
+                if (msg) toast(msg, "ok", opts?.undo ?? true);
+                return true;
+              } catch (e) {
+                fail(e);
+                return false;
+              } finally {
+                await refresh();
+              }
+            },
+            switchBranch: async (run) => {
+              try {
+                toast(await run(false), "ok", true);
+                return true;
+              } catch (e) {
+                const text = errorText(e);
+                if (!text.startsWith("BLOCKED: ")) {
+                  fail(e);
+                  return false;
+                }
+                toast(text.slice(9), "error", false, {
+                  label: "Stash and switch",
+                  run: () =>
+                    run(true)
+                      .then((msg) => toast(msg, "ok", true), fail)
+                      .finally(refresh),
+                });
+                return false;
+              } finally {
+                await refresh();
+              }
+            },
+            go: (t) => {
+              setSection(t.section);
+              setTarget((old) => ({ ...t, seq: old.seq + 1 }));
+            },
+            target,
+            openRepo: (path) =>
+              api
+                .openRepo(path)
+                .then((r) => {
+                  setRepo(r);
+                  setState(null);
+                })
+                .catch(fail),
+          }
+        : null,
+    [repo, state, refresh, toast, fail, undo, target], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
-  const discard = () => {
-    if (!shown) return;
-    api
-      .discardTask(shown.task.id)
-      .then(async (msg) => {
-        toast(msg, "ok", true);
-        setView({ kind: "new" });
-        await refreshTasks();
-      })
-      .catch(fail);
-  };
-
-  const askRebase = () => {
-    if (!shown) return;
-    const base = shown.task.base;
-    send(
-      `${base} has moved on and this branch now conflicts with it in ${shown.conflicts.join(", ")}. ` +
-        `Rebase onto ${base} (git rebase ${base}), resolve the conflicts keeping both sides' intent, ` +
-        `make sure it still builds and the tests pass, and commit.`,
-    );
-  };
-
-  const copy = (text: string, what: string) =>
-    navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), fail);
-
-  // ---- Keys ----
-
+  // ⌘1–⌘5 switch sections; ⌘Z undoes the last change anywhere (not while
+  // typing, where it undoes the typing).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (!mod) return;
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       const typing = (e.target as HTMLElement)?.closest?.("input, textarea, select");
-      if (e.key === "n") {
+      const s = SECTIONS.find((x) => x.key === e.key);
+      if (s) {
         e.preventDefault();
-        setView({ kind: "new" });
+        setSection(s.id);
       } else if (e.key === "z" && !e.shiftKey && !typing) {
         e.preventDefault();
         undo();
-      } else if (e.key === "l") {
-        e.preventDefault();
-        composer.current?.focus();
-      } else if (e.key === ".") {
-        e.preventDefault();
-        setInspector((v) => !v);
-      } else if (e.key === "1" || e.key === "2") {
-        e.preventDefault();
-        setTab(e.key === "1" ? "conversation" : "changes");
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // ---- Render ----
-
   if (repo === undefined) return <div className="boot" />;
-  if (repo === null) return <OpenRepo onOpen={(path) => api.openRepo(path).then(setRepo, fail)} toasts={toasts} />;
-
-  const taskComments = selectedId ? (comments[selectedId] ?? []) : [];
+  if (repo === null || !shell)
+    return <OpenRepo onOpen={(path) => api.openRepo(path).then(setRepo, fail)} toasts={toasts} />;
 
   return (
-    <div className="app">
-      <Sidebar
-        repo={repo}
-        tasks={tasks}
-        selected={selectedId}
-        seen={seen}
-        shelves={shelves}
-        onShelves={setShelves}
-        onSelect={(id) => setView({ kind: "task", id })}
-        onNew={() => setView({ kind: "new" })}
-        onOpenRepo={(path) =>
-          api
-            .openRepo(path)
-            .then((r) => {
-              setRepo(r);
-              setTasks([]);
-              setView({ kind: "new" });
-            })
-            .catch(fail)
-        }
-      />
-      <main className="main">
-        {view.kind === "new" || !selectedId ? (
-          <NewTask repo={repo} settings={settings} onSettings={setSettings} onCreate={create} />
-        ) : shown ? (
-          <TaskPage
-            ref={composer}
-            repo={repo}
-            detail={shown}
-            seenAt={seen[shown.task.id]}
-            tab={tab}
-            onTab={setTab}
-            patch={patch?.key === patchKey ? patch.text : null}
-            inspector={inspector}
-            onInspector={setInspector}
-            settings={settings}
-            onSettings={setSettings}
-            comments={taskComments}
-            onComment={(file, line, side, text) =>
-              setComments((c) => ({
-                ...c,
-                [shown.task.id]: [...(c[shown.task.id] ?? []), { id: `${Date.now()}`, file, line, side, text }],
-              }))
-            }
-            onRemoveComment={(cid) =>
-              setComments((c) => ({ ...c, [shown.task.id]: (c[shown.task.id] ?? []).filter((x) => x.id !== cid) }))
-            }
-            focus={focus}
-            onFocus={(c) => {
-              setTab("changes");
-              setFocus({ file: c.file, line: c.line, side: c.side });
-            }}
-            queued={queue[shown.task.id] ?? []}
-            onUnqueue={(i) =>
-              setQueue((q) => ({ ...q, [shown.task.id]: (q[shown.task.id] ?? []).filter((_, j) => j !== i) }))
-            }
-            onStart={() =>
-              api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.allowCommands).then(afterChange, fail)
-            }
-            onSend={send}
-            onStop={() => api.stopAgent(shown.task.id).then(afterChange, fail)}
-            onLand={land}
-            onDiscard={discard}
-            onAskRebase={askRebase}
-            onOpenFolder={() => api.openFolder(shown.task.id).catch(fail)}
-            onCopy={copy}
-          />
+    <ShellContext.Provider value={shell}>
+      <div className="app">
+        <nav className="rail" aria-label="Sections">
+          {SECTIONS.map((s) => {
+            const count = s.id === "changes" ? badges.changes : s.id === "agents" ? badges.working : 0;
+            return (
+              <button
+                key={s.id}
+                className={`rail-item${section === s.id ? " active" : ""}`}
+                onClick={() => setSection(s.id)}
+                title={`${s.label} (⌘${s.key})`}
+                aria-label={s.label}
+                aria-current={section === s.id ? "page" : undefined}
+              >
+                {s.icon}
+                {count > 0 && <span className={`rail-badge num${s.id === "agents" ? " live" : ""}`}>{count}</span>}
+              </button>
+            );
+          })}
+        </nav>
+        <div className="section">
+          {state?.operation && <OperationBanner state={state} />}
+          <div className="section-body">
+            {section === "agents" && <AgentsSection />}
+            {section === "history" && <HistorySection />}
+            {section === "changes" && <ChangesSection />}
+            {section === "pulls" && <PullsSection />}
+            {section === "actions" && <ActionsSection />}
+          </div>
+        </div>
+        <Toasts toasts={toasts} onUndo={undo} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
+      </div>
+    </ShellContext.Provider>
+  );
+}
+
+/** A merge, rebase, cherry-pick or revert that stopped: shown on every
+ * section until it's finished or abandoned. */
+function OperationBanner({ state }: { state: RepoState }) {
+  const shell = useShell();
+  const what = { merge: "Merge", rebase: "Rebase", cherrypick: "Cherry-pick", revert: "Revert" }[state.operation!];
+  const n = state.conflicts.length;
+  return (
+    <div className={`op-banner${n > 0 ? " bad" : ""}`}>
+      <Alert size={14} />
+      <span>
+        {n > 0 ? (
+          <>
+            {what} stopped on conflicts in {n} {n === 1 ? "file" : "files"}
+          </>
         ) : (
-          <div className="boot" />
+          <>{what} is ready to continue</>
         )}
-      </main>
-      <Toasts toasts={toasts} onUndo={undo} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
+      </span>
+      <span className="flex-1" />
+      {n > 0 ? (
+        <button className="ghost small" onClick={() => shell.go({ section: "changes", path: state.conflicts[0] })}>
+          Resolve in Changes
+        </button>
+      ) : (
+        <button className="primary small" onClick={() => shell.act(api.continueOperation, { undo: false })}>
+          Continue {what.toLowerCase()}
+        </button>
+      )}
+      <button className="ghost small" onClick={() => shell.act(api.abortOperation, { undo: false })}>
+        Abort
+      </button>
     </div>
   );
 }
@@ -317,6 +245,17 @@ function Toasts({ toasts, onUndo, onClose }: { toasts: Toast[]; onUndo: () => vo
       {toasts.map((t) => (
         <div key={t.id} className={`toast ${t.tone}`}>
           <span>{t.text}</span>
+          {t.action && (
+            <button
+              className="link"
+              onClick={() => {
+                onClose(t.id);
+                t.action!.run();
+              }}
+            >
+              {t.action.label}
+            </button>
+          )}
           {t.undo && (
             <button
               className="link"
@@ -347,7 +286,9 @@ function OpenRepo({ onOpen, toasts }: { onOpen: (path: string) => void; toasts: 
         }}
       >
         <h1>Open a repository</h1>
-        <p className="lede">Spor runs agent tasks in their own branch and folder beside it.</p>
+        <p className="lede">
+          <Branch size={12} /> Spor shows its history, changes, pull requests, Actions and agent tasks.
+        </p>
         <input name="path" autoFocus placeholder="~/code/my-project" />
         <button className="primary" type="submit">
           Open

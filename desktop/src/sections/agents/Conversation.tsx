@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { RunInfo, TaskDetail } from "../types";
-import { duration, runs as toRuns, stoppedLabel, summarize, type Block, type RunView, type Tool } from "../transcript";
-import { useNow } from "../hooks";
-import { Markdown } from "./Markdown";
-import { Alert, Chevron, Square, ToolIcon } from "./Icons";
+import type { RunInfo, TaskDetail } from "../../types";
+import { duration, runs as toRuns, stoppedLabel, summarize, type Block, type RunView, type Tool } from "./transcript";
+import { useNow } from "../../shared/hooks";
+import { Markdown } from "../../shared/Markdown";
+import { Alert, Chevron, Square, ToolIcon } from "../../shared/Icons";
 
 interface Props {
   detail: TaskDetail;

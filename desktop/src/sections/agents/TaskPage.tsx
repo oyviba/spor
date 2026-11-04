@@ -1,13 +1,13 @@
 import { forwardRef } from "react";
-import type { LineComment, RepoInfo, TaskDetail } from "../types";
-import { statusOf } from "../status";
-import { useNow } from "../hooks";
-import { ChangesView } from "./ChangesView";
+import type { LineComment, RepoInfo, TaskDetail } from "../../types";
+import { statusOf } from "./status";
+import { useNow } from "../../shared/hooks";
+import { DiffView } from "../../shared/DiffView";
 import { Composer, type AgentSettings, type ComposerHandle } from "./Composer";
 import { Conversation } from "./Conversation";
 import { Inspector } from "./Inspector";
-import { MessageSquare, PanelRight } from "./Icons";
-import { StatusPill } from "./StatusPill";
+import { MessageSquare, PanelRight } from "../../shared/Icons";
+import { StatusPill } from "../../shared/StatusPill";
 
 export type Tab = "conversation" | "changes";
 
@@ -37,6 +37,7 @@ interface Props {
   onAskRebase: () => void;
   onOpenFolder: () => void;
   onCopy: (text: string, what: string) => void;
+  onShowBranch: () => void;
 }
 
 export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, composerRef) {
@@ -77,7 +78,17 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
         {p.tab === "conversation" ? (
           <Conversation detail={p.detail} onStop={p.onStop} />
         ) : (
-          <ChangesView patch={p.patch} comments={p.comments} onComment={p.onComment} focus={p.focus} />
+          <div className="changes">
+            <div className="changes-column">
+              <DiffView
+                patch={p.patch}
+                empty="No changes yet."
+                comments={p.comments}
+                onComment={p.onComment}
+                focus={p.focus}
+              />
+            </div>
+          </div>
         )}
         {p.inspector && (
           <Inspector
@@ -89,6 +100,7 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
             onLand={p.onLand}
             onDiscard={p.onDiscard}
             onAskRebase={p.onAskRebase}
+            onShowBranch={p.onShowBranch}
           />
         )}
       </div>

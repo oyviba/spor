@@ -1,16 +1,10 @@
 // One status per task, in priority order, as in issue #30: what needs you
 // first; finished and failed only until you've looked.
 
-import type { TaskSummary } from "./types";
+import type { TaskSummary } from "../../types";
 import { duration } from "./transcript";
 
-export type Tone = "sky" | "emerald" | "red" | "amber" | "muted";
-
-export interface Status {
-  label: string;
-  tone: Tone;
-  live: boolean;
-}
+import type { Status } from "../../shared/StatusPill";
 
 /** When the task last did something you haven't seen, for "unseen". */
 export function activityAt(t: TaskSummary): number {

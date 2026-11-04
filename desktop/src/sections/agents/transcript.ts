@@ -2,7 +2,7 @@
 // run, finished runs folded behind "Worked for …", and stretches of tool
 // calls summarized as one sentence (see issue #27).
 
-import type { Item } from "./types";
+import type { Item } from "../../types";
 
 type Done = Extract<Item, { kind: "done" }>;
 export type Tool = Extract<Item, { kind: "tool" | "tool_error" }>;

@@ -1,13 +1,12 @@
-import { useState } from "react";
-import type { RepoInfo, TaskSummary } from "../types";
-import { statusOf } from "../status";
-import { ago } from "../transcript";
-import { useNow } from "../hooks";
-import { StatusPill } from "./StatusPill";
-import { AgentIcon, Branch, Chevron, Plus } from "./Icons";
+import type { TaskSummary } from "../../types";
+import { statusOf } from "./status";
+import { ago } from "./transcript";
+import { useNow } from "../../shared/hooks";
+import { StatusPill } from "../../shared/StatusPill";
+import { AgentIcon, Branch, Chevron, Plus } from "../../shared/Icons";
+import { SidebarHeader } from "../../shared/Layout";
 
 interface Props {
-  repo: RepoInfo;
   tasks: TaskSummary[];
   selected: string | null;
   seen: Record<string, number>;
@@ -15,7 +14,6 @@ interface Props {
   onShelves: (s: { working: boolean; settled: boolean }) => void;
   onSelect: (id: string) => void;
   onNew: () => void;
-  onOpenRepo: (path: string) => void;
 }
 
 export function Sidebar(p: Props) {
@@ -27,7 +25,6 @@ export function Sidebar(p: Props) {
   const working = p.tasks.filter((t) => !t.landed && t.run?.state === "running");
   const active = p.tasks.filter((t) => !t.landed && t.run?.state !== "running");
   const settled = p.tasks.filter((t) => t.landed);
-  const [editingRepo, setEditingRepo] = useState(false);
 
   const row = (t: TaskSummary) => {
     const status = statusOf(t, p.seen[t.id], now);
@@ -77,40 +74,11 @@ export function Sidebar(p: Props) {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-top">
-        {editingRepo ? (
-          <form
-            className="repo-form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const path = new FormData(e.currentTarget).get("path") as string;
-              p.onOpenRepo(path);
-              setEditingRepo(false);
-            }}
-          >
-            <input
-              name="path"
-              autoFocus
-              defaultValue={p.repo.root}
-              onBlur={() => setEditingRepo(false)}
-              onKeyDown={(e) => e.key === "Escape" && setEditingRepo(false)}
-              placeholder="Path to a repository"
-            />
-          </form>
-        ) : (
-          <button className="repo-button" onClick={() => setEditingRepo(true)} title={`${p.repo.root} — click to open another`}>
-            <span className="repo-name">{p.repo.name}</span>
-            {p.repo.branch && (
-              <span className="repo-branch">
-                <Branch size={11} /> {p.repo.branch}
-              </span>
-            )}
-          </button>
-        )}
+      <SidebarHeader>
         <button className="icon-button" onClick={p.onNew} title="New task (⌘N)" aria-label="New task">
           <Plus />
         </button>
-      </div>
+      </SidebarHeader>
       <div className="task-list">
         {p.tasks.length === 0 && (
           <div className="sidebar-empty">No tasks yet. Give an agent its own branch and folder with ⌘N.</div>

@@ -1,6 +1,6 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import type { AgentChoice, LineComment, RepoInfo, RunInfo } from "../types";
-import { AgentIcon, ArrowUp, Clock, MessageSquare, Square, X } from "./Icons";
+import type { AgentChoice, LineComment, RepoInfo, RunInfo } from "../../types";
+import { AgentIcon, ArrowUp, Clock, MessageSquare, Square, X } from "../../shared/Icons";
 
 export interface AgentSettings {
   agent: "claude" | "command" | "none";

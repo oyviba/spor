@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import type { TaskDetail } from "../types";
-import { duration } from "../transcript";
-import { AgentIcon, Alert, Branch, ChevronDown, Copy, Folder, Merge, Trash } from "./Icons";
+import type { TaskDetail } from "../../types";
+import { duration } from "./transcript";
+import { AgentIcon, Alert, Branch, ChevronDown, Copy, Folder, Merge, Trash } from "../../shared/Icons";
 
 interface Props {
   detail: TaskDetail;
@@ -12,6 +12,7 @@ interface Props {
   onLand: (merge: boolean, commitUncommitted: boolean) => void;
   onDiscard: () => void;
   onAskRebase: () => void;
+  onShowBranch: () => void;
 }
 
 /** The task's details and landing actions, in a small floating card. */
@@ -66,12 +67,12 @@ export function Inspector({ detail, ...p }: Props) {
         </button>
       </div>
       <div className="inspector-section">
-        <div className="inspector-row">
+        <button className="inspector-row action" onClick={p.onShowBranch} title="Show it in History">
           <Branch size={13} />
           <span className="truncate">
             <code>{t.branch}</code> <span className="muted">from {t.base}</span>
           </span>
-        </div>
+        </button>
         {s.base_moved && (
           <div className="inspector-row warn">
             <Alert size={13} />

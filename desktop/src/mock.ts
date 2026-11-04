@@ -284,6 +284,8 @@ const slug = (s: string) =>
 export async function invoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
   await new Promise((r) => setTimeout(r, 60));
   const id = args.id as string;
+  const recorded = await fromFixtures(cmd, args);
+  if (recorded !== undefined) return recorded as T;
   const result = ((): unknown => {
     switch (cmd) {
       case "current_repo":
@@ -366,4 +368,141 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
     }
   })();
   return result as T;
+}
+
+// ---- Git and GitHub, from recordings ----------------------------------------
+//
+// src/fixtures.json is what the real backend answered on a demo repository
+// (e2e/record-fixtures.mjs). Times are moved up to now; changes to the
+// working tree are applied to an in-memory copy so the Changes section can
+// be clicked through.
+
+type Fixtures = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+let fixtures: Fixtures | null = null;
+const undoStack: string[] = [];
+
+async function load(): Promise<Fixtures> {
+  if (fixtures) return fixtures;
+  const data = (await import("./fixtures.json")).default as Fixtures;
+  const shift = Math.floor(Date.now() / 1000) - data.recordedAt;
+  const TIMES = new Set(["time", "updated", "created", "at", "started", "completed", "last_commit"]);
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === "object")
+      return Object.fromEntries(
+        Object.entries(v).map(([k, x]) => [k, TIMES.has(k) && typeof x === "number" && x > 1e9 ? x + shift : walk(x)]),
+      );
+    return v;
+  };
+  fixtures = walk(data) as Fixtures;
+  return fixtures;
+}
+
+async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise<unknown> {
+  const f = await load();
+  const n = args.number as number;
+  const files = f.status as { path: string; staged: boolean; status: string }[];
+  const move = (paths: string[], staged: boolean) => {
+    for (const file of files)
+      if (paths.includes(file.path) && file.status !== "conflicted") {
+        file.staged = staged;
+        file.status = staged ? "staged" : file.status === "untracked" ? "untracked" : "modified";
+      }
+  };
+  const done = (label: string, result: unknown = label) => {
+    undoStack.push(label);
+    f.state = { ...f.state, index: String(Math.random()), undo: label };
+    return result;
+  };
+  switch (cmd) {
+    case "current_repo":
+      return f.repo;
+    case "repo_state":
+      return f.state;
+    case "undo": {
+      // A landed or discarded mock task is undone by the agent mock above.
+      if (undoable) return undefined;
+      const label = undoStack.pop();
+      if (!label) throw "Nothing to undo";
+      return `Undid: ${label}`;
+    }
+    case "open_url":
+      window.open(args.url as string, "_blank", "noopener");
+      return null;
+    case "graph":
+      return f.graph;
+    case "search_commits": {
+      const q = (args.query as string).toLowerCase();
+      return Object.values(f.commits as Record<string, { hash: string; message: string; author: string }>)
+        .filter((c) => c.message.toLowerCase().includes(q) || c.author.toLowerCase().includes(q) || c.hash.startsWith(q))
+        .map((c) => c.hash);
+    }
+    case "commit_detail":
+      return f.commits[args.hash as string] ?? Promise.reject("No such commit in the recording");
+    case "branches":
+      return f.branches;
+    case "checkout":
+    case "create_branch":
+      return done(`Switch to ${(args.branch ?? args.name) as string}`, `Switched to ${(args.branch ?? args.name) as string}`);
+    case "delete_branch":
+      return done(`Delete ${args.name}`, `Deleted ${args.name}`);
+    case "cherry_pick":
+    case "revert":
+    case "merge_branch":
+      return done(`${cmd.replace("_", " ")} ${String(args.hash ?? args.branch).slice(0, 7)}`);
+    case "status":
+      return files.map((x) => ({ ...x }));
+    case "file_diff":
+      return f.diffs[`${args.staged}:${args.path}`] ?? f.diffs[`${!args.staged}:${args.path}`] ?? "";
+    case "stage":
+      move(args.paths as string[], true);
+      return done(`Stage ${(args.paths as string[]).join(", ")}`, null);
+    case "unstage":
+      move(args.paths as string[], false);
+      return done(`Unstage ${(args.paths as string[]).join(", ")}`, null);
+    case "stage_lines":
+      return done(`Stage lines in ${args.path}`, null);
+    case "discard":
+      f.status = files.filter((x) => !(args.paths as string[]).includes(x.path) || x.staged);
+      return done(`Discard ${(args.paths as string[]).join(", ")}`, null);
+    case "commit":
+      f.status = files.filter((x) => !x.staged);
+      return done(`Commit “${String(args.message).split("\n")[0]}”`, "Committed a1b2c3d");
+    case "last_message":
+      return f.graph.rows.find((r: { head: boolean }) => r.head)?.subject ?? "";
+    case "sync":
+      return { fetch: "Fetched", pull: "Pulled", push: "Pushed" }[args.action as string];
+    case "stashes":
+      return f.stashes;
+    case "stash":
+      return "Stashed your changes";
+    case "stash_pop":
+      return "Applied and dropped the stash";
+    case "resolve":
+    case "continue_operation":
+    case "abort_operation":
+      return "Done";
+    case "pulls":
+      return f.pulls[args.filter as string] ?? [];
+    case "pull_detail":
+      return f.pullDetails[n] ?? Promise.reject(`No pull request #${n} in the recording`);
+    case "pull_diff":
+      return f.pullDiffs[n] ?? "";
+    case "pull_action":
+      return `${args.action} #${n}`;
+    case "runs":
+      return (f.runs as { branch: string; workflow: string }[]).filter(
+        (r) => (!args.branch || r.branch === args.branch) && (!args.workflow || r.workflow === args.workflow),
+      );
+    case "workflows":
+      return f.workflows;
+    case "run_detail":
+      return f.runDetails[args.id as number];
+    case "run_action":
+      return args.action === "cancel" ? "Cancelling the run" : "Re-running";
+    case "job_log":
+      return f.jobLogs[args.id as number] ?? [];
+    default:
+      return undefined;
+  }
 }
