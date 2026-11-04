@@ -1002,6 +1002,145 @@ fn alive(pid: Option<&str>) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Is the agent there to run? Why not, if not.
+pub fn missing(kind: &AgentKind) -> Option<String> {
+    match kind {
+        AgentKind::Claude if !available("claude") => {
+            Some("Claude Code isn't installed, or isn't on the PATH — install it, or pick a custom command".into())
+        }
+        AgentKind::Command(c) if c.trim().is_empty() => {
+            Some("Set the custom agent command first".into())
+        }
+        _ => None,
+    }
+}
+
+/// What starting an agent on a task would run (`Runs::plan`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plan {
+    pub kind: AgentKind,
+    pub prompt: String,
+    /// The session it continues, if any.
+    pub resume: Option<String>,
+}
+
+impl Runs {
+    /// What to run for a task: its own prompt (`message` None) with the
+    /// `chosen` agent, or a follow-up. A follow-up goes to the agent that
+    /// did the work, whatever is chosen now, and continues its session;
+    /// with no session to continue (a custom command, or Claude without
+    /// one), the whole task goes again with the feedback after it.
+    pub fn plan(
+        &self,
+        task: &Task,
+        message: Option<&str>,
+        chosen: Option<&AgentKind>,
+    ) -> Result<Plan, String> {
+        let previous = message.and_then(|_| self.latest()).map(|r| r.kind);
+        let kind = previous
+            .or_else(|| chosen.cloned())
+            .ok_or("Pick an agent first")?;
+        if let Some(e) = missing(&kind) {
+            return Err(e);
+        }
+        let resume = message.and_then(|_| self.session());
+        let prompt = match message {
+            Some(m) if resume.is_none() => format!(
+                "{}\n\nFeedback on the work so far:\n{}",
+                task.prompt.trim(),
+                m.trim()
+            ),
+            Some(m) => m.trim().to_string(),
+            None => task.prompt.clone(),
+        };
+        Ok(Plan {
+            kind,
+            prompt,
+            resume,
+        })
+    }
+
+    /// Start an agent on the task, as `plan` says.
+    pub fn follow_up(
+        &self,
+        task: &Task,
+        message: Option<&str>,
+        chosen: Option<&AgentKind>,
+        permissions: Permissions,
+    ) -> Result<Run, String> {
+        let plan = self.plan(task, message, chosen)?;
+        self.start(
+            task,
+            &plan.kind,
+            &plan.prompt,
+            plan.resume.as_deref(),
+            permissions,
+        )
+    }
+}
+
+/// A review comment on lines of a task's diff, sent with the next
+/// follow-up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineComment {
+    pub path: String,
+    /// The lines, first to last (the same for one line). Numbered in the
+    /// base for removed lines, in the task's version otherwise.
+    pub start: usize,
+    pub end: usize,
+    /// On removed lines: the old side of the diff.
+    pub removed: bool,
+    pub text: String,
+}
+
+impl LineComment {
+    /// Where it is: `src/a.rs:12`, `src/a.rs:12–14`, with "(removed
+    /// line)" for the old side.
+    pub fn place(&self) -> String {
+        let (start, end) = (self.start.min(self.end), self.start.max(self.end));
+        let lines = if start == end {
+            start.to_string()
+        } else {
+            format!("{start}–{end}")
+        };
+        let removed = match (self.removed, start == end) {
+            (false, _) => "",
+            (true, true) => " (removed line)",
+            (true, false) => " (removed lines)",
+        };
+        format!("{}:{lines}{removed}", self.path)
+    }
+}
+
+/// A message with line comments after it, as the agent gets them:
+/// "Comments on the changes:" and one `- file:line: comment` each.
+pub fn with_comments(message: &str, comments: &[LineComment]) -> String {
+    let message = message.trim();
+    if comments.is_empty() {
+        return message.to_string();
+    }
+    let notes: Vec<String> = comments
+        .iter()
+        .map(|c| format!("- {}: {}", c.place(), c.text.trim()))
+        .collect();
+    let gap = if message.is_empty() { "" } else { "\n\n" };
+    format!(
+        "{message}{gap}Comments on the changes:\n{}",
+        notes.join("\n")
+    )
+}
+
+/// "Ask agent to rebase": bring the branch up to date with `base` and
+/// sort out the conflicts in `files`.
+pub fn rebase_request(base: &str, files: &[String]) -> String {
+    format!(
+        "{base} has moved on and this branch now conflicts with it in {files}. \
+         Rebase onto {base} (git rebase {base}), resolve the conflicts keeping both \
+         sides' intent, make sure it still builds and the tests pass, and commit.",
+        files = files.join(", ")
+    )
+}
+
 /// Is `program` on the PATH?
 pub fn available(program: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|paths| {

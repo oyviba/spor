@@ -1,4 +1,5 @@
 import type {
+  LineComment,
   AgentChoice,
   BranchInfo,
   CommitDetail,
@@ -96,6 +97,10 @@ export const api = {
   /** `message` null starts the task's own prompt; otherwise it's a follow-up. */
   sendToAgent: (id: string, message: string | null, agent: AgentChoice, mode: Mode) =>
     call<void>("send_to_agent", { id, message, agent, mode }),
+  /** A message with line comments after it, as the agent gets them. */
+  withComments: (text: string, comments: LineComment[]) => call<string>("with_comments", { text, comments }),
+  /** Ask the agent to rebase onto the base and resolve the conflicts. */
+  askToRebase: (id: string, agent: AgentChoice, mode: Mode) => call<void>("ask_to_rebase", { id, agent, mode }),
   /** Answer a question the agent asked; `message` says what to do instead. */
   answerAsk: (id: string, requestId: string, allow: boolean, message = "") =>
     call<void>("answer_ask", { id, requestId, allow, message }),

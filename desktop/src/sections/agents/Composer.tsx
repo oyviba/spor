@@ -1,6 +1,8 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import type { AgentChoice, Ask, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
 import { useStored } from "../../shared/hooks";
+import { useShell } from "../../shared/app";
+import { api } from "../../api";
 import { AgentIcon, Alert, ArrowUp, Check, Clock, CornerDownRight, MessageSquare, Square, X } from "../../shared/Icons";
 
 export interface AgentSettings {
@@ -81,15 +83,6 @@ export interface ComposerHandle {
   focus: () => void;
 }
 
-/** "Comments on the changes:" as the GPUI app sends them. */
-export function withComments(text: string, comments: LineComment[]): string {
-  if (comments.length === 0) return text.trim();
-  const notes = comments
-    .map((c) => `- ${c.file}:${c.line}${c.side === "old" ? " (removed line)" : ""}: ${c.text}`)
-    .join("\n");
-  return `${text.trim()}${text.trim() ? "\n\n" : ""}Comments on the changes:\n${notes}`;
-}
-
 /** "run `make test`", "edit greet.py": what a tool use is, for a question. */
 export function verbOf(tool: string): string {
   switch (tool) {
@@ -110,6 +103,7 @@ export function verbOf(tool: string): string {
 }
 
 export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, ref) {
+  const { fail } = useShell();
   const [text, setText] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   useImperativeHandle(ref, () => ({ focus: () => input.current?.focus() }));
@@ -145,11 +139,17 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
     if (disabled) return;
     if (act === "stop") return p.onStop();
     if (act === "start") return p.onStart();
-    const message = withComments(text, p.comments);
-    if (act === "reply") p.onAnswer(ask!, false, message);
-    else if (act === "steer") p.onSteer(message);
-    else p.onSend(message);
+    const sent = text;
     setText("");
+    // The core formats the comments, as it does for the GPUI app.
+    api.withComments(sent, p.comments).then((message) => {
+      if (act === "reply") p.onAnswer(ask!, false, message);
+      else if (act === "steer") p.onSteer(message);
+      else p.onSend(message);
+    }, (e) => {
+      setText(sent);
+      fail(e);
+    });
   };
 
   const placeholder = ask

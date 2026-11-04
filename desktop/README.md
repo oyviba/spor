@@ -104,5 +104,4 @@ follow-up typed while an agent works is queued and sent when the run ends.
 
 Polling, not events: the window polls the repository's state every 2 s
 (cheap: refs and the index's mtime) and each section reloads when that
-changes. A file watcher would be better. The rules for starting an agent
-are copied from `src/gui/agents.rs`; they belong in the core.
+changes. A file watcher would be better.

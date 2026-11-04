@@ -2,7 +2,7 @@
 // It keeps a few tasks in memory, one of which is "working" and grows its
 // transcript over time, and answers the same commands as src-tauri.
 
-import type { AgentChoice, Ask, Item, Mode, RepoInfo, RunInfo, TaskDetail, TaskSummary } from "./types";
+import type { AgentChoice, Ask, Item, LineComment, Mode, RepoInfo, RunInfo, TaskDetail, TaskSummary } from "./types";
 
 const now = () => Math.floor(Date.now() / 1000);
 const t0 = now();
@@ -349,6 +349,27 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
       case "send_to_agent": {
         const t = find(id);
         start(t, (args.message as string | null) ?? t.summary.prompt, args.agent as AgentChoice);
+        return null;
+      }
+      case "with_comments": {
+        // The core's format (spor::agent::with_comments), for the UI alone.
+        const text = (args.text as string).trim();
+        const comments = args.comments as LineComment[];
+        if (comments.length === 0) return text;
+        const notes = comments
+          .map((c) => `- ${c.file}:${c.line}${c.side === "old" ? " (removed line)" : ""}: ${c.text.trim()}`)
+          .join("\n");
+        return `${text}${text ? "\n\n" : ""}Comments on the changes:\n${notes}`;
+      }
+      case "ask_to_rebase": {
+        const t = find(id);
+        const base = t.summary.base;
+        start(
+          t,
+          `${base} has moved on and this branch now conflicts with it. Rebase onto ${base} (git rebase ${base}), ` +
+            `resolve the conflicts keeping both sides' intent, make sure it still builds and the tests pass, and commit.`,
+          args.agent as AgentChoice,
+        );
         return null;
       }
       case "stop_agent": {

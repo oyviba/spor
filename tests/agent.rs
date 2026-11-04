@@ -616,3 +616,138 @@ fn listed_ignored_files_are_copied_into_a_new_folder() {
         "paths outside the checkout are refused"
     );
 }
+
+// ---- The rules both apps follow (#39) ----------------------------------
+
+#[test]
+fn a_follow_up_goes_to_the_agent_that_did_the_work() {
+    fake_claude();
+    let f = fixture();
+    let task = f.tasks.create("Leave a mark", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    // Starting needs an agent picked; the task's prompt goes as is.
+    assert_eq!(
+        runs.plan(&task, None, None).unwrap_err(),
+        "Pick an agent first"
+    );
+    let first = runs.plan(&task, None, Some(&AgentKind::Claude)).unwrap();
+    assert_eq!(first.kind, AgentKind::Claude);
+    assert_eq!(first.prompt, "Leave a mark");
+    assert_eq!(first.resume, None);
+    runs.follow_up(&task, None, Some(&AgentKind::Claude), NO_COMMANDS)
+        .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+
+    // Whatever is picked now, feedback goes to Claude, into its session.
+    let other = AgentKind::Command("true".into());
+    let plan = runs
+        .plan(&task, Some("  Now say hello  "), Some(&other))
+        .unwrap();
+    assert_eq!(plan.kind, AgentKind::Claude);
+    assert_eq!(plan.prompt, "Now say hello");
+    assert_eq!(plan.resume.as_deref(), Some("sess-42"));
+}
+
+#[test]
+fn feedback_without_a_session_sends_the_whole_task_again() {
+    let f = fixture();
+    let task = f.tasks.create("Write a note", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let kind = AgentKind::Command("echo \"$SPOR_PROMPT\" > note.txt".into());
+    runs.follow_up(&task, None, Some(&kind), NO_COMMANDS)
+        .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    let plan = runs.plan(&task, Some("Shorter, please"), None).unwrap();
+    assert_eq!(plan.kind, kind);
+    assert_eq!(plan.resume, None);
+    assert_eq!(
+        plan.prompt,
+        "Write a note\n\nFeedback on the work so far:\nShorter, please"
+    );
+    runs.follow_up(&task, Some("Shorter, please"), None, NO_COMMANDS)
+        .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    assert_eq!(
+        std::fs::read_to_string(task.worktree.join("note.txt")).unwrap(),
+        "Write a note\n\nFeedback on the work so far:\nShorter, please\n"
+    );
+}
+
+#[test]
+fn an_agent_that_isnt_there_is_refused() {
+    let f = fixture();
+    let task = f.tasks.create("Anything", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let empty = AgentKind::Command("  ".into());
+    assert!(spor::agent::missing(&empty).is_some());
+    assert!(runs.plan(&task, None, Some(&empty)).is_err());
+    assert!(runs.latest().is_none());
+    assert_eq!(
+        spor::agent::missing(&AgentKind::Command("codex exec {prompt}".into())),
+        None
+    );
+}
+
+#[test]
+fn line_comments_read_file_line_comment() {
+    use spor::agent::{with_comments, LineComment};
+    let one = LineComment {
+        path: "src/auth.rs".into(),
+        start: 42,
+        end: 42,
+        removed: false,
+        text: "use the existing helper ".into(),
+    };
+    let gone = LineComment {
+        path: "src/old.rs".into(),
+        start: 9,
+        end: 7,
+        removed: true,
+        text: "keep these".into(),
+    };
+    assert_eq!(one.place(), "src/auth.rs:42");
+    assert_eq!(gone.place(), "src/old.rs:7–9 (removed lines)");
+    assert_eq!(
+        LineComment {
+            end: 9,
+            start: 9,
+            ..gone.clone()
+        }
+        .place(),
+        "src/old.rs:9 (removed line)"
+    );
+    assert_eq!(
+        with_comments(" Looks close. ", &[one.clone(), gone]),
+        "Looks close.\n\nComments on the changes:\n\
+         - src/auth.rs:42: use the existing helper\n\
+         - src/old.rs:7–9 (removed lines): keep these"
+    );
+    assert_eq!(
+        with_comments("", &[one]),
+        "Comments on the changes:\n- src/auth.rs:42: use the existing helper"
+    );
+    assert_eq!(with_comments(" just text ", &[]), "just text");
+}
+
+#[test]
+fn the_rebase_request_names_the_base_and_the_files() {
+    let m = spor::agent::rebase_request("main", &["a.rs".into(), "b.rs".into()]);
+    assert!(m.starts_with("main has moved on and this branch now conflicts with it in a.rs, b.rs."));
+    assert!(m.contains("git rebase main"));
+}
+
+#[test]
+fn land_and_discard_say_what_they_did() {
+    let f = fixture();
+    let task = f.tasks.create("Throw away", "main").unwrap();
+    let undo = f.tasks.discard(&task).unwrap();
+    assert_eq!(undo.label(), format!("Discarded {}", task.id));
+    f.tasks.restore(&undo).unwrap();
+    std::fs::write(task.worktree.join("x.txt"), "x\n").unwrap();
+    let task = f.tasks.get(&task.id).unwrap();
+    let undo = f
+        .tasks
+        .land(&task, spor::tasks::LandMode::Squash, true)
+        .unwrap();
+    assert_eq!(undo.label(), format!("Landed {} on main", task.id));
+}

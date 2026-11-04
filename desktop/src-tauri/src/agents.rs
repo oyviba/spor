@@ -1,11 +1,12 @@
 //! Agent tasks: a prompt with its own branch and folder (`spor::tasks`),
 //! and the agents that work on it (`spor::agent`). The rules for picking the
-//! agent and wrapping follow-ups match the GPUI app's `src/gui/agents.rs`.
+//! agent, wrapping follow-ups and line comments live in `spor::agent`,
+//! shared with the GPUI app.
 
 use crate::undo::Undo;
 use crate::{first_line, App};
 use serde::{Deserialize, Serialize};
-use spor::agent::{self, AgentKind, Entry, Mode, Permissions, Run, RunState, Runs};
+use spor::agent::{self, AgentKind, Entry, LineComment, Mode, Permissions, Run, RunState, Runs};
 use spor::tasks::{LandMode, Task, TaskState, TaskStats, Tasks};
 use tauri::State;
 
@@ -278,13 +279,25 @@ impl AgentChoice {
     }
 }
 
-fn missing(kind: &AgentKind) -> Option<String> {
-    match kind {
-        AgentKind::Claude if !agent::available("claude") => {
-            Some("Claude Code isn't installed, or isn't on the PATH".into())
+/// A line comment from the Changes tab.
+#[derive(Deserialize)]
+pub(crate) struct CommentIn {
+    file: String,
+    line: usize,
+    /// "old" for a removed line, numbered in the base.
+    side: String,
+    text: String,
+}
+
+impl From<CommentIn> for LineComment {
+    fn from(c: CommentIn) -> Self {
+        LineComment {
+            path: c.file,
+            start: c.line,
+            end: c.line,
+            removed: c.side == "old",
+            text: c.text,
         }
-        AgentKind::Command(c) if c.trim().is_empty() => Some("The agent command is empty".into()),
-        _ => None,
     }
 }
 
@@ -350,7 +363,7 @@ pub(crate) fn create_task(
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
     let kind = agent.kind();
-    if let Some(e) = kind.as_ref().and_then(missing) {
+    if let Some(e) = kind.as_ref().and_then(agent::missing) {
         return Err(e);
     }
     let tasks = app.tasks()?;
@@ -375,37 +388,47 @@ pub(crate) fn send_to_agent(
 ) -> Result<(), String> {
     let mode = mode_of(&mode)?;
     let (tasks, task) = app.task(&id)?;
-    let runs = Runs::of(&tasks, &task);
-    let follow_up = message.is_some();
-    // Follow-ups go to the agent that did the work, whatever's picked now.
-    let previous = runs.latest().map(|r| r.kind);
-    let kind = match (follow_up, previous, agent.kind()) {
-        (true, Some(k), _) | (_, _, Some(k)) => k,
-        _ => return Err("Pick an agent first".into()),
-    };
-    if let Some(e) = missing(&kind) {
-        return Err(e);
-    }
-    let session = if follow_up { runs.session() } else { None };
-    let prompt = match message {
-        // A custom command, or Claude without a session to resume, needs the
-        // whole task again, not just the feedback.
-        Some(m) if session.is_none() => format!(
-            "{}\n\nFeedback on the work so far:\n{}",
-            task.prompt.trim(),
-            m.trim()
-        ),
-        Some(m) => m.trim().to_string(),
-        None => task.prompt.clone(),
-    };
-    runs.start(
-        &task,
-        &kind,
-        &prompt,
-        session.as_deref(),
-        Permissions { mode },
-    )
-    .map(|_| ())
+    Runs::of(&tasks, &task)
+        .follow_up(
+            &task,
+            message.as_deref(),
+            agent.kind().as_ref(),
+            Permissions { mode },
+        )
+        .map(|_| ())
+}
+
+/// A message with line comments after it, as the agent gets them.
+#[tauri::command]
+pub(crate) fn with_comments(text: String, comments: Vec<CommentIn>) -> String {
+    let comments: Vec<LineComment> = comments.into_iter().map(Into::into).collect();
+    agent::with_comments(&text, &comments)
+}
+
+/// Ask the agent to rebase onto the task's base and resolve the conflicts
+/// it would have landing now.
+#[tauri::command(async)]
+pub(crate) fn ask_to_rebase(
+    app: State<App>,
+    id: String,
+    agent: AgentChoice,
+    mode: String,
+) -> Result<(), String> {
+    let mode = mode_of(&mode)?;
+    let (tasks, task) = app.task(&id)?;
+    let files = task
+        .repo()
+        .merge_conflicts(&task.base, "HEAD")
+        .unwrap_or_default();
+    let message = agent::rebase_request(&task.base, &files);
+    Runs::of(&tasks, &task)
+        .follow_up(
+            &task,
+            Some(&message),
+            agent.kind().as_ref(),
+            Permissions { mode },
+        )
+        .map(|_| ())
 }
 
 #[tauri::command(async)]
@@ -445,7 +468,7 @@ pub(crate) fn land_task(
     let undo = tasks
         .land(&task, mode, commit_uncommitted)
         .map_err(|e| first_line(&e))?;
-    let message = format!("Landed {} on {}", task.id, task.base);
+    let message = undo.label();
     app.undo.push(message.clone(), Undo::Task(undo));
     Ok(message)
 }
@@ -460,7 +483,7 @@ pub(crate) fn discard_task(app: State<App>, id: String) -> Result<String, String
         return Err("Stop the agent first".into());
     }
     let undo = tasks.discard(&task).map_err(|e| first_line(&e))?;
-    let message = format!("Discarded {}", task.id);
+    let message = undo.label();
     app.undo.push(message.clone(), Undo::Task(undo));
     Ok(message)
 }

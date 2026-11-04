@@ -103,6 +103,17 @@ pub struct Undoable {
     pub base_before: Option<String>,
 }
 
+impl Undoable {
+    /// What was done, for the undo entry and its toast: "Landed fix-login
+    /// on main", "Discarded fix-login".
+    pub fn label(&self) -> String {
+        match self.base_before {
+            Some(_) => format!("Landed {} on {}", self.task.id, self.task.base),
+            None => format!("Discarded {}", self.task.id),
+        }
+    }
+}
+
 /// The tasks of one repository.
 #[derive(Debug, Clone)]
 pub struct Tasks {

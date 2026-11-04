@@ -225,6 +225,8 @@ pub fn run() {
             agents::task_patch,
             agents::create_task,
             agents::send_to_agent,
+            agents::with_comments,
+            agents::ask_to_rebase,
             agents::stop_agent,
             agents::land_task,
             agents::discard_task,

@@ -23,7 +23,7 @@ use gpui_kit::{
     Focusable as _, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task as GpuiTask, Window,
 };
-use spor::agent::{self, AgentKind, Entry, Permissions, Run, RunState, Runs};
+use spor::agent::{self, AgentKind, Entry, LineComment, Permissions, Run, RunState, Runs};
 use spor::tasks::{LandMode, Task, TaskState, TaskStats, Tasks};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -80,14 +80,6 @@ impl TaskView {
 pub enum TaskPane {
     Transcript,
     Changes,
-}
-
-/// A review comment on lines of the task's diff, sent with the next
-/// feedback.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LineComment {
-    pub place: String,
-    pub text: String,
 }
 
 /// Merge-tree results, keyed by the two commits merged.
@@ -712,7 +704,7 @@ impl Spor {
             Err(e) => return self.error(first_line(&e).to_string(), window, cx),
         };
         let start = self.agents.kind();
-        if let Some(e) = start.as_ref().and_then(agent_missing) {
+        if let Some(e) = start.as_ref().and_then(agent::missing) {
             return self.error(e, window, cx);
         }
         cx.spawn_in(window, async move |this, cx| {
@@ -773,33 +765,27 @@ impl Spor {
     ) {
         let Ok(tasks) = self.tasks() else { return };
         let runs = Runs::of(&tasks, task);
-        // Follow-ups go to the agent that did the work, whatever's picked now.
-        let previous = runs.latest().map(|r| r.kind);
-        let kind = match (follow_up, previous, self.agents.kind()) {
-            (true, Some(k), _) | (_, _, Some(k)) => k,
-            _ => return self.info("Pick an agent in New Agent Task first", window, cx),
-        };
-        if let Some(e) = agent_missing(&kind) {
-            return self.error(e, window, cx);
-        }
-        let session = follow_up.then(|| runs.session()).flatten();
-        // A custom command, or Claude without a session to resume, needs the
-        // whole task again, not just the feedback.
-        let prompt = if follow_up && session.is_none() {
-            format!(
-                "{}\n\nFeedback on the work so far:\n{}",
-                task.prompt.trim(),
-                prompt
-            )
-        } else {
-            prompt
+        let message = follow_up.then_some(prompt.as_str());
+        let chosen = self.agents.kind();
+        let plan = match runs.plan(task, message, chosen.as_ref()) {
+            Ok(plan) => plan,
+            Err(_) if chosen.is_none() && runs.latest().is_none() => {
+                return self.info("Pick an agent in New Agent Task first", window, cx)
+            }
+            Err(e) => return self.error(e, window, cx),
         };
         let permissions = Permissions::commands(self.agents.allow_commands);
-        match runs.start(task, &kind, &prompt, session.as_deref(), permissions) {
+        match runs.start(
+            task,
+            &plan.kind,
+            &plan.prompt,
+            plan.resume.as_deref(),
+            permissions,
+        ) {
             Ok(_) => {
                 self.agents.pane = TaskPane::Transcript;
                 self.ok(
-                    format!("{} is working on {}", kind.label(), task.id),
+                    format!("{} is working on {}", plan.kind.label(), task.id),
                     window,
                     cx,
                 );
@@ -821,21 +807,8 @@ impl Spor {
         let Some(view) = self.agents.open_task().cloned() else {
             return;
         };
-        let text = self.agents.feedback.read(cx).value().trim().to_string();
-        let mut message = text.clone();
-        if !self.agents.comments.is_empty() {
-            let notes: Vec<String> = self
-                .agents
-                .comments
-                .iter()
-                .map(|c| format!("- {}: {}", c.place, c.text))
-                .collect();
-            if !message.is_empty() {
-                message.push_str("\n\n");
-            }
-            message.push_str("Comments on the changes:\n");
-            message.push_str(&notes.join("\n"));
-        }
+        let text = self.agents.feedback.read(cx).value().to_string();
+        let message = agent::with_comments(&text, &self.agents.comments);
         if message.is_empty() {
             return;
         }
@@ -860,13 +833,7 @@ impl Spor {
             .filter(|(with, _)| *with == view.task.base)
             .flat_map(|(_, f)| f.clone())
             .collect();
-        let message = format!(
-            "{base} has moved on and this branch now conflicts with it in {files}. \
-             Rebase onto {base} (git rebase {base}), resolve the conflicts keeping both \
-             sides' intent, make sure it still builds and the tests pass, and commit.",
-            base = view.task.base,
-            files = files.join(", ")
-        );
+        let message = agent::rebase_request(&view.task.base, &files);
         self.start_agent(&view.task, message, true, window, cx);
     }
 
@@ -887,18 +854,15 @@ impl Spor {
         let Some(range) = self.agents.selection.clone() else {
             return self.info("Select lines in the diff first", window, cx);
         };
-        let side = |s: DiffSide| if s == DiffSide::Original { "was " } else { "" };
-        let place = if range.start() == range.end() {
-            format!("{}:{}{}", range.path(), side(range.side()), range.start())
-        } else {
-            format!(
-                "{}:{}{}–{}",
-                range.path(),
-                side(range.side()),
-                range.start().min(range.end()),
-                range.start().max(range.end())
-            )
+        // Where it is; the text comes from the dialog.
+        let at = LineComment {
+            path: range.path().to_string(),
+            start: range.start().min(range.end()),
+            end: range.start().max(range.end()),
+            removed: range.side() == DiffSide::Original,
+            text: String::new(),
         };
+        let place = at.place();
         let note = self.agents.note.clone();
         note.update(cx, |state, cx| {
             state.set_value("", window, cx);
@@ -908,6 +872,7 @@ impl Spor {
         window.open_dialog(cx, move |dialog, window, cx| {
             let spor = spor.clone();
             let place = place.clone();
+            let at = at.clone();
             let note_ok = note.clone();
             note.read(cx).focus_handle(cx).focus(window, cx);
             dialog
@@ -932,9 +897,9 @@ impl Spor {
                     if text.is_empty() {
                         return false;
                     }
-                    let place = place.clone();
+                    let comment = LineComment { text, ..at.clone() };
                     let _ = spor.update(cx, |this, cx| {
-                        this.agents.comments.push(LineComment { place, text });
+                        this.agents.comments.push(comment);
                         this.agents.pane = TaskPane::Transcript;
                         window.refresh();
                         cx.notify();
@@ -1037,12 +1002,7 @@ impl Spor {
                 if self.agents.open.as_deref() == Some(task.id.as_str()) {
                     self.close_task_page(cx);
                 }
-                self.did(
-                    format!("Landed {} on {}", task.id, task.base),
-                    Undo::Task(Box::new(undo)),
-                    window,
-                    cx,
-                );
+                self.did(undo.label(), Undo::Task(Box::new(undo)), window, cx);
                 self.set_tab(Tab::History);
             }
             Err(e) => self.error(first_line(&e).to_string(), window, cx),
@@ -1113,12 +1073,7 @@ impl Spor {
                 if self.agents.open.as_deref() == Some(task.id.as_str()) {
                     self.close_task_page(cx);
                 }
-                self.did(
-                    format!("Discarded {}", task.id),
-                    Undo::Task(Box::new(undo)),
-                    window,
-                    cx,
-                );
+                self.did(undo.label(), Undo::Task(Box::new(undo)), window, cx);
             }
             Err(e) => self.error(format!("Couldn't discard: {}", first_line(&e)), window, cx),
         }
@@ -1715,7 +1670,7 @@ impl Spor {
                             .flex_none()
                             .font_family(theme.mono_font_family.clone())
                             .text_color(theme.muted_foreground)
-                            .child(c.place.clone()),
+                            .child(c.place()),
                     )
                     .child(div().flex_1().min_w_0().truncate().child(c.text.clone()))
                     .child(
@@ -1770,20 +1725,6 @@ impl Spor {
             )
             .child(composer)
             .into_any_element()
-    }
-}
-
-/// Is the agent there to run? A message saying how to get it, if not.
-fn agent_missing(kind: &AgentKind) -> Option<String> {
-    match kind {
-        AgentKind::Claude if !agent::available("claude") => Some(
-            "Claude Code isn't installed, or isn't on the PATH — install it, or pick a custom command"
-                .into(),
-        ),
-        AgentKind::Command(c) if c.trim().is_empty() => {
-            Some("Set the custom agent command first (Agents panel menu)".into())
-        }
-        _ => None,
     }
 }
 

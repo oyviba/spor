@@ -166,14 +166,13 @@ export function AgentsSection() {
       .then(afterChange, fail);
   };
 
+  // The core writes the request, from the conflicts it finds now.
   const askRebase = () => {
     if (!shown) return;
-    const base = shown.task.base;
-    send(
-      `${base} has moved on and this branch now conflicts with it in ${shown.conflicts.join(", ")}. ` +
-        `Rebase onto ${base} (git rebase ${base}), resolve the conflicts keeping both sides' intent, ` +
-        `make sure it still builds and the tests pass, and commit.`,
-    );
+    api
+      .askToRebase(shown.task.id, choiceOf(settings), settings.mode)
+      .then(() => setTab("conversation"))
+      .then(afterChange, fail);
   };
 
   const taskComments = selectedId ? (comments[selectedId] ?? []) : [];
