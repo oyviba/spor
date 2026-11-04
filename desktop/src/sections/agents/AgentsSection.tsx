@@ -7,7 +7,7 @@ import { useShell } from "../../shared/app";
 import { Sidebar } from "./Sidebar";
 import { NewTask } from "./NewTask";
 import { TaskPage, type Tab } from "./TaskPage";
-import { choiceOf, type AgentSettings, type ComposerHandle } from "./Composer";
+import { choiceOf, useAgentSettings, type ComposerHandle } from "./Composer";
 
 type View = { kind: "new" } | { kind: "task"; id: string };
 
@@ -24,11 +24,7 @@ export function AgentsSection() {
   const [source, setSource] = useState<"all" | number>("all");
   const [runPatch, setRunPatch] = useState<{ key: string; value: RunPatch } | null>(null);
   const [tab, setTab] = useState<Tab>("conversation");
-  const [settings, setSettings] = useStored<AgentSettings>("agent", {
-    agent: "claude",
-    template: "",
-    allowCommands: false,
-  });
+  const [settings, setSettings] = useAgentSettings();
   const [seen, setSeen] = useStored<Record<string, number>>("seen", {});
   const [shelves, setShelves] = useStored("shelves", { working: true, settled: false });
   const [inspector, setInspector] = useStored("inspector", true);
@@ -112,7 +108,7 @@ export function AgentsSection() {
       sending.current.add(id);
       const [first, ...rest] = messages;
       api
-        .sendToAgent(id, first, choiceOf(settings), settings.allowCommands)
+        .sendToAgent(id, first, choiceOf(settings), settings.mode)
         .then(() => setQueue((q) => ({ ...q, [id]: rest })), fail)
         .then(refreshTasks)
         .finally(() => sending.current.delete(id));
@@ -145,7 +141,7 @@ export function AgentsSection() {
 
   const create = async (prompt: string, base: string, background: boolean) => {
     try {
-      const t = await api.createTask(prompt, base, choiceOf(settings), settings.allowCommands);
+      const t = await api.createTask(prompt, base, choiceOf(settings), settings.mode);
       await refreshTasks();
       if (background) toast(`Started ${t.id}`);
       else setView({ kind: "task", id: t.id });
@@ -165,7 +161,7 @@ export function AgentsSection() {
       return;
     }
     api
-      .sendToAgent(id, text, choiceOf(settings), settings.allowCommands)
+      .sendToAgent(id, text, choiceOf(settings), settings.mode)
       .then(() => setTab("conversation"))
       .then(afterChange, fail);
   };
@@ -221,6 +217,16 @@ export function AgentsSection() {
               setTab("changes");
             }}
             onUndoRun={() => shell.act(() => api.undoRun(shown.task.id)).then(afterChange)}
+            onAnswer={(ask, allow, message) =>
+              api.answerAsk(shown.task.id, ask.id, allow, message ?? "").then(afterChange, fail)
+            }
+            onSteer={(text) => {
+              setComments((c) => ({ ...c, [shown.task.id]: [] }));
+              api.steer(shown.task.id, text).then(afterChange, fail);
+            }}
+            onLiveMode={(mode) =>
+              api.setMode(shown.task.id, mode).then(() => toast(`The agent is now in ${mode === "acceptEdits" ? "auto-accept edits" : mode} mode`), fail)
+            }
             inspector={inspector}
             onInspector={setInspector}
             settings={settings}
@@ -245,7 +251,7 @@ export function AgentsSection() {
               setQueue((q) => ({ ...q, [shown.task.id]: (q[shown.task.id] ?? []).filter((_, j) => j !== i) }))
             }
             onStart={() =>
-              api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.allowCommands).then(afterChange, fail)
+              api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode).then(afterChange, fail)
             }
             onSend={send}
             onStop={() => api.stopAgent(shown.task.id).then(afterChange, fail)}

@@ -11,7 +11,11 @@ export type Tool = Extract<Item, { kind: "tool" | "tool_error" }>;
 export type Block =
   | { kind: "text"; text: string }
   | { kind: "tools"; tools: Tool[] }
-  | { kind: "output"; lines: string[] };
+  | { kind: "output"; lines: string[] }
+  /** A question the agent asked, and how it was answered (null: waiting). */
+  | { kind: "ask"; id: string; tool: string; detail: string; answer: { allow: boolean; message: string } | null }
+  /** A message sent while it worked. */
+  | { kind: "steer"; text: string };
 
 export interface RunView {
   index: number;
@@ -56,6 +60,17 @@ export function runs(items: Item[], running: boolean): RunView[] {
       case "output":
         push({ kind: "output", lines: [item.text] });
         break;
+      case "ask":
+        push({ kind: "ask", id: item.id, tool: item.tool, detail: item.detail, answer: null });
+        break;
+      case "answer": {
+        const ask = (current as RunView | null)?.blocks.find((b) => b.kind === "ask" && b.id === item.id);
+        if (ask?.kind === "ask") ask.answer = { allow: item.allow, message: item.message };
+        break;
+      }
+      case "steer":
+        push({ kind: "steer", text: item.text });
+        break;
       case "done":
         if (current) (current as RunView).done = item;
         break;
@@ -69,9 +84,15 @@ export function runs(items: Item[], running: boolean): RunView[] {
 
 function foldOf(run: RunView): RunView["fold"] {
   if (run.live || !run.done || !run.done.ok) return null;
-  // A refused or failed tool call stays in view, so the fold never hides
-  // something that went wrong.
-  if (run.blocks.some((b) => b.kind === "tools" && b.tools.some((t) => t.kind === "tool_error")))
+  // A refused or failed tool call, or a question answered no, stays in
+  // view, so the fold never hides something that went wrong.
+  if (
+    run.blocks.some(
+      (b) =>
+        (b.kind === "tools" && b.tools.some((t) => t.kind === "tool_error")) ||
+        (b.kind === "ask" && !b.answer?.allow),
+    )
+  )
     return null;
   const finalIndex = run.blocks.findLastIndex((b) => b.kind === "text");
   const final = finalIndex >= 0 ? run.blocks[finalIndex] : null;

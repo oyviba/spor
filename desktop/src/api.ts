@@ -5,6 +5,7 @@ import type {
   FileEntry,
   Graph,
   LogLine,
+  Mode,
   Pull,
   PullDetail,
   RepoInfo,
@@ -90,11 +91,18 @@ export const api = {
   listTasks: () => call<TaskSummary[]>("list_tasks"),
   taskDetail: (id: string) => call<TaskDetail>("task_detail", { id }),
   taskPatch: (id: string) => call<string>("task_patch", { id }),
-  createTask: (prompt: string, base: string, agent: AgentChoice, allowCommands: boolean) =>
-    call<TaskSummary>("create_task", { prompt, base, agent, allowCommands }),
+  createTask: (prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
+    call<TaskSummary>("create_task", { prompt, base, agent, mode }),
   /** `message` null starts the task's own prompt; otherwise it's a follow-up. */
-  sendToAgent: (id: string, message: string | null, agent: AgentChoice, allowCommands: boolean) =>
-    call<void>("send_to_agent", { id, message, agent, allowCommands }),
+  sendToAgent: (id: string, message: string | null, agent: AgentChoice, mode: Mode) =>
+    call<void>("send_to_agent", { id, message, agent, mode }),
+  /** Answer a question the agent asked; `message` says what to do instead. */
+  answerAsk: (id: string, requestId: string, allow: boolean, message = "") =>
+    call<void>("answer_ask", { id, requestId, allow, message }),
+  /** A message into the turn the agent is on (#22). */
+  steer: (id: string, text: string) => call<void>("steer", { id, text }),
+  /** Change the running agent's permission mode. */
+  setMode: (id: string, mode: Mode) => call<void>("set_mode", { id, mode }),
   stopAgent: (id: string) => call<void>("stop_agent", { id }),
   landTask: (id: string, merge: boolean, commitUncommitted: boolean) =>
     call<string>("land_task", { id, merge, commitUncommitted }),

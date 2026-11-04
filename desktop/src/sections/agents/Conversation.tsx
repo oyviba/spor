@@ -3,7 +3,8 @@ import type { RunInfo, TaskDetail } from "../../types";
 import { duration, runs as toRuns, stoppedLabel, summarize, type Block, type RunView, type Tool } from "./transcript";
 import { useNow } from "../../shared/hooks";
 import { Markdown } from "../../shared/Markdown";
-import { Alert, Chevron, Square, ToolIcon } from "../../shared/Icons";
+import { Alert, Check, Chevron, Square, ToolIcon, X } from "../../shared/Icons";
+import { verbOf } from "./Composer";
 
 interface Props {
   detail: TaskDetail;
@@ -75,7 +76,7 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun }: Props)
             onUndoRun={onUndoRun}
           />
         ))}
-        {running && latest && <LiveLine run={latest} onStop={onStop} />}
+        {running && latest && <LiveLine run={latest} waiting={detail.asks.length > 0} onStop={onStop} />}
       </div>
     </div>
   );
@@ -180,6 +181,34 @@ function BlockView({
   toggle: (key: string) => void;
 }) {
   if (block.kind === "text") return <Markdown text={block.text} />;
+  if (block.kind === "steer")
+    return (
+      <div className="bubble-row">
+        <div className="bubble steer" title="Sent while it worked">
+          {block.text}
+        </div>
+      </div>
+    );
+  if (block.kind === "ask") {
+    const a = block.answer;
+    return (
+      <div className={`ask-line${a ? (a.allow ? " allowed" : " denied") : " waiting"}`}>
+        {a?.allow ? <Check size={13} /> : a ? <X size={13} /> : <Alert size={13} />}
+        <span>
+          Asked to {verbOf(block.tool)}
+          {block.detail && (
+            <>
+              {" "}
+              <code>{block.detail}</code>
+            </>
+          )}
+        </span>
+        <span className="ask-outcome">
+          {a ? (a.allow ? "Allowed" : a.message ? `Denied: ${a.message}` : "Denied") : "Waiting for you"}
+        </span>
+      </div>
+    );
+  }
   if (block.kind === "output") {
     const shown = open.has(id) ? block.lines : block.lines.slice(-6);
     return (
@@ -252,12 +281,14 @@ function ToolGroup({
   );
 }
 
-function LiveLine({ run, onStop }: { run: RunInfo; onStop: () => void }) {
+function LiveLine({ run, waiting, onStop }: { run: RunInfo; waiting: boolean; onStop: () => void }) {
   const now = useNow(1000);
   return (
-    <div className="live-line">
-      <span className="dot pulse tone-sky" />
-      <span className="num">Working {duration(now / 1000 - run.started)}</span>
+    <div className={`live-line${waiting ? " waiting" : ""}`}>
+      <span className={`dot${waiting ? "" : " pulse"}`} />
+      <span className="num">
+        {waiting ? "Waiting for you" : `Working ${duration(now / 1000 - run.started)}`}
+      </span>
       <button className="ghost small" onClick={onStop}>
         <Square size={10} /> Stop
       </button>

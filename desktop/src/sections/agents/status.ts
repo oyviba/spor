@@ -15,6 +15,7 @@ export function statusOf(t: TaskSummary, seenAt: number | undefined, nowMs: numb
   if (t.landed) return null;
   if (t.stats.missing) return { label: "Folder gone", tone: "amber", live: false };
   const run = t.run;
+  if (t.asks > 0) return { label: "Needs you", tone: "amber", live: false };
   if (run?.state === "running")
     return { label: `Working ${duration(nowMs / 1000 - run.started)}`, tone: "sky", live: true };
   const unseen = seenAt == null || seenAt < activityAt(t);

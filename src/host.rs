@@ -231,7 +231,8 @@ pub fn main(_args: &[String]) -> i32 {
     2
 }
 
-/// One command from spor: `{"message": "…"}`, `{"interrupt": true}`, or
+/// One command from spor: `{"message": "…"}`, `{"interrupt": true}`,
+/// `{"mode": "acceptEdits"}`, or
 /// `{"answer": {"request_id": "…", "allow": true, "message": "…"}}`.
 #[cfg(unix)]
 fn handle(
@@ -250,6 +251,11 @@ fn handle(
             quote(text)
         ));
         Ok(())
+    } else if let Some(mode) = cmd.get("mode").str() {
+        send(&format!(
+            r#"{{"type":"control_request","request_id":"spor-mode-{n}","request":{{"subtype":"set_permission_mode","mode":{}}}}}"#,
+            quote(mode)
+        ))
     } else if cmd.get("interrupt").bool() == Some(true) {
         send(&format!(
             r#"{{"type":"control_request","request_id":"spor-interrupt-{n}","request":{{"subtype":"interrupt"}}}}"#

@@ -93,6 +93,7 @@ export const Refresh = (p: P) => (
 export const ArrowDown = (p: P) => <Svg {...p}><path d="m19 12-7 7-7-7M12 5v14" /></Svg>;
 export const Undo = (p: P) => <Svg {...p}><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></Svg>;
 export const Minus = (p: P) => <Svg {...p}><path d="M5 12h14" /></Svg>;
+export const CornerDownRight = (p: P) => <Svg {...p}><path d="m15 10 5 5-5 5" /><path d="M4 4v7a4 4 0 0 0 4 4h12" /></Svg>;
 export const Tag = (p: P) => (
   <Svg {...p}><path d="M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4Z" /><circle cx="7.5" cy="7.5" r="1" fill="currentColor" /></Svg>
 );

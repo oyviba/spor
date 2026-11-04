@@ -30,18 +30,38 @@ try {
   await w.enter(".new-task textarea");
   await w.waitFor(".task-page .live-line");
   check(git("branch", "--list", "agent/*").includes("agent/let-greet-take-optional"), "task branch created");
+
+  console.log("Steering it while it works (#22)");
+  check((await w.text(".composer-footer .chip-toggle")).includes("queues"), "while it works, ↩ queues by default");
+  await w.fill(".composer-dock textarea", "Keep the docstring short");
+  check((await w.text(".hint-keys")).includes("⌘↩ steer"), "…and ⌘↩ steers");
+  await w.key(".composer-dock textarea", "Enter", { ctrlKey: true });
+  await w.until(`return [...document.querySelectorAll(".bubble.steer")].some(b => b.innerText.includes("Keep the docstring short"))`, "the steer bubble");
+  await w.until(`return document.querySelector(".conversation").innerText.includes("Noted: Keep the docstring short")`, "the agent taking it", 15000);
+  check(true, "a steered message goes into the running turn, and the agent takes it");
+  check(!(await w.count(".queued-item")), "…without queueing it");
   await sleep(4500);
   await w.shot("1-working");
 
+  console.log("It asks before running the tests (#21)");
+  await w.waitFor(".composer .ask-card", 30000);
+  check((await w.text(".ask-card")).includes("python -m pytest -q"), "the question shows in the composer, with the command");
+  check((await w.text(".task-row .pill")).includes("Needs you"), "the task says it needs you");
+  check((await w.text(".list-label.needs-you")) === "Needs you", "…and moves to the top of the list");
+  await w.until(`return document.querySelector(".rail-badge.asking")?.textContent === "1"`, "the rail's count", 6000);
+  check(true, "the rail counts it in amber");
+  await w.shot("2a-asking");
+  await w.clickText(".ask-card button", "Allow");
+
   console.log("Agent finishes");
-  await w.waitFor(".run .run-end", 30000);
+  await w.waitFor(".run .fold", 30000);
   await w.shot("2-finished");
   const transcript = await w.text(".conversation");
-  // The stand-in agent's first run has a refused tool call, so it stays
-  // open (a run with a failure never folds) and says what failed.
-  check(!transcript.includes("Worked for"), "a run with a refused tool call doesn't fold");
-  check(transcript.includes("1 failed"), "the refusal is visible in the tool summary");
-  check(transcript.includes("now takes an optional"), "agent's final message is shown");
+  check(transcript.includes("The tests pass."), "Allow lets it run the tests");
+  await w.click(".run .fold");
+  await w.until(`return document.querySelector(".ask-line.allowed")?.innerText.includes("Allowed")`, "the answered question");
+  check(true, "the transcript shows the question, allowed");
+  check(!(await w.count(".ask-card")), "the question is gone from the composer");
 
   console.log("Review");
   await w.clickText(".tabs button", "Changes");
@@ -80,7 +100,7 @@ try {
   const metaDir = `${repo}/.git/spor/tasks/let-greet-take-optional.d`;
   check(existsSync(`${metaDir}/run-1.undone`), "the run is marked undone");
   await w.shot("4b-run-undone");
-  await w.js(`document.querySelector(".toast .link").click()`);
+  await w.clickText(".toast .link", "Undo");
   await w.until(`return !document.querySelector(".run.undone")`, "the redo");
   check(read("greet.py").includes("farewell") && !existsSync(`${metaDir}/run-1.undone`), "Undo on the toast brings the run back");
 
@@ -94,7 +114,7 @@ try {
   await w.shot("5-landed");
 
   console.log("Undo");
-  await w.js(`document.querySelector(".toast .link").click()`);
+  await w.clickText(".toast .link", "Undo");
   await sleep(1500);
   check(git("rev-parse", "main") === before, "undo put main back");
   check(git("branch", "--list", "agent/*").includes("agent/let-greet-take-optional"), "undo restored the task branch");

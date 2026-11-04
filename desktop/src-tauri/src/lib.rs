@@ -196,6 +196,11 @@ pub(crate) fn name_of(value: &impl std::fmt::Debug) -> String {
 }
 
 pub fn run() {
+    // Claude Code runs under this same executable as its host, so agents
+    // can ask before acting and be steered (spor::host, #20).
+    if let Ok(me) = std::env::current_exe() {
+        spor::host::set_program(me);
+    }
     let app = App::default();
     // The repository to open: the first argument, else $SPOR_REPO, else the
     // current directory if it's in one.
@@ -226,6 +231,9 @@ pub fn run() {
             agents::open_folder,
             agents::run_patch,
             agents::undo_run,
+            agents::answer_ask,
+            agents::set_mode,
+            agents::steer,
             history::graph,
             history::search_commits,
             history::commit_detail,

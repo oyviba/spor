@@ -105,7 +105,9 @@ fn wait_until_done(runs: &Runs) -> RunState {
     }
 }
 
-const NO_COMMANDS: Permissions = Permissions { commands: false };
+const NO_COMMANDS: Permissions = Permissions {
+    mode: spor::agent::Mode::AcceptEdits,
+};
 
 #[test]
 fn a_custom_command_runs_in_the_task_folder() {

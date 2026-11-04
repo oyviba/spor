@@ -4,7 +4,7 @@
 //!
 //! Its own test binary: opting in to the host is process-wide.
 
-use spor::agent::{AgentKind, Entry, Permissions, RunState, Runs};
+use spor::agent::{AgentKind, Entry, Mode, Permissions, RunState, Runs};
 use spor::git::Repo;
 use spor::tasks::{Task, Tasks};
 use std::path::{Path, PathBuf};
@@ -67,6 +67,10 @@ case "$first" in
     read -r next
     echo "$next" > steer.txt
     say "Heard you." ;;
+  *mode*)
+    say "Which mode?"
+    read -r next
+    echo "$next" > mode.txt ;;
   *interrupt*)
     say "Taking my time."
     read -r next
@@ -126,7 +130,9 @@ fn start(f: &Fixture, prompt: &str) -> (Task, Runs) {
         &AgentKind::Claude,
         prompt,
         None,
-        Permissions { commands: false },
+        Permissions {
+            mode: spor::agent::Mode::AcceptEdits,
+        },
     )
     .unwrap();
     (task, runs)
@@ -270,6 +276,22 @@ fn a_running_agent_can_be_steered() {
 }
 
 #[test]
+fn finish_interrupts_rather_than_kills() {
+    let f = fixture();
+    let (_task, runs) = start(&f, "interrupt me");
+    wait_for("it to start", || {
+        texts(&runs).contains(&Entry::Text("Taking my time.".into()))
+    });
+    runs.finish(Duration::from_secs(5)).unwrap();
+    // Interrupted, not killed: it ended on its own, with a result.
+    assert_eq!(runs.latest().unwrap().state, RunState::Finished);
+    assert!(matches!(
+        texts(&runs).last(),
+        Some(Entry::Done { ok: false, .. })
+    ));
+}
+
+#[test]
 fn interrupt_ends_the_turn() {
     let f = fixture();
     let (_task, runs) = start(&f, "interrupt me");
@@ -284,4 +306,38 @@ fn interrupt_ends_the_turn() {
     ));
     // The session survives, for a follow-up.
     assert_eq!(runs.session().as_deref(), Some("sess-stream"));
+}
+
+#[test]
+fn the_mode_can_change_while_it_works() {
+    let f = fixture();
+    let task = f.tasks.create("mode please", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    runs.start(
+        &task,
+        &AgentKind::Claude,
+        "mode please",
+        None,
+        Permissions {
+            mode: Mode::Supervised,
+        },
+    )
+    .unwrap();
+    wait_for("it to start", || {
+        texts(&runs).contains(&Entry::Text("Which mode?".into()))
+    });
+    let args = std::fs::read_to_string(task.worktree.join("claude-args.txt")).unwrap();
+    assert!(
+        args.contains("--permission-mode\nmanual\n"),
+        "Supervised is Claude's manual mode: {args}"
+    );
+    assert_eq!(runs.mode(0), Some(Mode::Supervised));
+    runs.set_mode(Mode::AcceptEdits).unwrap();
+    assert_eq!(done(&runs), RunState::Finished);
+    let sent = std::fs::read_to_string(task.worktree.join("mode.txt")).unwrap();
+    assert!(
+        sent.contains(r#""subtype":"set_permission_mode","mode":"acceptEdits""#),
+        "{sent}"
+    );
+    assert_eq!(runs.mode(0), Some(Mode::AcceptEdits));
 }

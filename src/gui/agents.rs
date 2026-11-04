@@ -794,9 +794,7 @@ impl Spor {
         } else {
             prompt
         };
-        let permissions = Permissions {
-            commands: self.agents.allow_commands,
-        };
+        let permissions = Permissions::commands(self.agents.allow_commands);
         match runs.start(task, &kind, &prompt, session.as_deref(), permissions) {
             Ok(_) => {
                 self.agents.pane = TaskPane::Transcript;

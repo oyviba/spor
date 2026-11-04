@@ -1,5 +1,5 @@
 import { forwardRef } from "react";
-import type { LineComment, RepoInfo, TaskDetail } from "../../types";
+import type { Ask, LineComment, Mode, RepoInfo, TaskDetail } from "../../types";
 import { statusOf } from "./status";
 import { useNow } from "../../shared/hooks";
 import { DiffView } from "../../shared/DiffView";
@@ -45,6 +45,9 @@ interface Props {
   fromBase: string[];
   onRunChanges: (index: number) => void;
   onUndoRun: () => void;
+  onAnswer: (ask: Ask, allow: boolean, message?: string) => void;
+  onLiveMode: (mode: Mode) => void;
+  onSteer: (text: string) => void;
 }
 
 export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, composerRef) {
@@ -146,6 +149,12 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
           onJumpToComment={p.onFocus}
           queued={p.queued}
           onUnqueue={p.onUnqueue}
+          asks={p.detail.asks}
+          onAnswer={p.onAnswer}
+          liveMode={p.detail.listening ? (t.mode ?? null) : null}
+          onLiveMode={p.onLiveMode}
+          canSteer={p.detail.listening}
+          onSteer={p.onSteer}
           onStart={p.onStart}
           onSend={p.onSend}
           onStop={p.onStop}

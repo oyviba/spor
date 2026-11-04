@@ -42,12 +42,66 @@ impl AgentKind {
     }
 }
 
-/// How much the agent may do without asking (headless agents can't ask).
+/// How much the agent may do without asking (#21). Under the host (see
+/// `host`) Claude Code asks about the rest and spor shows the question;
+/// without it nobody can answer, and what it would ask about is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Asks before commands and file edits.
+    Supervised,
+    /// Edits freely, asks before commands.
+    AcceptEdits,
+    /// Claude Code's own review approves routine actions and asks about
+    /// the rest.
+    Auto,
+    /// Never asks.
+    Full,
+}
+
+impl Mode {
+    pub const ALL: [Mode; 4] = [Mode::Supervised, Mode::AcceptEdits, Mode::Auto, Mode::Full];
+
+    /// Claude Code's `--permission-mode`.
+    pub fn flag(self) -> &'static str {
+        match self {
+            Mode::Supervised => "manual",
+            Mode::AcceptEdits => "acceptEdits",
+            Mode::Auto => "auto",
+            Mode::Full => "bypassPermissions",
+        }
+    }
+
+    pub fn from_flag(flag: &str) -> Option<Mode> {
+        Mode::ALL.into_iter().find(|m| m.flag() == flag)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Supervised => "Supervised",
+            Mode::AcceptEdits => "Auto-accept edits",
+            Mode::Auto => "Auto",
+            Mode::Full => "Full access",
+        }
+    }
+}
+
+/// How much the agent may do without asking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Permissions {
-    /// Run shell commands. Without it Claude Code may edit files but its
-    /// commands are refused, which it reports and works around.
-    pub commands: bool,
+    pub mode: Mode,
+}
+
+impl Permissions {
+    /// Edits only, or edits and commands: the GPUI app's checkbox.
+    pub fn commands(allowed: bool) -> Self {
+        Self {
+            mode: if allowed {
+                Mode::Full
+            } else {
+                Mode::AcceptEdits
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +292,7 @@ echo $code > "$SPOR_EXIT""#;
         let meta = [
             ("kind", kind_name(kind)),
             ("hosted", hosted.to_string()),
+            ("mode", permissions.mode.flag().to_string()),
             ("prompt", prompt.to_string()),
             ("started", started.to_string()),
             ("pid", pid.to_string()),
@@ -262,6 +317,22 @@ echo $code > "$SPOR_EXIT""#;
             cost_usd: None,
             undone: false,
         })
+    }
+
+    /// End the running agent's turn: interrupt it when it's listening (it
+    /// finishes cleanly and keeps its session, #22), and kill it only if
+    /// that doesn't land within `grace` or it can't be talked to.
+    pub fn finish(&self, grace: std::time::Duration) -> Result<(), String> {
+        if self.listening() && self.interrupt().is_ok() {
+            let until = std::time::Instant::now() + grace;
+            while std::time::Instant::now() < until {
+                if self.latest().is_none_or(|r| r.state != RunState::Running) {
+                    return Ok(());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+        self.stop()
     }
 
     /// Stop the running agent, and everything it started.
@@ -394,6 +465,33 @@ echo $code > "$SPOR_EXIT""#;
             host::quote(id),
             host::quote(message)
         ))
+    }
+
+    /// Change the running agent's permission mode (Claude Code under the
+    /// host). Takes effect for what it does next.
+    pub fn set_mode(&self, mode: Mode) -> Result<(), String> {
+        self.command(&format!(r#"{{"mode":{}}}"#, host::quote(mode.flag())))?;
+        if let Some(run) = self.latest() {
+            self.set_meta(run.index, "mode", mode.flag())?;
+        }
+        Ok(())
+    }
+
+    /// The permission mode run `index` was started with (or changed to).
+    pub fn mode(&self, index: usize) -> Option<Mode> {
+        self.meta(index, "mode").and_then(|m| Mode::from_flag(&m))
+    }
+
+    fn set_meta(&self, index: usize, key: &str, value: &str) -> Result<(), String> {
+        let path = self.file(index, "meta");
+        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let mut lines: Vec<String> = text
+            .lines()
+            .filter(|l| !l.starts_with(&format!("{key}\t")))
+            .map(String::from)
+            .collect();
+        lines.push(format!("{key}\t{}", escape(value)));
+        std::fs::write(&path, lines.join("\n") + "\n").map_err(|e| e.to_string())
     }
 
     /// The questions the running agent is waiting on.
@@ -604,11 +702,7 @@ fn command_for(
                 "stream-json",
                 "--verbose",
                 "--permission-mode",
-                if permissions.commands {
-                    "bypassPermissions"
-                } else {
-                    "acceptEdits"
-                },
+                permissions.mode.flag(),
             ]
             .map(String::from)
             .to_vec();
@@ -928,7 +1022,7 @@ not json at all
             &AgentKind::Claude,
             "Fix it",
             Some("s-1"),
-            Permissions { commands: false },
+            Permissions::commands(false),
         );
         assert_eq!(program, "claude");
         assert!(args
@@ -947,7 +1041,7 @@ not json at all
             &AgentKind::Command("codex exec {prompt}".into()),
             "Don't",
             None,
-            Permissions { commands: true },
+            Permissions::commands(true),
         );
         assert_eq!(program, "sh");
         assert_eq!(args, ["-c", r"codex exec 'Don'\''t'"]);

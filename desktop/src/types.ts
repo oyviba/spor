@@ -50,6 +50,18 @@ export interface TaskSummary {
   run: RunInfo | null;
   runs: number;
   command: string;
+  /** Questions the agent is waiting on. */
+  asks: number;
+  mode: Mode | null;
+}
+
+/** How much an agent may do without asking (#21). */
+export type Mode = "supervised" | "acceptEdits" | "auto" | "full";
+
+export interface Ask {
+  id: string;
+  tool: string;
+  detail: string;
 }
 
 export type Item =
@@ -65,7 +77,10 @@ export type Item =
       turns: number | null;
       seconds: number | null;
     }
-  | { kind: "output"; text: string };
+  | { kind: "output"; text: string }
+  | { kind: "ask"; id: string; tool: string; detail: string }
+  | { kind: "answer"; id: string; allow: boolean; message: string }
+  | { kind: "steer"; text: string };
 
 export interface TaskDetail {
   task: TaskSummary;
@@ -74,6 +89,10 @@ export interface TaskDetail {
   conflicts: string[];
   /** The run "Undo this run" would take back. */
   undoable: number | null;
+  /** Questions the agent is waiting on. */
+  asks: Ask[];
+  /** The running agent can be answered, steered and interrupted. */
+  listening: boolean;
 }
 
 export interface RunPatch {

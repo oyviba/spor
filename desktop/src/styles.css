@@ -1180,11 +1180,12 @@ kbd {
 
 /* ---- Toasts ---- */
 
+/* Bottom right: clear of the composer, which owns the bottom middle. */
 .toasts {
   position: fixed;
-  left: 50%;
+  right: 20px;
   bottom: 20px;
-  transform: translateX(-50%);
+  align-items: flex-end;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1908,4 +1909,93 @@ kbd {
 }
 .source-bar .chip-select {
   max-width: 420px;
+}
+
+/* ---- Questions (#21) and steering (#22) ---- */
+
+.composer.asking {
+  border-color: color-mix(in oklab, var(--amber) 55%, var(--border-strong));
+}
+.ask-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -2px -2px 10px -6px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--amber) 10%, var(--card));
+}
+.ask-card > svg {
+  color: var(--amber);
+  flex-shrink: 0;
+}
+.ask-text {
+  flex: 1;
+  min-width: 0;
+}
+.ask-detail {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-2);
+}
+.ask-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--fg-2);
+  min-width: 0;
+}
+.ask-line code {
+  color: var(--fg);
+}
+.ask-line > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ask-outcome {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.ask-line.waiting,
+.ask-line.waiting .ask-outcome {
+  color: var(--amber);
+}
+.ask-line.allowed > svg,
+.ask-line.allowed .ask-outcome {
+  color: var(--emerald);
+}
+.ask-line.denied > svg,
+.ask-line.denied .ask-outcome {
+  color: var(--red);
+}
+.bubble.steer {
+  font-size: 12.5px;
+  padding: 6px 12px;
+  opacity: 0.85;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+}
+.list-label.needs-you {
+  color: var(--amber);
+}
+.rail-badge.asking {
+  background: var(--amber);
+  color: #fff;
+}
+.chip-select.mode-full {
+  border-color: color-mix(in oklab, var(--amber) 50%, var(--border));
+  color: var(--amber);
+}
+.chip-select.mode-supervised {
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--border));
+}
+.live-line.waiting {
+  color: var(--amber);
 }
