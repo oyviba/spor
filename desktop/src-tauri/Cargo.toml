@@ -1,0 +1,24 @@
+[package]
+name = "spor-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Prototype: spor's agent tasks in a Tauri app, over the same core as the terminal and GPUI builds"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Its own workspace, so building the prototype never touches the root crate's
+# lockfile or its single-dependency terminal build.
+[workspace]
+
+[lib]
+name = "spor_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+spor = { path = "../.." }
+tauri = { version = "2.9", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
