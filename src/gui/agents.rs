@@ -1865,6 +1865,28 @@ fn render_entry(entry: &Entry, cx: &App) -> AnyElement {
             .text_color(theme.muted_foreground)
             .child(line.clone())
             .into_any_element(),
+        // Only agents run under the host ask or get steered; the GPUI app
+        // doesn't run them that way yet, so these show plainly.
+        Entry::Ask { tool, detail, .. } => div()
+            .text_xs()
+            .text_color(theme.yellow)
+            .child(format!("Asked to use {tool}: {detail}"))
+            .into_any_element(),
+        Entry::Answer { allow, message, .. } => div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(if *allow {
+                "Allowed".to_string()
+            } else if message.is_empty() {
+                "Denied".to_string()
+            } else {
+                format!("Denied: {message}")
+            })
+            .into_any_element(),
+        Entry::Steer(text) => div()
+            .text_sm()
+            .child(format!("You: {text}"))
+            .into_any_element(),
     }
 }
 

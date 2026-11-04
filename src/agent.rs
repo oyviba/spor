@@ -17,6 +17,7 @@
 //! snapshot of the conversation up to it).
 
 use crate::checkpoint;
+use crate::host;
 use crate::json::Json;
 use crate::tasks::{Task, Tasks};
 use std::path::{Path, PathBuf};
@@ -108,6 +109,29 @@ pub enum Entry {
     },
     /// Raw output: a custom command's, or anything that wasn't an event.
     Output(String),
+    /// The agent asks to use a tool its permission mode doesn't allow
+    /// (through the host, #20): the question's id, the tool, the gist.
+    Ask {
+        id: String,
+        tool: String,
+        detail: String,
+    },
+    /// How a question was answered (`message`: what the user said instead).
+    Answer {
+        id: String,
+        allow: bool,
+        message: String,
+    },
+    /// A message sent to the agent while it worked (steering, #22).
+    Steer(String),
+}
+
+/// A question the agent is waiting on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ask {
+    pub id: String,
+    pub tool: String,
+    pub detail: String,
 }
 
 /// The runs of one task.
@@ -165,13 +189,32 @@ impl Runs {
         let script = r#""$@" > "$SPOR_LOG" 2>&1; code=$?
 SPOR_REF="$SPOR_AFTER" sh -c "$SPOR_SNAPSHOT" > /dev/null 2>&1
 echo $code > "$SPOR_EXIT""#;
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(script)
-            .arg("spor-agent")
-            .arg(&program)
-            .args(&args)
-            .current_dir(&task.worktree)
+        let hosted = *kind == AgentKind::Claude && host::program().is_some();
+        let mut cmd = match host::program().filter(|_| hosted) {
+            // Claude under the host: it can ask, and be steered (#20).
+            Some(host_program) => {
+                let mut cmd = Command::new(host_program);
+                cmd.arg(host::ARG)
+                    .arg(&log)
+                    .arg(&exit)
+                    .arg(self.file(index, "sock"))
+                    .arg(self.checkpoint_ref(index, "after"))
+                    .arg("--")
+                    .arg(&program)
+                    .args(hosted_args(&args));
+                cmd
+            }
+            None => {
+                let mut cmd = Command::new("sh");
+                cmd.arg("-c")
+                    .arg(script)
+                    .arg("spor-agent")
+                    .arg(&program)
+                    .args(&args);
+                cmd
+            }
+        };
+        cmd.current_dir(&task.worktree)
             .env("SPOR_LOG", &log)
             .env("SPOR_EXIT", &exit)
             .env("SPOR_AFTER", self.checkpoint_ref(index, "after"))
@@ -194,6 +237,7 @@ echo $code > "$SPOR_EXIT""#;
         let pid = child.id();
         let meta = [
             ("kind", kind_name(kind)),
+            ("hosted", hosted.to_string()),
             ("prompt", prompt.to_string()),
             ("started", started.to_string()),
             ("pid", pid.to_string()),
@@ -313,6 +357,70 @@ echo $code > "$SPOR_EXIT""#;
             patch: checkpoint::diff(wt, &before, &after, paths.as_deref())?,
             from_base,
         })
+    }
+
+    /// Whether the running agent can be talked to: asked questions answered,
+    /// steered, interrupted (it runs under the host).
+    pub fn listening(&self) -> bool {
+        self.latest()
+            .is_some_and(|r| r.state == RunState::Running && self.file(r.index, "sock").exists())
+    }
+
+    fn command(&self, line: &str) -> Result<(), String> {
+        let run = self
+            .latest()
+            .filter(|r| r.state == RunState::Running)
+            .ok_or("No agent is working")?;
+        host::request(&self.file(run.index, "sock"), line)
+    }
+
+    /// Send a message to the agent while it works: it takes it into the
+    /// turn it's on (steering).
+    pub fn send(&self, text: &str) -> Result<(), String> {
+        self.command(&format!(r#"{{"message":{}}}"#, host::quote(text)))
+    }
+
+    /// Ask the agent to stop the turn it's on. It ends the run cleanly,
+    /// keeping the session, unlike [`Runs::stop`].
+    pub fn interrupt(&self) -> Result<(), String> {
+        self.command(r#"{"interrupt":true}"#)
+    }
+
+    /// Answer a question the agent asked: allow the tool, or not (with what
+    /// to do instead, if `message` says).
+    pub fn answer(&self, id: &str, allow: bool, message: &str) -> Result<(), String> {
+        self.command(&format!(
+            r#"{{"answer":{{"request_id":{},"allow":{allow},"message":{}}}}}"#,
+            host::quote(id),
+            host::quote(message)
+        ))
+    }
+
+    /// The questions the running agent is waiting on.
+    pub fn asks(&self) -> Vec<Ask> {
+        let Some(run) = self.latest().filter(|r| r.state == RunState::Running) else {
+            return Vec::new();
+        };
+        let log = std::fs::read_to_string(self.file(run.index, "log")).unwrap_or_default();
+        let entries = parse_claude(&log);
+        let answered: std::collections::HashSet<&str> = entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Answer { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Ask { id, tool, detail } if !answered.contains(id.as_str()) => Some(Ask {
+                    id: id.clone(),
+                    tool: tool.clone(),
+                    detail: detail.clone(),
+                }),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The last run that can be undone: it ended, wasn't undone, and has a
@@ -521,6 +629,31 @@ fn command_for(
     }
 }
 
+/// Claude's arguments under the host: the prompt goes on stdin (as
+/// stream-json, like follow-ups), and questions come back as control
+/// requests instead of being refused.
+fn hosted_args(args: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(args.len() + 4);
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "-p" {
+            // `-p <prompt>`: keep print mode, drop the prompt.
+            out.push("-p".into());
+            i += 2;
+            continue;
+        }
+        out.push(args[i].clone());
+        i += 1;
+    }
+    out.extend([
+        "--input-format".into(),
+        "stream-json".into(),
+        "--permission-prompt-tool".into(),
+        "stdio".into(),
+    ]);
+    out
+}
+
 /// Where a task's checkpoints live.
 pub fn checkpoint_prefix(task_id: &str) -> String {
     format!("refs/spor/tasks/{task_id}")
@@ -578,6 +711,32 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                     }
                 }
             }
+            Some("control_request")
+                if event.get("request").get("subtype").str() == Some("can_use_tool") =>
+            {
+                let request = event.get("request");
+                out.push(Entry::Ask {
+                    id: event
+                        .get("request_id")
+                        .str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    tool: request.get("tool_name").str().unwrap_or("Tool").to_string(),
+                    detail: tool_detail(request.get("input")),
+                });
+            }
+            Some("spor_answer") => out.push(Entry::Answer {
+                id: event
+                    .get("request_id")
+                    .str()
+                    .unwrap_or_default()
+                    .to_string(),
+                allow: event.get("allow").bool() == Some(true),
+                message: event.get("message").str().unwrap_or_default().to_string(),
+            }),
+            Some("spor_message") => out.push(Entry::Steer(
+                event.get("text").str().unwrap_or_default().to_string(),
+            )),
             Some("result") => out.push(Entry::Done {
                 ok: event.get("is_error").bool() != Some(true)
                     && event.get("subtype").str().is_none_or(|s| s == "success"),

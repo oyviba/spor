@@ -8,6 +8,7 @@ pub mod color;
 pub mod git;
 pub mod github;
 pub mod graph;
+pub mod host;
 pub mod json;
 pub mod patch;
 pub mod remote;

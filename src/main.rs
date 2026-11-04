@@ -164,6 +164,11 @@ impl App {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // As the agent host (see `spor::host`), started by an app for a run.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some(spor::host::ARG) {
+        std::process::exit(spor::host::main(&args[2..]));
+    }
     // When invoked as SSH_ASKPASS/GIT_ASKPASS helper, collect passphrase and exit.
     if std::env::var("SPOR_ASKPASS").is_ok() {
         let prompt = std::env::args().nth(1).unwrap_or_default();
