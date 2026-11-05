@@ -316,10 +316,25 @@ let nextPull = 41;
 }
 
 
+// The backend's watcher, for the tasks kept here: what changes them says so.
+const listeners = new Map<string, Set<() => void>>();
+export async function listen(event: string, fn: () => void): Promise<() => void> {
+  if (!listeners.has(event)) listeners.set(event, new Set());
+  listeners.get(event)!.add(fn);
+  return () => listeners.get(event)!.delete(fn);
+}
+const tasksChanged = () => listeners.get("tasks-changed")?.forEach((fn) => fn());
+const CHANGES_TASKS = new Set(["create_task", "send_to_agent", "stop_agent", "land_task", "discard_task", "undo", "answer_ask", "steer", "set_mode"]);
+
 // The working task makes progress every few seconds, then finishes.
 setInterval(() => {
   const t = tasks.find((x) => x.summary.run?.state === "running");
   if (!t || t.asks?.length) return;
+  progress(t);
+  tasksChanged();
+}, 4000);
+
+function progress(t: MockTask) {
   const next = t.script.shift();
   if (next) {
     t.transcript.push(next);
@@ -338,7 +353,7 @@ setInterval(() => {
   const finished = { ...t.summary.run!, state: "finished" as const, exit_code: 0, ended: now(), cost_usd: 0.37 };
   t.summary.run = finished;
   t.runs[t.runs.length - 1] = finished;
-}, 4000);
+}
 
 /** The prompt of a task's `i`th run, from its transcript. */
 function promptOf(t: MockTask, i: number): string {
@@ -586,6 +601,7 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
         throw `Unknown command ${cmd}`;
     }
   })();
+  if (CHANGES_TASKS.has(cmd)) tasksChanged();
   return result as T;
 }
 

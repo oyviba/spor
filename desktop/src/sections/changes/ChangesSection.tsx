@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import type { FileEntry, StashInfo } from "../../types";
 import { useShell } from "../../shared/app";
-import { usePoll } from "../../shared/hooks";
+import { useRepoChanges } from "../../shared/hooks";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView, selectionRange, type LineSelection } from "../../shared/DiffView";
 import { parsePatch } from "../../shared/diff";
@@ -39,8 +39,8 @@ export function ChangesSection() {
     setFiles((old) => (JSON.stringify(old) === JSON.stringify(f) ? old : f));
     setStashes((old) => (JSON.stringify(old) === JSON.stringify(s) ? old : s));
   };
-  // The working tree changes without git knowing: poll it.
-  usePoll(load, 2000, [state?.index]);
+  // Stashes are refs; staging is the index; editing is the working tree.
+  useRepoChanges(load, ["refs", "index", "worktree"], []);
 
   // Sent here (conflict banner): open that file.
   useEffect(() => {

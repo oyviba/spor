@@ -3,7 +3,7 @@
 // section ("open this run in Actions").
 
 import { createContext, useContext } from "react";
-import type { RepoInfo, RepoState } from "../types";
+import type { RepoInfo, RepoState, TaskSummary } from "../types";
 import type { MenuItem } from "./Overlay";
 
 export type SectionId = "changes" | "history" | "issues" | "pulls" | "actions" | "agents";
@@ -27,6 +27,10 @@ export interface Shell {
   state: RepoState | null;
   /** Re-read the repository's state now (after a change). */
   refresh: () => Promise<void>;
+  /** Agent tasks, newest open first, reloaded when they change. */
+  tasks: TaskSummary[];
+  /** Re-read the tasks now (after changing one). */
+  reloadTasks: () => Promise<void>;
   toast: (text: string, tone?: "ok" | "error", undo?: boolean, action?: ToastAction) => void;
   fail: (e: unknown) => void;
   /**

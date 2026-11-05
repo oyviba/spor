@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { LineComment, RunPatch, TaskDetail, TaskPull, TaskSummary } from "../../types";
 import { activityAt } from "./status";
-import { usePoll, useStored } from "../../shared/hooks";
+import { usePoll, useRepoChanges, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { Sidebar } from "./Sidebar";
 import { NewTask } from "./NewTask";
@@ -16,7 +16,9 @@ type View = { kind: "new" } | { kind: "task"; id: string };
 export function AgentsSection() {
   const shell = useShell();
   const { repo, fail, toast } = shell;
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  // The shell's list, with the open task's row kept in step with its detail.
+  const [tasks, setTasks] = useState<TaskSummary[]>(shell.tasks);
+  useEffect(() => setTasks(shell.tasks), [shell.tasks]);
   const [view, setView] = useStored<View>("agents.view", { kind: "new" });
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
@@ -40,10 +42,7 @@ export function AgentsSection() {
     if (shell.target.section === "agents" && shell.target.taskId) setView({ kind: "task", id: shell.target.taskId });
   }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const refreshTasks = useCallback(async () => {
-    setTasks(await api.listTasks());
-  }, []);
-  usePoll(refreshTasks, 1500, [repo.root]);
+  const refreshTasks = shell.reloadTasks;
 
   // Open tasks' pull requests (one `gh` call), and a note when one merges.
   const [pulls, setPulls] = useState<Record<string, TaskPull>>({});
@@ -69,21 +68,19 @@ export function AgentsSection() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   usePoll(refreshPulls, 30_000, [repo.root, openTasks], openTasks > 0);
 
-  const selected = tasks.find((t) => t.id === selectedId);
-  const running = selected?.run?.state === "running";
   const refreshDetail = useCallback(async () => {
     if (!selectedId) return;
     try {
       const d = await api.taskDetail(selectedId);
       setDetail((old) => (old?.task.id !== d.task.id || JSON.stringify(old) !== JSON.stringify(d) ? d : old));
-      // The open task polls faster than the list; keep its row in step.
+      // Keep its row in step with the detail.
       setTasks((ts) => ts.map((t) => (t.id === d.task.id ? d.task : t)));
     } catch (e) {
       // The task was landed or discarded elsewhere.
       if (String(e).startsWith("No task")) setView({ kind: "new" });
     }
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
-  usePoll(refreshDetail, running ? 1000 : 3000, [selectedId], !!selectedId);
+  useRepoChanges(refreshDetail, ["tasks", "refs"], [selectedId], !!selectedId);
   useEffect(() => {
     setDetail(null);
     setTab("conversation");

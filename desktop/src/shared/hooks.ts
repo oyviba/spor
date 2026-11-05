@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { onRepoChange, type RepoChange } from "../api";
+import { reloader } from "./reload";
 
 /** The current time, updated every `ms` while `active`. */
 export function useNow(ms = 1000, active = true): number {
@@ -35,6 +37,42 @@ export function usePoll(fn: () => void | Promise<void>, ms: number, deps: unknow
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ms, active, ...deps]);
+}
+
+/** How often `useRepoChanges` reloads anyway, in case the watcher missed
+ * an event (on a network filesystem, say). */
+const BACKSTOP_MS = 30_000;
+
+/** Call `fn` now, whenever the repository changes in one of the `on` ways,
+ * and every 30 s in case a change went unseen, while `active`. A change
+ * while `fn` runs calls it once more when it's done. */
+export function useRepoChanges(
+  fn: () => void | Promise<void>,
+  on: RepoChange[],
+  deps: unknown[],
+  active = true,
+) {
+  const latest = useRef(fn);
+  latest.current = fn;
+  useEffect(() => {
+    if (!active) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const reload = reloader(
+      () => {
+        clearTimeout(timer);
+        return latest.current();
+      },
+      () => (timer = setTimeout(reload.run, BACKSTOP_MS)),
+    );
+    const stop = onRepoChange(on, reload.run);
+    reload.run();
+    return () => {
+      reload.stop();
+      clearTimeout(timer);
+      stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, on.join(), ...deps]);
 }
 
 /** State kept in localStorage; works (in memory) when storage is blocked. */
