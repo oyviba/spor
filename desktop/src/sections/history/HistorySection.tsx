@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import type { BranchInfo, CommitDetail, Graph as GraphData, PrBadge, TagInfo, WorktreeInfo } from "../../types";
 import { useShell } from "../../shared/app";
-import { useNow, useStored } from "../../shared/hooks";
+import { useChanged, useNow, usePoll, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
@@ -42,7 +42,7 @@ export function HistorySection() {
   const now = useNow(60_000);
 
   // Reload when any ref moves (commit, checkout, fetch, agent commits…).
-  useEffect(() => {
+  useChanged(() => {
     const t0 = performance.now();
     Promise.all([api.graph(limit), api.branches()])
       .then(([g, b]) => {
@@ -54,19 +54,22 @@ export function HistorySection() {
       .finally(() => setLoadingMore(false));
     api.tags().then(setTags, () => setTags([]));
     api.worktrees().then(setWorktrees, () => setWorktrees([]));
-  }, [state?.refs, limit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state?.refs, limit]);
 
   // PR badges on branch labels: one `gh` call, in the background.
-  useEffect(() => {
-    api.prBadges().then(
-      (list) => setPrs(new Map(list.map((b) => [b.branch, b]))),
-      () => undefined,
-    );
-  }, [state?.refs]); // eslint-disable-line react-hooks/exhaustive-deps
+  usePoll(
+    () =>
+      api.prBadges().then(
+        (list) => setPrs(new Map(list.map((b) => [b.branch, b]))),
+        () => undefined,
+      ),
+    60_000,
+    [state?.refs],
+  );
 
   // Sent here from elsewhere: a branch (an agent task's), a commit, or a
   // file to blame.
-  useEffect(() => {
+  useChanged(() => {
     const t = shell.target;
     if (t.section !== "history" || !graph) return;
     if (t.blame) {
@@ -81,12 +84,12 @@ export function HistorySection() {
       setTab("graph");
       requestAnimationFrame(() => graphRef.current?.scrollTo(hash));
     }
-  }, [shell.target.seq, !!graph]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shell.target.seq, !!graph]);
 
-  useEffect(() => {
+  useChanged(() => {
     setCommit(null);
     if (selected) api.commitDetail(selected).then(setCommit, fail);
-  }, [selected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selected]);
 
   // Search: git's own (messages, authors, hashes), debounced.
   useEffect(() => {
@@ -531,7 +534,7 @@ function CommitCard({
   const shell = useShell();
   const [naming, setNaming] = useState(false);
   const [confirmRevert, setConfirmRevert] = useState(false);
-  useEffect(() => {
+  useChanged(() => {
     setNaming(false);
     setConfirmRevert(false);
   }, [commit.hash]);

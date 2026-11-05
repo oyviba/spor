@@ -86,9 +86,10 @@ Across the app:
 - **Credentials.** The app has no terminal, so a passphrase, password or
   new-host question from git or ssh opens a dialog (an askpass bridge)
 - **Workspaces** — named, colored groups of repositories on the rail, like
-  Slack's (⌘⌥1–9), each reopening the repository last open in it. The
-  repository name at the top of the sidebar lists the workspace's
-  repositories with their branch and what there is to pull. The old native
+  Slack's (⌘⌥1–9), each reopening the repository last open in it. Beside
+  the rail, a column lists the workspace's repositories with the open one
+  marked, their branch, changed files and what there is to pull (⌘⇧E hides
+  it). The old native
   app's workspaces are imported on the first run
 - **⌘K** — a palette for every command, section, branch and repository
 - **Settings** (⌘,) — System, Light or Dark, themes (Spor, Nord, Dracula,

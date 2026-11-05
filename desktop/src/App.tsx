@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary } from "./types";
-import { usePoll, useRepoChanges, useStored } from "./shared/hooks";
+import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
+import { RepoPanel } from "./shared/Layout";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
@@ -129,6 +130,7 @@ export function App() {
   );
   const [state, setState] = useState<RepoState | null>(null);
   const [section, setSection] = useStored<SectionId>("section", "agents");
+  const [reposShown, setReposShown] = useStored("repos.shown", true);
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "agents", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [changed, setChanged] = useState(0);
@@ -450,6 +452,14 @@ export function App() {
     { id: "palette", label: "Command palette", group: "App", keys: "Mod+K", whileTyping: true, run: () => openPalette() },
     { id: "settings", label: "Settings", group: "App", keys: "Mod+,", whileTyping: true, run: () => setSettingsPage("appearance") },
     { id: "shortcuts", label: "Keyboard shortcuts", group: "App", keys: "Mod+/", whileTyping: true, run: () => setSettingsPage("shortcuts") },
+    {
+      id: "repos",
+      label: reposShown ? "Hide repositories" : "Show repositories",
+      group: "App",
+      keys: "Mod+Shift+E",
+      whileTyping: true,
+      run: () => setReposShown((v) => !v),
+    },
     // Not while typing: there ⌘Z undoes the typing.
     { id: "undo", label: state?.undo ? `Undo: ${state.undo}` : "Undo", group: "App", keys: "Mod+Z", run: () => undo() },
     {
@@ -632,7 +642,7 @@ export function App() {
 
   return (
     <ShellContext.Provider value={shell}>
-      <div className="app">
+      <div className={`app${reposShown ? " with-repos" : ""}`}>
         <nav className="rail" aria-label="Sections">
           {workspaceRail}
           {SECTIONS.map((s) => {
@@ -655,21 +665,47 @@ export function App() {
           <span className="flex-1" />
           {settingsButton}
         </nav>
+        {reposShown && <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed} />}
         <div className="section">
           {state?.operation && <OperationBanner state={state} />}
           <div className="section-body">
-            {section === "agents" && <AgentsSection />}
-            {section === "history" && <HistorySection />}
-            {section === "changes" && <ChangesSection />}
-            {section === "issues" && <IssuesSection />}
-            {section === "pulls" && <PullsSection />}
-            {section === "actions" && <ActionsSection />}
+            <Sections key={repo.root} section={section} />
           </div>
         </div>
         <Toasts toasts={toasts} onUndo={undo} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
         {overlays}
       </div>
     </ShellContext.Provider>
+  );
+}
+
+const SECTION_VIEWS: Record<SectionId, () => React.ReactNode> = {
+  changes: ChangesSection,
+  history: HistorySection,
+  issues: IssuesSection,
+  pulls: PullsSection,
+  actions: ActionsSection,
+  agents: AgentsSection,
+};
+
+/** The sections opened so far, kept mounted so going back to one shows it
+ * as it was at once, and then brings it up to date. A hidden one keeps its
+ * state but not its effects: it doesn't poll, watch or take keys. */
+function Sections({ section }: { section: SectionId }) {
+  const [opened, setOpened] = useState<SectionId[]>([section]);
+  if (!opened.includes(section)) setOpened([...opened, section]);
+  return (
+    <>
+      <KeepScroll shown={section} />
+      {SECTIONS.filter((s) => opened.includes(s.id)).map((s) => {
+        const View = SECTION_VIEWS[s.id];
+        return (
+          <Activity key={s.id} mode={s.id === section ? "visible" : "hidden"}>
+            <View />
+          </Activity>
+        );
+      })}
+    </>
   );
 }
 
