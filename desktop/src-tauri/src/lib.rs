@@ -334,6 +334,7 @@ pub fn run() {
             history::rewrite,
             history::pr_badges,
             history::pull_request_url,
+            history::blame,
             changes::status,
             changes::file_diff,
             changes::stage,

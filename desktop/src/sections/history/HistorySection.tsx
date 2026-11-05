@@ -11,6 +11,7 @@ import type { MenuItem } from "../../shared/Overlay";
 import type { Shell } from "../../shared/app";
 import { Graph, type GraphHandle } from "./Graph";
 import { Rewrite } from "./Rewrite";
+import { Blame } from "./Blame";
 
 const PAGE = 2000;
 
@@ -23,7 +24,8 @@ export function HistorySection() {
   const [limit, setLimit] = useState(PAGE);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [tab, setTab] = useState<"graph" | "commit" | "rewrite">("graph");
+  const [tab, setTab] = useState<"graph" | "commit" | "rewrite" | "blame">("graph");
+  const [blameOf, setBlameOf] = useState<{ path: string; rev: string | null } | null>(null);
   const [rewriteBase, setRewriteBase] = useState<string | null>(null);
   const [tags, setTags] = useState<TagInfo[]>([]);
   const [worktrees, setWorktrees] = useState<WorktreeInfo[]>([]);
@@ -58,10 +60,16 @@ export function HistorySection() {
     );
   }, [state?.refs]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sent here from elsewhere: a branch (an agent task's) or a commit.
+  // Sent here from elsewhere: a branch (an agent task's), a commit, or a
+  // file to blame.
   useEffect(() => {
     const t = shell.target;
     if (t.section !== "history" || !graph) return;
+    if (t.blame) {
+      setBlameOf(t.blame);
+      setTab("blame");
+      return;
+    }
     const hash =
       t.hash ?? (t.branch ? graph.rows.find((r) => r.refs.some((x) => x === t.branch))?.hash : undefined);
     if (hash) {
@@ -329,6 +337,9 @@ export function HistorySection() {
                   ),
                 },
                 ...(rewriteBase ? [{ id: "rewrite" as const, label: "Rewrite" }] : []),
+                ...(blameOf
+                  ? [{ id: "blame" as const, label: <span className="truncate tab-file">Blame {blameOf.path.split("/").pop()}</span> }]
+                  : []),
               ]}
             />
           </PageHeader>
@@ -361,6 +372,18 @@ export function HistorySection() {
                   </button>
                 )}
               </div>
+            ) : tab === "blame" && blameOf ? (
+              <div className="changes">
+                <Blame
+                  path={blameOf.path}
+                  rev={blameOf.rev}
+                  onShowCommit={showCommit}
+                  onFileHistory={(path) => {
+                    setQuery(`path:${path}`);
+                    setTab("graph");
+                  }}
+                />
+              </div>
             ) : tab === "rewrite" && rewriteBase ? (
               <div className="changes">
                 <Rewrite
@@ -379,14 +402,21 @@ export function HistorySection() {
               <div className="changes">
                 <div className="changes-column">
                   {commit ? (
-                    <DiffView patch={commit.patch} empty="This commit changes no files." />
+                    <DiffView
+                      patch={commit.patch}
+                      empty="This commit changes no files."
+                      onBlame={(path) => {
+                        setBlameOf({ path, rev: commit.hash });
+                        setTab("blame");
+                      }}
+                    />
                   ) : (
                     <p className="hint">Select a commit.</p>
                   )}
                 </div>
               </div>
             )}
-            {commit && tab !== "rewrite" && (
+            {commit && tab !== "rewrite" && tab !== "blame" && (
               <CommitCard
                 commit={commit}
                 current={current}

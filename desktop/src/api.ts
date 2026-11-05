@@ -1,5 +1,6 @@
 import type {
   AgentChoice,
+  BlameRow,
   BranchInfo,
   CommitDetail,
   Credential,
@@ -90,6 +91,8 @@ export const api = {
   prBadges: () => call<PrBadge[]>("pr_badges"),
   /** The current branch's PR page, or the page to open one. */
   pullRequestUrl: () => call<string>("pull_request_url"),
+  /** Who last changed each line, as of `rev` (the working tree when null). */
+  blame: (path: string, rev: string | null) => call<BlameRow[]>("blame", { path, rev }),
 
   // Changes
   status: () => call<FileEntry[]>("status"),

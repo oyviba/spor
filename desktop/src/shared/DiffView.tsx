@@ -31,6 +31,8 @@ interface Props {
   selectionBar?: React.ReactNode;
   /** One file only (Changes): no file header, no collapsing. */
   bare?: boolean;
+  /** A Blame link in each file's header. */
+  onBlame?: (path: string) => void;
 }
 
 const LINES_PER_FILE = 400;
@@ -80,6 +82,26 @@ function FileDiff({ file, ...p }: Props & { file: DiffFile }) {
           </span>
           {file.status !== "modified" && <span className={`file-status ${file.status}`}>{file.status}</span>}
           <span className="flex-1" />
+          {p.onBlame && file.status !== "deleted" && file.status !== "binary" && (
+            <span
+              role="button"
+              tabIndex={0}
+              className="file-action"
+              title={`Who last changed each line of ${file.path}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                p.onBlame!(file.path);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.stopPropagation();
+                  p.onBlame!(file.path);
+                }
+              }}
+            >
+              Blame
+            </span>
+          )}
           {comments.length > 0 && (
             <span className="file-comments">
               <MessageSquare size={11} /> {comments.length}

@@ -828,3 +828,45 @@ fn short_ref(r: &str) -> String {
         r.to_string()
     }
 }
+
+#[derive(Serialize)]
+pub(crate) struct BlameRow {
+    /// Empty for a line that isn't committed yet.
+    hash: String,
+    author: String,
+    time: i64,
+    summary: String,
+    line: usize,
+    text: String,
+}
+
+/// Who last changed each line of `path`, as of `rev` (the working tree when
+/// `None`, uncommitted lines included).
+#[tauri::command(async)]
+pub(crate) fn blame(
+    app: State<App>,
+    path: String,
+    rev: Option<String>,
+) -> Result<Vec<BlameRow>, String> {
+    let repo = app.repo()?;
+    Ok(repo
+        .blame_at(&path, rev.as_deref())
+        .map_err(|e| first_line(&e))?
+        .into_iter()
+        .map(|l| {
+            let committed = !l.hash.chars().all(|c| c == '0');
+            BlameRow {
+                hash: if committed { l.hash } else { String::new() },
+                author: if committed { l.author } else { "You".into() },
+                time: l.time,
+                summary: if committed {
+                    l.summary
+                } else {
+                    "Not committed yet".into()
+                },
+                line: l.line,
+                text: l.text,
+            }
+        })
+        .collect())
+}

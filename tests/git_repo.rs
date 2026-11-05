@@ -431,6 +431,17 @@ fn search_blame_and_file_history() {
     assert_eq!(blame[0].line, 1);
     let history = f.repo.file_log("f.txt", 10).unwrap();
     assert_eq!(history.len(), 2);
+
+    // As of the first commit there's one line; uncommitted lines show up
+    // in the working tree's blame with an all-zero hash.
+    let then = f.repo.blame_at("f.txt", Some(&history[1].hash)).unwrap();
+    assert_eq!(then.len(), 1);
+    assert_eq!(then[0].summary, "Add the parser");
+    f.write("f.txt", "one\ntwo\nthree\n");
+    let now = f.repo.blame_at("f.txt", None).unwrap();
+    assert_eq!(now.len(), 3);
+    assert!(now[2].hash.chars().all(|c| c == '0'));
+    assert_eq!(now[2].text, "three");
 }
 
 #[test]

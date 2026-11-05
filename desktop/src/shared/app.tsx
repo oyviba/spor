@@ -11,7 +11,7 @@ export type SectionId = "changes" | "history" | "issues" | "pulls" | "actions" |
 /** Where to go: a section, and what to open there. */
 export type Target =
   | { section: "changes"; path?: string }
-  | { section: "history"; hash?: string; branch?: string }
+  | { section: "history"; hash?: string; branch?: string; blame?: { path: string; rev: string | null } }
   | { section: "issues"; number?: number }
   | { section: "pulls"; number?: number }
   | { section: "actions"; runId?: number; jobId?: number }

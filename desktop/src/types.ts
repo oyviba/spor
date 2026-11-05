@@ -359,3 +359,13 @@ export interface IssueDetail {
   /** The prompt an agent task on it starts from. */
   prompt: string;
 }
+
+/** One line of `git blame`. `hash` is empty for an uncommitted line. */
+export interface BlameRow {
+  hash: string;
+  author: string;
+  time: number;
+  summary: string;
+  line: number;
+  text: string;
+}

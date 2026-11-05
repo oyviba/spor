@@ -158,6 +158,15 @@ export function ChangesSection() {
               )
             }
           >
+            {pick && entry && entry.status !== "untracked" && entry.status !== "deleted" && entry.status !== "stageddeleted" && (
+              <button
+                className="ghost small"
+                title="Who last changed each line (the working tree, uncommitted lines included)"
+                onClick={() => shell.go({ section: "history", blame: { path: pick.path, rev: null } })}
+              >
+                Blame
+              </button>
+            )}
             {pick && entry?.status !== "conflicted" && (both || pick.staged) && (
               <Tabs
                 value={pick.staged ? "staged" : "unstaged"}

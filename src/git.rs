@@ -456,7 +456,17 @@ impl Repo {
 
     /// Who last changed each line of `path`, as it is in the working tree.
     pub fn blame(&self, path: &str) -> Result<Vec<BlameLine>, String> {
-        let out = self.run_ok(&["blame", "--porcelain", "--", path])?;
+        self.blame_at(path, None)
+    }
+
+    /// Who last changed each line of `path` as of `rev` (the working tree,
+    /// uncommitted lines included, when `None`). Uncommitted lines have an
+    /// all-zero hash.
+    pub fn blame_at(&self, path: &str, rev: Option<&str>) -> Result<Vec<BlameLine>, String> {
+        let out = match rev {
+            Some(rev) => self.run_ok(&["blame", "--porcelain", rev, "--", path])?,
+            None => self.run_ok(&["blame", "--porcelain", "--", path])?,
+        };
         Ok(parse_blame(&out))
     }
 

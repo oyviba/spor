@@ -778,6 +778,13 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
     case "stash_drop":
       f.stashes = (f.stashes as { index: number }[]).filter((x) => x.index !== args.index);
       return done("Drop stash", "Dropped the stash");
+    case "blame": {
+      const rows = f.graph.rows as { hash: string; subject: string; author: string; time: number }[];
+      return Array.from({ length: 24 }, (_, i) => {
+        const r = rows[Math.floor(i / 5) % rows.length];
+        return { hash: r.hash, author: r.author, time: r.time, summary: r.subject, line: i + 1, text: `line ${i + 1} of ${args.path}` };
+      });
+    }
     case "skip_operation":
       return "Skipped that commit";
     default:
