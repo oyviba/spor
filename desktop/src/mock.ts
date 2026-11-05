@@ -793,6 +793,10 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       ];
     case "resolve_regions":
       return `Resolved ${args.path}`;
+    case "merge_into":
+      return done(`Merge ${args.source} into ${args.target}`);
+    case "pull_request_between":
+      return `https://github.com/you/${f.repo.name}/compare/${args.target}...${args.source}?expand=1`;
     case "skip_operation":
       return "Skipped that commit";
     default:

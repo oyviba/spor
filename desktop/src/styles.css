@@ -2660,3 +2660,14 @@ button.blame-commit:hover .truncate {
   border-top: 1px solid var(--border);
   background: var(--raised);
 }
+
+/* ---- Dragging a branch onto another ---- */
+
+.graph-row.drop-target,
+.branch-row.drop-target {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.ref[draggable="true"] {
+  cursor: grab;
+}

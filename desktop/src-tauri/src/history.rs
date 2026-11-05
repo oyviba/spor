@@ -870,3 +870,57 @@ pub(crate) fn blame(
         })
         .collect())
 }
+
+/// Merge `source` into `target`, checking `target` out first when it isn't
+/// already (which needs a clean working tree). ⌘Z takes back the merge; a
+/// second ⌘Z switches back.
+#[tauri::command(async)]
+pub(crate) fn merge_into(
+    app: State<App>,
+    source: String,
+    target: String,
+) -> Result<String, String> {
+    let repo = app.repo()?;
+    let from = repo.tracking()?.branch;
+    if from.as_deref() != Some(target.as_str()) {
+        if !repo.status()?.is_empty() {
+            return Err(format!(
+                "Commit or stash your changes before merging into {target}"
+            ));
+        }
+        repo.checkout_branch(&target).map_err(|e| first_line(&e))?;
+        if let Some(from) = from {
+            app.undo
+                .push(format!("Switch to {target}"), Undo::Checkout { from });
+        }
+    }
+    moving(&app, &repo, format!("Merge {source} into {target}"), || {
+        repo.merge(&source)
+    })
+}
+
+/// The host's page for a pull request from `source` into `target` (remote
+/// prefixes dropped: `origin/feat/x` is `feat/x`).
+#[tauri::command(async)]
+pub(crate) fn pull_request_between(
+    app: State<App>,
+    source: String,
+    target: String,
+) -> Result<String, String> {
+    let repo = app.repo()?;
+    let info =
+        spor::remote::detect_in(repo.root()).ok_or("Couldn't tell where origin is hosted")?;
+    let remotes = repo.remotes();
+    let local = |name: &str| -> String {
+        remotes
+            .iter()
+            .find_map(|r| name.strip_prefix(&format!("{r}/")))
+            .unwrap_or(name)
+            .to_string()
+    };
+    let (head, base) = (local(&source), local(&target));
+    if head == base {
+        return Err("That's the same branch".into());
+    }
+    Ok(spor::remote::compare_url(&info, &base, &head))
+}

@@ -35,7 +35,12 @@ interface Props {
   prs: Map<string, PrBadge>;
   /** Right-click on a row. */
   onContext: (hash: string, e: React.MouseEvent) => void;
+  /** A branch dragged onto a row's branch. */
+  onDropBranch: (source: string, target: string, e: React.DragEvent) => void;
 }
+
+/** What a dragged branch carries. */
+export const BRANCH_DRAG = "application/x-spor-branch";
 
 export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -50,6 +55,10 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
   const select = useMemo(() => (hash: string) => latest.current.onSelect(hash), []);
   const openRow = useMemo(() => (hash: string) => latest.current.onOpen(hash), []);
   const context = useMemo(() => (hash: string, e: React.MouseEvent) => latest.current.onContext(hash, e), []);
+  const dropBranch = useMemo(
+    () => (source: string, target: string, e: React.DragEvent) => latest.current.onDropBranch(source, target, e),
+    [],
+  );
 
   useImperativeHandle(ref, () => ({
     scrollTo: (hash) => {
@@ -118,6 +127,7 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
             onSelect={select}
             onOpen={openRow}
             onContext={context}
+            onDropBranch={dropBranch}
           />
         ))}
       </div>
@@ -139,6 +149,7 @@ const Row = memo(function Row({
   onSelect,
   onOpen,
   onContext,
+  onDropBranch,
 }: {
   row: GraphRow;
   top: number;
@@ -153,12 +164,17 @@ const Row = memo(function Row({
   onSelect: (hash: string) => void;
   onOpen: (hash: string) => void;
   onContext: (hash: string, e: React.MouseEvent) => void;
+  onDropBranch: (source: string, target: string, e: React.DragEvent) => void;
 }) {
+  const [over, setOver] = useState(false);
+  // The branch a drop here lands on: a local one if there's one, else a remote one.
+  const branches = row.refs.filter((r) => !r.startsWith("tag:"));
+  const target = branches.find((r) => !remotes.has(r)) ?? branches[0];
   const node = x(row.lane);
   const color = palette[row.color] ?? "#888";
   return (
     <div
-      className={`graph-row${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}`}
+      className={`graph-row${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}${over ? " drop-target" : ""}`}
       style={{ top }}
       onClick={() => onSelect(row.hash)}
       onDoubleClick={() => onOpen(row.hash)}
@@ -168,6 +184,29 @@ const Row = memo(function Row({
         onContext(row.hash, e);
       }}
       data-hash={row.hash}
+      onDragOver={
+        target
+          ? (e) => {
+              if (!e.dataTransfer.types.includes(BRANCH_DRAG)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              setOver(true);
+            }
+          : undefined
+      }
+      onDragLeave={() => setOver(false)}
+      onDrop={
+        target
+          ? (e) => {
+              setOver(false);
+              const source = e.dataTransfer.getData(BRANCH_DRAG);
+              if (source && source !== target) {
+                e.preventDefault();
+                onDropBranch(source, target, e);
+              }
+            }
+          : undefined
+      }
     >
       <svg width={width} height={ROW} className="graph-svg" aria-hidden>
         {row.segments.map((s, i) => (
@@ -227,6 +266,16 @@ function RefBadge({
   const agent = label.startsWith("agent/");
   return (
     <span
+      draggable={!tag}
+      onDragStart={
+        tag
+          ? undefined
+          : (e) => {
+              e.dataTransfer.setData(BRANCH_DRAG, label);
+              e.dataTransfer.setData("text/plain", label);
+              e.dataTransfer.effectAllowed = "move";
+            }
+      }
       className={`ref${current ? " current" : ""}${remote ? " remote" : ""}${tag ? " tag" : ""}`}
       style={!tag && !remote ? ({ "--ref": color } as React.CSSProperties) : undefined}
       title={current ? `${label} (checked out)` : label}

@@ -335,6 +335,8 @@ pub fn run() {
             history::pr_badges,
             history::pull_request_url,
             history::blame,
+            history::merge_into,
+            history::pull_request_between,
             changes::status,
             changes::file_diff,
             changes::stage,

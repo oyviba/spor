@@ -9,7 +9,7 @@ import { parsePatch } from "../../shared/diff";
 import { Bot, Branch, Chevron, Commit, Copy, Folder, Merge, Search, Tag, Trash, Undo } from "../../shared/Icons";
 import type { MenuItem } from "../../shared/Overlay";
 import type { Shell } from "../../shared/app";
-import { Graph, type GraphHandle } from "./Graph";
+import { BRANCH_DRAG, Graph, type GraphHandle } from "./Graph";
 import { Rewrite } from "./Rewrite";
 import { Blame } from "./Blame";
 
@@ -169,8 +169,51 @@ export function HistorySection() {
     return items;
   };
 
+  /** A branch dropped on another: merge it there, rebase, or a PR between them. */
+  const dropMenu = (source: string, target: string, e: { clientX: number; clientY: number }) => {
+    const items: MenuItem[] = [
+      {
+        label: `Merge ${source} into ${target}`,
+        run: () => shell.act(() => api.mergeInto(source, target)),
+      },
+    ];
+    if (source === current)
+      items.push({ label: `Rebase ${source} onto ${target}`, run: () => shell.act(() => api.rebaseOnto(target)) });
+    items.push({
+      label: `Open pull request: ${source} → ${target}`,
+      separator: true,
+      run: () => api.pullRequestBetween(source, target).then(api.openUrl).catch(fail),
+    });
+    shell.menu(e, items);
+  };
+  const [dropOn, setDropOn] = useState<string | null>(null);
+
   const branchRow = (b: BranchInfo) => (
-    <div key={b.name} className={`branch-row${b.current ? " current" : ""}`} onContextMenu={(e) => shell.menu(e, branchMenu(b))}>
+    <div
+      key={b.name}
+      className={`branch-row${b.current ? " current" : ""}${dropOn === b.name ? " drop-target" : ""}`}
+      onContextMenu={(e) => shell.menu(e, branchMenu(b))}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(BRANCH_DRAG, b.name);
+        e.dataTransfer.setData("text/plain", b.name);
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes(BRANCH_DRAG)) return;
+        e.preventDefault();
+        setDropOn(b.name);
+      }}
+      onDragLeave={() => setDropOn((d) => (d === b.name ? null : d))}
+      onDrop={(e) => {
+        setDropOn(null);
+        const source = e.dataTransfer.getData(BRANCH_DRAG);
+        if (source && source !== b.name) {
+          e.preventDefault();
+          dropMenu(source, b.name, e);
+        }
+      }}
+    >
       <button
         className="branch-name"
         onClick={() => showBranch(b.name)}
@@ -365,6 +408,7 @@ export function HistorySection() {
                   nowMs={now}
                   prs={prs}
                   onContext={(hash, e) => shell.menu(e, commitMenu(hash))}
+                  onDropBranch={(source, target, e) => dropMenu(source, target, e)}
                 />
                 {graph.more && (
                   <button className="link load-more" onClick={() => setLimit((l) => l + PAGE)}>

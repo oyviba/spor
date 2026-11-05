@@ -92,6 +92,10 @@ export const api = {
   prBadges: () => call<PrBadge[]>("pr_badges"),
   /** The current branch's PR page, or the page to open one. */
   pullRequestUrl: () => call<string>("pull_request_url"),
+  /** Merge `source` into `target`, checking `target` out first if it isn't. */
+  mergeInto: (source: string, target: string) => call<string>("merge_into", { source, target }),
+  /** The host's page for a pull request from `source` into `target`. */
+  pullRequestBetween: (source: string, target: string) => call<string>("pull_request_between", { source, target }),
   /** Who last changed each line, as of `rev` (the working tree when null). */
   blame: (path: string, rev: string | null) => call<BlameRow[]>("blame", { path, rev }),
 
