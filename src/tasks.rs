@@ -538,12 +538,13 @@ impl Tasks {
     }
 
     /// Push the task's branch to `remote` (setting it as the upstream), so
-    /// its pull request gets the agent's latest commits.
+    /// its pull request gets the agent's latest commits. A key passphrase
+    /// or password comes up in the app, as for any other push.
     pub fn push(&self, task: &Task, remote: &str) -> Result<(), String> {
         if task.state != TaskState::Open || !task.worktree.exists() {
             return Err(format!("{} has no folder to push from", task.id));
         }
-        crate::git::network(
+        crate::askpass::git_network(
             &task.worktree,
             &["push", "--set-upstream", remote, &task.branch],
         )
