@@ -40,7 +40,7 @@ try {
   await w.clickText(".ask-card button", "Allow");
   await w.waitFor(".run:nth-of-type(2) .fold", 30000);
   await w.click(".run:nth-of-type(2) .fold");
-  await w.until(`return document.querySelector(".run:nth-of-type(2) .setup-block.good")`, "the second setup");
+  await w.until(`return $(".run:nth-of-type(2) .setup-block.good")`, "the second setup");
   check((await w.text(".run:nth-of-type(2) .setup-block")).includes("Set up the folder"), "Retry runs setup again, and it works");
   check(existsSync(`${worktree}/test_greet.py`), "…then the agent runs");
   await w.shot("setup-2-retried");
