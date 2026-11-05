@@ -1,6 +1,6 @@
 //! The Tauri app's backend: spor's core (`spor::git`, `spor::tasks`,
-//! `spor::agent`, `spor::github`, `spor::graph`) exposed as commands, one
-//! module per section of the app. Commands stay thin: the work is in the
+//! `spor::agent`, `spor::github`, `spor::graph`, `spor::askpass`) exposed as
+//! commands, one module per section of the app. Commands stay thin: the work is in the
 //! core, and these only turn it into JSON and record what Undo needs.
 
 mod agents;
@@ -20,6 +20,9 @@ use tauri::State;
 pub(crate) struct App {
     repo: Mutex<Option<Repo>>,
     undo: undo::Stack,
+    /// Credential prompts from git and ssh waiting for the user, by id.
+    /// Dropping one answers Cancel, so they're kept until answered.
+    asks: Mutex<(u64, std::collections::BTreeMap<u64, spor::askpass::Request>)>,
 }
 
 impl App {
@@ -166,6 +169,68 @@ fn open_url(url: String) -> Result<(), String> {
         .map_err(|e| format!("Couldn't open the link: {e}"))
 }
 
+#[derive(Serialize)]
+struct Credential {
+    id: u64,
+    prompt: String,
+    /// Typed hidden (a passphrase or password, not a username).
+    secret: bool,
+    /// ssh asking yes/no whether to trust a host it hasn't seen.
+    confirm: bool,
+}
+
+/// The oldest credential prompt from a fetch, pull or push that's waiting
+/// for the user, if any. The window polls this.
+#[tauri::command(async)]
+fn askpass_pending(app: State<App>) -> Option<Credential> {
+    let mut asks = app.asks.lock().unwrap();
+    while let Some(request) = spor::askpass::next_request() {
+        asks.0 += 1;
+        let id = asks.0;
+        asks.1.insert(id, request);
+    }
+    asks.1.iter().next().map(|(id, r)| Credential {
+        id: *id,
+        prompt: r.prompt.clone(),
+        secret: r.is_secret(),
+        confirm: r.is_confirmation(),
+    })
+}
+
+/// Answer a credential prompt; `None` cancels it.
+#[tauri::command(async)]
+fn askpass_answer(app: State<App>, id: u64, answer: Option<String>) {
+    if let Some(request) = app.asks.lock().unwrap().1.remove(&id) {
+        request.answer(answer);
+    }
+}
+
+/// The repositories the old native app (GPUI) knew, from its workspaces
+/// file, so switching apps doesn't lose the list. Existing folders only.
+#[tauri::command(async)]
+fn legacy_repos() -> Vec<String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let base = if cfg!(target_os = "macos") {
+        home.map(|h| h.join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.map(|h| h.join(".config")))
+    };
+    let Some(file) = base.map(|b| b.join("spor").join("workspaces")) else {
+        return Vec::new();
+    };
+    let mut repos: Vec<String> = Vec::new();
+    for line in std::fs::read_to_string(file).unwrap_or_default().lines() {
+        if let Some(path) = line.strip_prefix("repo\t") {
+            if std::path::Path::new(path).is_dir() && !repos.iter().any(|r| r == path) {
+                repos.push(path.to_string());
+            }
+        }
+    }
+    repos
+}
+
 fn fingerprint(value: &impl Hash) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut h);
@@ -220,6 +285,9 @@ pub fn run() {
             repo_state,
             undo,
             open_url,
+            askpass_pending,
+            askpass_answer,
+            legacy_repos,
             agents::list_tasks,
             agents::task_detail,
             agents::task_patch,
@@ -251,6 +319,21 @@ pub fn run() {
             history::cherry_pick,
             history::revert,
             history::merge_branch,
+            history::rename_branch,
+            history::delete_remote_branch,
+            history::rebase_onto,
+            history::reset_to,
+            history::checkout_commit,
+            history::tags,
+            history::create_tag,
+            history::delete_tag,
+            history::push_tag,
+            history::worktrees,
+            history::remove_worktree,
+            history::rewrite_plan,
+            history::rewrite,
+            history::pr_badges,
+            history::pull_request_url,
             changes::status,
             changes::file_diff,
             changes::stage,
@@ -263,6 +346,10 @@ pub fn run() {
             changes::stashes,
             changes::stash,
             changes::stash_pop,
+            changes::stash_apply,
+            changes::stash_drop,
+            changes::skip_operation,
+            changes::auto_fetch,
             changes::resolve,
             changes::continue_operation,
             changes::abort_operation,

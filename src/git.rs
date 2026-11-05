@@ -569,19 +569,6 @@ impl Repo {
         self.run_ok(&args)
     }
 
-    /// Everything not yet committed, as one patch: staged and unstaged
-    /// changes to tracked files against HEAD, then each untracked file as new.
-    pub fn uncommitted_patch(&self, untracked: &[String]) -> Result<String, String> {
-        let mut args = vec!["diff"];
-        args.extend(PATCH_FLAGS);
-        // An unborn branch has no HEAD yet: then only the index has content.
-        args.push(if self.has_head() { "HEAD" } else { "--cached" });
-        args.push("--");
-        let mut patch = self.run_ok(&args)?;
-        patch.push_str(&self.untracked_patch(untracked));
-        Ok(patch)
-    }
-
     /// One side of the uncommitted changes: index → working tree (with
     /// untracked files as new), or HEAD → index.
     /// Files with conflicts are left out: git shows them in its combined
@@ -633,10 +620,6 @@ impl Repo {
         self.succeeds(&["rev-parse", "--verify", "--quiet", "HEAD"])
     }
 
-    pub fn diff_commit(&self, hash: &str) -> Result<String, String> {
-        self.run_ok(&["show", "--stat", "--patch", hash])
-    }
-
     /// Find the repo's "main" branch name. Checks common names.
     pub fn main_branch(&self) -> Option<String> {
         ["main", "master", "trunk"]
@@ -681,19 +664,6 @@ impl Repo {
     pub fn remotes(&self) -> Vec<String> {
         self.run_ok(&["remote"])
             .map(|out| out.lines().map(str::to_string).collect())
-            .unwrap_or_default()
-    }
-
-    /// Paths staged as brand-new files (git status reports these as plain
-    /// "staged", same as modifications).
-    pub fn staged_new_files(&self) -> std::collections::HashSet<String> {
-        self.run_ok(&["diff", "--cached", "--name-only", "--diff-filter=A", "-z"])
-            .map(|s| {
-                s.split('\0')
-                    .filter(|p| !p.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
             .unwrap_or_default()
     }
 
@@ -823,11 +793,6 @@ impl Repo {
         .map(|_| ())
     }
 
-    /// Undo the last commit, keeping its changes staged.
-    pub fn uncommit(&self) -> Result<(), String> {
-        self.run_ok(&["reset", "--soft", "HEAD~1"]).map(|_| ())
-    }
-
     pub fn reset(&self, sha: &str, mode: ResetMode) -> Result<(), String> {
         let flag = match mode {
             ResetMode::Soft => "--soft",
@@ -836,12 +801,6 @@ impl Repo {
             ResetMode::Keep => "--keep",
         };
         self.run_ok(&["reset", "--quiet", flag, sha]).map(|_| ())
-    }
-
-    /// Move the current branch back to `sha`, keeping uncommitted changes
-    /// (git refuses if they'd be overwritten).
-    pub fn reset_keep(&self, sha: &str) -> Result<(), String> {
-        self.reset(sha, ResetMode::Keep)
     }
 
     // ── Branches ─────────────────────────────────────────────────────────
@@ -985,15 +944,6 @@ impl Repo {
         } else {
             None
         }
-    }
-
-    /// Is a merge stopped on conflicts?
-    pub fn merge_in_progress(&self) -> bool {
-        self.operation() == Some(Operation::Merge)
-    }
-
-    pub fn merge_abort(&self) -> Result<(), String> {
-        self.abort_operation()
     }
 
     /// Give up on the operation in progress, putting things back as they were.
@@ -1159,16 +1109,6 @@ impl Repo {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    /// Stash entries, newest first, as their messages ("WIP on main: …").
-    pub fn stash_list(&self) -> Vec<String> {
-        self.stashes().into_iter().map(|s| s.message).collect()
-    }
-
-    /// Number of stash entries.
-    pub fn stash_count(&self) -> usize {
-        self.stashes().len()
     }
 
     // ── Tags ─────────────────────────────────────────────────────────────

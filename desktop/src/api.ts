@@ -2,12 +2,16 @@ import type {
   AgentChoice,
   BranchInfo,
   CommitDetail,
+  Credential,
   FileEntry,
   Graph,
   Issue,
   IssueDetail,
   LogLine,
   Mode,
+  PlanAction,
+  PlanCommit,
+  PrBadge,
   Pull,
   PullDetail,
   RepoInfo,
@@ -16,9 +20,11 @@ import type {
   RunDetail,
   StashInfo,
   RunPatch,
+  TagInfo,
   TaskDetail,
   TaskSummary,
   TaskPull,
+  WorktreeInfo,
 } from "./types";
 import type { Place } from "./shared/DiffView";
 
@@ -45,6 +51,12 @@ export const api = {
   /** Pops the shared undo stack: any section's last change. */
   undo: () => call<string>("undo"),
   openUrl: (url: string) => call<void>("open_url", { url }),
+  /** The oldest passphrase/password prompt from git or ssh, if one waits. */
+  askpassPending: () => call<Credential | null>("askpass_pending"),
+  /** `null` cancels. */
+  askpassAnswer: (id: number, answer: string | null) => call<void>("askpass_answer", { id, answer }),
+  /** Repositories the old native (GPUI) app had in its workspaces, to carry over. */
+  legacyRepos: () => call<string[]>("legacy_repos"),
 
   // History
   graph: (limit: number) => call<Graph>("graph", { limit }),
@@ -59,6 +71,25 @@ export const api = {
   cherryPick: (hash: string) => call<string>("cherry_pick", { hash }),
   revert: (hash: string) => call<string>("revert", { hash }),
   mergeBranch: (branch: string) => call<string>("merge_branch", { branch }),
+  renameBranch: (old: string, name: string) => call<string>("rename_branch", { old, new: name }),
+  /** `origin/feat/x`: delete `feat/x` on origin. */
+  deleteRemoteBranch: (name: string) => call<string>("delete_remote_branch", { name }),
+  rebaseOnto: (onto: string) => call<string>("rebase_onto", { onto }),
+  resetTo: (hash: string, mode: "soft" | "mixed" | "hard") => call<string>("reset_to", { hash, mode }),
+  checkoutCommit: (hash: string, stash = false) => call<string>("checkout_commit", { hash, stash }),
+  tags: () => call<TagInfo[]>("tags"),
+  createTag: (name: string, hash: string, message: string | null) => call<string>("create_tag", { name, hash, message }),
+  deleteTag: (name: string) => call<string>("delete_tag", { name }),
+  pushTag: (name: string, del = false) => call<string>("push_tag", { name, delete: del }),
+  worktrees: () => call<WorktreeInfo[]>("worktrees"),
+  removeWorktree: (path: string) => call<string>("remove_worktree", { path }),
+  /** The commits after `base` an interactive rebase would rewrite, oldest first. */
+  rewritePlan: (base: string) => call<PlanCommit[]>("rewrite_plan", { base }),
+  rewrite: (base: string, plan: { hash: string; action: PlanAction; message: string | null }[]) =>
+    call<string>("rewrite", { base, plan }),
+  prBadges: () => call<PrBadge[]>("pr_badges"),
+  /** The current branch's PR page, or the page to open one. */
+  pullRequestUrl: () => call<string>("pull_request_url"),
 
   // Changes
   status: () => call<FileEntry[]>("status"),
@@ -74,6 +105,11 @@ export const api = {
   stashes: () => call<StashInfo[]>("stashes"),
   stash: (message: string | null) => call<string>("stash", { message }),
   stashPop: (index: number) => call<string>("stash_pop", { index }),
+  stashApply: (index: number) => call<string>("stash_apply", { index }),
+  stashDrop: (index: number) => call<string>("stash_drop", { index }),
+  skipOperation: () => call<string>("skip_operation"),
+  /** Quiet background fetch: never prompts, never complains. */
+  autoFetch: () => call<void>("auto_fetch"),
   resolve: (path: string, how: "ours" | "theirs" | "resolved") => call<void>("resolve", { path, how }),
   continueOperation: () => call<string>("continue_operation"),
   abortOperation: () => call<string>("abort_operation"),

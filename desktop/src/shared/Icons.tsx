@@ -1,5 +1,5 @@
-// Small stroke icons (24-unit grid, Lucide-style), so the prototype has no
-// icon dependency.
+// Small stroke icons (24-unit grid), drawn after Lucide (ISC, see
+// LICENSE-LUCIDE beside this file), so the app has no icon dependency.
 
 import type { SVGProps } from "react";
 

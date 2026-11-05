@@ -1,8 +1,8 @@
 //! One undo stack for the whole app. Every command that changes the
 //! repository pushes what it would take to put it back, with a label for the
-//! toast; ⌘Z pops the latest. Kept while the app runs, like the GPUI app's.
+//! toast; ⌘Z pops the latest. Kept while the app runs.
 
-use spor::git::{AppliedPatch, FileStatus, Repo, ResetMode};
+use spor::git::{AppliedPatch, FileStatus, Repo, ResetMode, Stash};
 use spor::tasks::{Tasks, Undoable};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -34,6 +34,14 @@ pub(crate) enum Undo {
     Created { name: String },
     /// An agent run that was undone: bring it back.
     RunUndone { task: String, index: usize },
+    /// A deleted tag: put it back (the tag object, for an annotated one).
+    TagDeleted { name: String, target: String },
+    /// A created tag: delete it.
+    TagCreated { name: String },
+    /// A renamed branch: rename it back.
+    Renamed { old: String, new: String },
+    /// A dropped stash: store it again.
+    StashDropped(Stash),
 }
 
 struct Entry {
@@ -64,6 +72,15 @@ impl Stack {
 
     pub(crate) fn clear(&self) {
         self.0.lock().unwrap().clear();
+    }
+
+    /// After a push: taking back a commit (or a reset, rebase, amend…) now
+    /// would rewrite history others may have, so those entries go.
+    pub(crate) fn forget_history(&self) {
+        self.0
+            .lock()
+            .unwrap()
+            .retain(|e| !matches!(e.undo, Undo::Moved { .. }));
     }
 
     pub(crate) fn pop(&self, repo: &Repo) -> Result<String, String> {
@@ -138,6 +155,10 @@ fn apply(repo: &Repo, undo: Undo) -> Result<(), String> {
             let task = tasks.get(&task).ok_or("The task is gone")?;
             spor::agent::Runs::of(&tasks, &task).redo(index)
         }
+        Undo::TagDeleted { name, target } => repo.restore_tag(&name, &target),
+        Undo::TagCreated { name } => repo.delete_tag(&name),
+        Undo::Renamed { old, new } => repo.rename_branch(&new, &old),
+        Undo::StashDropped(stash) => repo.restore_stash(&stash),
     }
 }
 

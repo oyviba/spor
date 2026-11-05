@@ -9,7 +9,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  # The core library (the root crate): no dependencies, no UI.
+  core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,47 +18,16 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Install GPUI build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libvulkan-dev libfontconfig-dev libfreetype-dev \
-            libxcb1-dev libx11-xcb-dev
       - name: Format
         run: cargo fmt --check
-      - name: Clippy (terminal)
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Clippy (terminal + app + UI tests)
-        run: cargo clippy --all-targets --features ui-tests -- -D warnings
-      - name: Build
-        run: cargo build --all-targets --features gui --locked
-      # ui-tests adds the app's headless UI tests (GPUI test windows).
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
-        run: cargo test --features ui-tests --locked
+        run: cargo test --locked
 
-  macos-app:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
-      - name: Bundle Spor.app (universal)
-        run: scripts/bundle-macos.sh --universal
-      - name: Smoke-test the bundle
-        run: |
-          plutil -lint target/macos/Spor.app/Contents/Info.plist
-          lipo -archs target/macos/Spor.app/Contents/MacOS/spor-app
-          codesign --verify --verbose target/macos/Spor.app
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Spor-macos
-          path: target/macos/Spor-*-macos.zip
-
-  # The Tauri app in desktop/: its own Cargo workspace (the root steps don't
-  # touch it), the web UI, and the end-to-end suites against the real app
-  # under Xvfb, with stand-in `claude` and `gh` from desktop/e2e/bin.
+  # The app in desktop/: its own Cargo workspace over the core, the web UI,
+  # and the end-to-end suites against the real app under Xvfb, with
+  # stand-in `claude` and `gh` from desktop/e2e/bin.
   desktop:
     runs-on: ubuntu-latest
     defaults:
@@ -111,3 +81,39 @@ jobs:
           name: desktop-e2e-screenshots
           path: desktop/e2e-shots
           if-no-files-found: ignore
+
+  # Spor.app for macOS (universal), from the Tauri bundler. Not signed or
+  # notarized: the first launch of a downloaded copy needs right-click → Open.
+  macos-app:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - name: Install UI dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Bundle Spor.app (universal)
+        run: pnpm tauri build --target universal-apple-darwin --bundles app
+      - name: Zip the bundle
+        run: |
+          cd src-tauri/target/universal-apple-darwin/release/bundle/macos
+          ditto -c -k --keepParent Spor.app Spor-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Spor-macos
+          path: desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Spor-macos.zip

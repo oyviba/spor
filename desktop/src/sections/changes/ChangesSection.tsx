@@ -6,7 +6,7 @@ import { usePoll } from "../../shared/hooks";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView, selectionRange, type LineSelection } from "../../shared/DiffView";
 import { parsePatch } from "../../shared/diff";
-import { Alert, Archive, ArrowDown, ArrowUp, Branch, Check, Minus, Plus, Refresh, Undo } from "../../shared/Icons";
+import { Alert, Archive, ArrowDown, ArrowUp, Branch, Check, Minus, Plus, PullRequest, Refresh, Undo } from "../../shared/Icons";
 
 interface Pick {
   path: string;
@@ -322,22 +322,66 @@ function SyncCard({ stashes, onChanged, canStash }: { stashes: StashInfo[]; onCh
           <ArrowUp size={12} /> {state?.upstream ? `Push${state.ahead > 0 ? ` ${state.ahead}` : ""}` : "Publish"}
         </button>
       </div>
+      {state?.branch && state.upstream && state.branch !== shell.repo.default_base && (
+        <div className="inspector-actions">
+          <button
+            className="ghost"
+            title="This branch's pull request, or the page to open one"
+            onClick={() => api.pullRequestUrl().then(api.openUrl).catch(shell.fail)}
+          >
+            <PullRequest size={12} /> Pull request on GitHub
+          </button>
+        </div>
+      )}
       <div className="inspector-section">
         <div className="inspector-row">
           <Archive size={13} />
           <span>Stashes</span>
           <span className="flex-1" />
-          <button className="link small-text" disabled={!canStash} onClick={() => shell.act(() => api.stash(null), { undo: false }).then(onChanged)}>
+          <button
+            className="link small-text"
+            disabled={!canStash}
+            title="Right-click to give it a message"
+            onClick={() => shell.act(() => api.stash(null), { undo: false }).then(onChanged)}
+            onContextMenu={(e) =>
+              shell.menu(e, [
+                {
+                  label: "Stash changes with a message…",
+                  disabled: !canStash,
+                  run: async () => {
+                    const r = await shell.prompt({ title: "Stash changes", placeholder: "What's in it", action: "Stash" });
+                    if (r) shell.act(() => api.stash(r.value), { undo: false }).then(onChanged);
+                  },
+                },
+              ])
+            }
+          >
             Stash changes
           </button>
         </div>
         {stashes.map((s) => (
-          <div key={s.index} className="inspector-row stash-row">
-            <span className="truncate muted" title={s.message}>
+          <div
+            key={s.index}
+            className="inspector-row stash-row"
+            onContextMenu={(e) =>
+              shell.menu(e, [
+                { label: "Pop (apply and drop)", run: () => shell.act(() => api.stashPop(s.index), { undo: false }).then(onChanged) },
+                { label: "Apply and keep", run: () => shell.act(() => api.stashApply(s.index), { undo: false }).then(onChanged) },
+                { label: "Drop", danger: true, separator: true, run: () => shell.act(() => api.stashDrop(s.index)).then(onChanged) },
+              ])
+            }
+          >
+            <span className="truncate muted" title={`${s.message} — right-click for more`}>
               {s.message}
             </span>
             <button className="link small-text" onClick={() => shell.act(() => api.stashPop(s.index), { undo: false }).then(onChanged)}>
               Pop
+            </button>
+            <button className="link small-text" title="Apply it and keep it in the list" onClick={() => shell.act(() => api.stashApply(s.index), { undo: false }).then(onChanged)}>
+              Apply
+            </button>
+            <button className="link small-text" title="Drop it (⌘Z undoes)" onClick={() => shell.act(() => api.stashDrop(s.index)).then(onChanged)}>
+              Drop
             </button>
           </div>
         ))}

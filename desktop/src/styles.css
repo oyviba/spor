@@ -1,4 +1,4 @@
-/* Spor desktop prototype. Neutral surfaces, one blue accent; status colors
+/* Spor. Neutral surfaces, one blue accent; status colors
    only on small pills and dots. Dark mode is true black with lifted cards. */
 
 :root {
@@ -2042,4 +2042,281 @@ kbd {
   white-space: pre-wrap;
   max-height: 280px;
   overflow: auto;
+}
+
+/* ---- Floating: context menu, dialogs, credential prompt, palette ---- */
+
+.menu.floating {
+  position: fixed;
+  top: auto;
+  z-index: 50;
+  max-width: 420px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.menu.floating button {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu button:disabled {
+  color: var(--faint);
+  background: none;
+  cursor: default;
+}
+.menu-separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+.danger-text {
+  color: var(--red);
+}
+.bad-text {
+  color: var(--red);
+}
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in oklab, var(--bg) 40%, transparent);
+  backdrop-filter: blur(2px);
+}
+.overlay.top {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+.dialog {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.dialog h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.dialog p {
+  margin: 0;
+}
+.dialog input {
+  height: 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 0 10px;
+  font: inherit;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.credential-prompt {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+.palette {
+  width: 100%;
+  max-width: 560px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.palette-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.palette-search input {
+  flex: 1;
+  height: 42px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+}
+.palette-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 4px;
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  text-align: left;
+}
+.palette-item.selected {
+  background: var(--accent-soft);
+}
+.palette-hint {
+  color: var(--faint);
+  font-size: 12px;
+  min-width: 0;
+}
+.palette-empty {
+  padding: 14px;
+  text-align: center;
+}
+
+/* ---- PR badges on branch labels ---- */
+
+.pr-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--sky);
+}
+.ref.current .pr-badge {
+  color: inherit;
+}
+.pr-badge.review-approved {
+  color: var(--emerald);
+}
+.pr-badge.review-changesrequested {
+  color: var(--red);
+}
+.pr-badge.review-draft {
+  color: var(--faint);
+}
+.pr-checks.checks-passing {
+  color: var(--emerald);
+}
+.pr-checks.checks-failing {
+  color: var(--red);
+}
+.pr-checks.checks-pending {
+  color: var(--amber);
+}
+
+/* ---- Rewrite (interactive rebase) ---- */
+
+.rewrite {
+  max-width: 880px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rewrite-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.rewrite-step {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.rewrite-step:first-child {
+  border-top: none;
+}
+.rewrite-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+.rewrite-move {
+  display: inline-flex;
+  gap: 2px;
+}
+.rewrite-row select {
+  height: 26px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+.rewrite-subject {
+  flex: 1;
+  min-width: 0;
+}
+.rewrite-step.a-drop .rewrite-subject {
+  text-decoration: line-through;
+  color: var(--faint);
+}
+.rewrite-step.a-squash,
+.rewrite-step.a-fixup {
+  padding-left: 34px;
+}
+.rewrite-message {
+  width: 100%;
+  margin: 6px 0 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 12px var(--mono);
+  padding: 6px 8px;
+  resize: vertical;
+}
+.rewrite-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- Recent repositories (open page) ---- */
+
+.recent-repos {
+  margin-top: 22px;
+}
+.recent-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 6px;
+}
+.recent-row:hover {
+  background: var(--hover);
+}
+.recent-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  text-align: left;
+}
+.stash-row .link + .link {
+  margin-left: 6px;
+}
+.branch-name .pr-badge.muted-badge {
+  color: var(--faint);
+  font-weight: 500;
 }

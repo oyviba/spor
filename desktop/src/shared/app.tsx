@@ -4,6 +4,7 @@
 
 import { createContext, useContext } from "react";
 import type { RepoInfo, RepoState } from "../types";
+import type { MenuItem } from "./Overlay";
 
 export type SectionId = "changes" | "history" | "issues" | "pulls" | "actions" | "agents";
 
@@ -43,6 +44,22 @@ export interface Shell {
   /** The last target sent to a section, with a counter so a repeat still lands. */
   target: Target & { seq: number };
   openRepo: (path: string) => void;
+  /** Repositories opened before, most recent first (this one included). */
+  recent: string[];
+  forgetRepo: (path: string) => void;
+  /** A context menu at the pointer (right-click or a ⋯ button). */
+  menu: (e: { clientX: number; clientY: number; preventDefault?: () => void }, items: MenuItem[]) => void;
+  /** Ask for a name; null when cancelled. */
+  prompt: (spec: {
+    title: string;
+    detail?: string;
+    placeholder?: string;
+    initial?: string;
+    action: string;
+    extra?: { placeholder: string };
+  }) => Promise<{ value: string; extra: string } | null>;
+  /** Ask before something that can't be undone. */
+  confirm: (spec: { title: string; detail?: string; action: string; danger?: boolean }) => Promise<boolean>;
 }
 
 export const ShellContext = createContext<Shell | null>(null);

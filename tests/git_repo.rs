@@ -389,9 +389,9 @@ fn stashes_apply_drop_restore() {
     assert!(stashes[0].message.ends_with("my work"));
     f.repo.stash_apply_at(0).unwrap();
     assert_eq!(f.read("f.txt"), "b\n");
-    assert_eq!(f.repo.stash_count(), 1);
+    assert_eq!(f.repo.stashes().len(), 1);
     let dropped = f.repo.stash_drop_at(0).unwrap();
-    assert_eq!(f.repo.stash_count(), 0);
+    assert_eq!(f.repo.stashes().len(), 0);
     f.repo.restore_stash(&dropped).unwrap();
     assert_eq!(f.repo.stashes()[0].sha, dropped.sha);
 }

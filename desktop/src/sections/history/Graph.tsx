@@ -4,7 +4,7 @@
 // only become paths.
 
 import { forwardRef, memo, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import type { Graph as GraphData, GraphRow, Segment } from "../../types";
+import type { Graph as GraphData, GraphRow, PrBadge, Segment } from "../../types";
 import { ago } from "../agents/transcript";
 import { Bot, Tag } from "../../shared/Icons";
 
@@ -31,6 +31,10 @@ interface Props {
   /** Remote-tracking branch names, drawn quieter than local ones. */
   remotes: Set<string>;
   nowMs: number;
+  /** Open pull requests by head branch: a badge on its label. */
+  prs: Map<string, PrBadge>;
+  /** Right-click on a row. */
+  onContext: (hash: string, e: React.MouseEvent) => void;
 }
 
 export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
@@ -45,6 +49,7 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
   latest.current = p;
   const select = useMemo(() => (hash: string) => latest.current.onSelect(hash), []);
   const openRow = useMemo(() => (hash: string) => latest.current.onOpen(hash), []);
+  const context = useMemo(() => (hash: string, e: React.MouseEvent) => latest.current.onContext(hash, e), []);
 
   useImperativeHandle(ref, () => ({
     scrollTo: (hash) => {
@@ -109,8 +114,10 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
             currentBranch={p.currentBranch}
             remotes={p.remotes}
             nowMs={p.nowMs}
+            prs={p.prs}
             onSelect={select}
             onOpen={openRow}
+            onContext={context}
           />
         ))}
       </div>
@@ -128,8 +135,10 @@ const Row = memo(function Row({
   currentBranch,
   remotes,
   nowMs,
+  prs,
   onSelect,
   onOpen,
+  onContext,
 }: {
   row: GraphRow;
   top: number;
@@ -140,8 +149,10 @@ const Row = memo(function Row({
   currentBranch: string | null;
   remotes: Set<string>;
   nowMs: number;
+  prs: Map<string, PrBadge>;
   onSelect: (hash: string) => void;
   onOpen: (hash: string) => void;
+  onContext: (hash: string, e: React.MouseEvent) => void;
 }) {
   const node = x(row.lane);
   const color = palette[row.color] ?? "#888";
@@ -151,6 +162,11 @@ const Row = memo(function Row({
       style={{ top }}
       onClick={() => onSelect(row.hash)}
       onDoubleClick={() => onOpen(row.hash)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onSelect(row.hash);
+        onContext(row.hash, e);
+      }}
       data-hash={row.hash}
     >
       <svg width={width} height={ROW} className="graph-svg" aria-hidden>
@@ -181,7 +197,7 @@ const Row = memo(function Row({
       </svg>
       <div className="graph-text">
         {row.refs.map((r) => (
-          <RefBadge key={r} name={r} current={r === currentBranch} remote={remotes.has(r)} color={color} />
+          <RefBadge key={r} name={r} current={r === currentBranch} remote={remotes.has(r)} color={color} pr={prs.get(r)} />
         ))}
         <span className="graph-subject">{row.subject}</span>
       </div>
@@ -191,7 +207,21 @@ const Row = memo(function Row({
   );
 });
 
-function RefBadge({ name, current, remote, color }: { name: string; current: boolean; remote: boolean; color: string }) {
+const CHECK_GLYPH: Record<PrBadge["checks"], string> = { none: "", pending: "●", passing: "✓", failing: "✗" };
+
+function RefBadge({
+  name,
+  current,
+  remote,
+  color,
+  pr,
+}: {
+  name: string;
+  current: boolean;
+  remote: boolean;
+  color: string;
+  pr?: PrBadge;
+}) {
   const tag = name.startsWith("tag:");
   const label = tag ? name.slice(4).trim() : name;
   const agent = label.startsWith("agent/");
@@ -204,6 +234,15 @@ function RefBadge({ name, current, remote, color }: { name: string; current: boo
       {tag && <Tag size={10} />}
       {agent && <Bot size={10} />}
       {label}
+      {pr && (
+        <span
+          className={`pr-badge review-${pr.draft ? "draft" : pr.review}`}
+          title={`Pull request #${pr.number}${pr.draft ? " (draft)" : ""} — review: ${pr.review}, checks: ${pr.checks}`}
+        >
+          #{pr.number}
+          {CHECK_GLYPH[pr.checks] && <span className={`pr-checks checks-${pr.checks}`}>{CHECK_GLYPH[pr.checks]}</span>}
+        </span>
+      )}
     </span>
   );
 }
@@ -243,7 +282,7 @@ function useDark(): boolean {
 }
 
 /** The palette is tuned for dark backgrounds; on light ones, lines and
- * dots need a deeper shade (as the GPUI app does: lightness × 0.8). */
+ * dots need a deeper shade (lightness × 0.8). */
 function deepen(hex: string): string {
   const n = parseInt(hex.slice(1), 16);
   const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => v / 255);

@@ -46,7 +46,9 @@ try {
   console.log("It asks before running the tests (#21)");
   await w.waitFor(".composer .ask-card", 30000);
   check((await w.text(".ask-card")).includes("python -m pytest -q"), "the question shows in the composer, with the command");
-  check((await w.text(".task-row .pill")).includes("Needs you"), "the task says it needs you");
+  // The task list polls on its own clock; give it a beat to catch up.
+  await w.until(`return document.querySelector(".task-row .pill")?.innerText.includes("Needs you")`, "the Needs you pill", 5000);
+  check(true, "the task says it needs you");
   check((await w.text(".list-label.needs-you")) === "Needs you", "…and moves to the top of the list");
   await w.until(`return document.querySelector(".rail-badge.asking")?.textContent === "1"`, "the rail's count", 6000);
   check(true, "the rail counts it in amber");
