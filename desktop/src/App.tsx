@@ -3,7 +3,9 @@ import { api, errorText } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState } from "./types";
 import { usePoll, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
-import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
+import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
+import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/Settings";
+import { getSettings, setSettings } from "./shared/settings";
 import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuSpec } from "./shared/Overlay";
 import { AgentsSection } from "./sections/agents/AgentsSection";
 import { HistorySection } from "./sections/history/HistorySection";
@@ -52,6 +54,7 @@ export function App() {
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
   const [credential, setCredential] = useState<Credential | null>(null);
   const [palette, setPalette] = useState<{ branches: BranchInfo[] } | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const setRepo = useCallback(
     (r: RepoInfo | null) => {
       setRepoRaw(r);
@@ -268,7 +271,10 @@ export function App() {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       const typing = (e.target as HTMLElement)?.closest?.("input, textarea, select");
       const s = SECTIONS.find((x) => x.key === e.key);
-      if (e.key === "k" && repo) {
+      if (e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen(true);
+      } else if (e.key === "k" && repo) {
         e.preventDefault();
         api.branches().then(
           (branches) => setPalette({ branches }),
@@ -301,6 +307,12 @@ export function App() {
       },
       { id: "stash", label: "Stash changes", run: () => shell.act(() => api.stash(null), { undo: false }) },
       { id: "undo", label: state?.undo ? `Undo: ${state.undo}` : "Undo", keys: "⌘Z", run: undo },
+      { id: "settings", label: "Settings", keys: "⌘,", run: () => setSettingsOpen(true) },
+      {
+        id: "diff-layout",
+        label: getSettings().diffLayout === "split" ? "Show diffs unified" : "Show diffs side by side",
+        run: () => setSettings({ diffLayout: getSettings().diffLayout === "split" ? "unified" : "split" }),
+      },
       ...branches
         .filter((b) => !b.current && !b.remote)
         .map((b) => ({
@@ -323,10 +335,13 @@ export function App() {
     ];
   };
 
+  const settingsPages: SettingsPage[] = [{ id: "diffs", label: "Diffs", render: () => <DiffSettings /> }];
+
   const overlays = (
     <>
       {menu && <MenuView spec={menu} onClose={() => setMenu(null)} />}
       {dialog && <DialogView spec={dialog} onClose={() => setDialog(null)} />}
+      {settingsOpen && <SettingsDialog pages={settingsPages} onClose={() => setSettingsOpen(false)} />}
       {palette && <Palette commands={commands(palette.branches)} onClose={() => setPalette(null)} />}
       {credential && (
         <CredentialDialog
@@ -377,6 +392,10 @@ export function App() {
               </button>
             );
           })}
+          <span className="flex-1" />
+          <button className="rail-item" onClick={() => setSettingsOpen(true)} title="Settings (⌘,)" aria-label="Settings">
+            <Gear size={17} />
+          </button>
         </nav>
         <div className="section">
           {state?.operation && <OperationBanner state={state} />}
