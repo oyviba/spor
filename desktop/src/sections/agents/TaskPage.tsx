@@ -1,6 +1,6 @@
 import { forwardRef } from "react";
 import type { Ask, LineComment, Mode, RepoInfo, TaskDetail } from "../../types";
-import { statusOf } from "./status";
+import { isOpen, statusOf } from "./status";
 import { useNow } from "../../shared/hooks";
 import { DiffView } from "../../shared/DiffView";
 import { Composer, type AgentSettings, type ComposerHandle } from "./Composer";
@@ -150,7 +150,7 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
           />
         )}
       </div>
-      {!t.landed && (
+      {isOpen(t) && (
         <Composer
           ref={composerRef}
           repo={p.repo}

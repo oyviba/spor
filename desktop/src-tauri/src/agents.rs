@@ -106,6 +106,8 @@ pub(crate) struct TaskSummary {
     worktree: String,
     created: i64,
     landed: Option<String>,
+    /// Its pull request was closed without merging, and it was cleaned up.
+    closed: bool,
     stats: Stats,
     run: Option<RunInfo>,
     runs: usize,
@@ -133,8 +135,9 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
         created: task.created,
         landed: match &task.state {
             TaskState::Landed(sha) => Some(sha.clone()),
-            TaskState::Open => None,
+            TaskState::Open | TaskState::Closed => None,
         },
+        closed: task.state == TaskState::Closed,
         stats: tasks.stats(task).into(),
         mode: list.last().and_then(|r| runs.mode(r.index)).map(mode_name),
         runs: list.len(),
@@ -760,6 +763,21 @@ pub(crate) fn review_feedback(app: State<App>, id: String) -> Result<String, Str
         .ok_or_else(|| format!("Nothing new on #{number} since the agent last worked on it"))
 }
 
+/// The failed Actions jobs on the task's pull request (the failing step
+/// and the end of each log), as a follow-up for its agent.
+#[tauri::command(async)]
+pub(crate) fn check_feedback(app: State<App>, id: String) -> Result<String, String> {
+    let (tasks, task) = app.task(&id)?;
+    let number = task
+        .pull
+        .ok_or_else(|| format!("{} has no pull request", task.id))?;
+    let dir = tasks.root().to_path_buf();
+    let detail = spor::github::pull_detail(&dir, number).map_err(|e| first_line(&e))?;
+    let failures = spor::github::pull_failures(&dir, &detail).map_err(|e| first_line(&e))?;
+    spor::github::failure_feedback(&failures, Some(&detail.pull))
+        .ok_or_else(|| format!("No Actions job has failed on #{number}"))
+}
+
 /// The task's pull request was merged: mark it landed and remove its folder
 /// and branch. ⌘Z brings them back.
 #[tauri::command(async)]
@@ -773,6 +791,23 @@ pub(crate) fn settle_task(app: State<App>, id: String, commit: String) -> Result
     }
     let undo = tasks.settle(&task, &commit).map_err(|e| first_line(&e))?;
     let message = format!("Cleaned up {} — its pull request was merged", task.id);
+    app.undo.push(message.clone(), Undo::Task(undo));
+    Ok(message)
+}
+
+/// The task's pull request was closed without merging: mark it closed and
+/// remove its folder and branch. ⌘Z brings them back.
+#[tauri::command(async)]
+pub(crate) fn close_task(app: State<App>, id: String) -> Result<String, String> {
+    let (tasks, task) = app.task(&id)?;
+    if Runs::of(&tasks, &task)
+        .latest()
+        .is_some_and(|r| r.state == RunState::Running)
+    {
+        return Err("Stop the agent first".into());
+    }
+    let undo = tasks.close(&task).map_err(|e| first_line(&e))?;
+    let message = format!("Closed {} — its pull request was closed", task.id);
     app.undo.push(message.clone(), Undo::Task(undo));
     Ok(message)
 }

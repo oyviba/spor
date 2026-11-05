@@ -48,6 +48,8 @@ export interface TaskSummary {
   worktree: string;
   created: number;
   landed: string | null;
+  /** Its pull request was closed without merging, and it was cleaned up. */
+  closed: boolean;
   stats: Stats;
   run: RunInfo | null;
   runs: number;
