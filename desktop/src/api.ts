@@ -1,7 +1,9 @@
 import type {
   AgentChoice,
+  BlameRow,
   BranchInfo,
   CommitDetail,
+  ConflictPart,
   Credential,
   FileEntry,
   Graph,
@@ -15,6 +17,7 @@ import type {
   Pull,
   PullDetail,
   RepoInfo,
+  RepoHead,
   RepoState,
   Run,
   RunDetail,
@@ -85,8 +88,11 @@ export const api = {
   askpassPending: () => call<Credential | null>("askpass_pending"),
   /** `null` cancels. */
   askpassAnswer: (id: number, answer: string | null) => call<void>("askpass_answer", { id, answer }),
-  /** Repositories the old native (GPUI) app had in its workspaces, to carry over. */
-  legacyRepos: () => call<string[]>("legacy_repos"),
+  /** The old native (GPUI) app's workspaces, to carry over; null when it had none. */
+  legacyWorkspaces: () =>
+    call<{ list: { name: string; color: number; repos: string[]; last: string | null }[]; active: number } | null>("legacy_workspaces"),
+  /** Branch, ahead/behind and changed files of each repository, for the workspace's list. */
+  repoHeads: (paths: string[]) => call<RepoHead[]>("repo_heads", { paths }),
 
   // History
   graph: (limit: number) => call<Graph>("graph", { limit }),
@@ -120,6 +126,12 @@ export const api = {
   prBadges: () => call<PrBadge[]>("pr_badges"),
   /** The current branch's PR page, or the page to open one. */
   pullRequestUrl: () => call<string>("pull_request_url"),
+  /** Merge `source` into `target`, checking `target` out first if it isn't. */
+  mergeInto: (source: string, target: string) => call<string>("merge_into", { source, target }),
+  /** The host's page for a pull request from `source` into `target`. */
+  pullRequestBetween: (source: string, target: string) => call<string>("pull_request_between", { source, target }),
+  /** Who last changed each line, as of `rev` (the working tree when null). */
+  blame: (path: string, rev: string | null) => call<BlameRow[]>("blame", { path, rev }),
 
   // Changes
   status: () => call<FileEntry[]>("status"),
@@ -138,6 +150,9 @@ export const api = {
   stashApply: (index: number) => call<string>("stash_apply", { index }),
   stashDrop: (index: number) => call<string>("stash_drop", { index }),
   skipOperation: () => call<string>("skip_operation"),
+  conflictRegions: (path: string) => call<ConflictPart[]>("conflict_regions", { path }),
+  /** A side per region, in order; writes the file and marks it resolved. */
+  resolveRegions: (path: string, choices: string[]) => call<string>("resolve_regions", { path, choices }),
   /** Quiet background fetch: never prompts, never complains. */
   autoFetch: () => call<void>("auto_fetch"),
   resolve: (path: string, how: "ours" | "theirs" | "resolved") => call<void>("resolve", { path, how }),

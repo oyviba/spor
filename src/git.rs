@@ -456,7 +456,17 @@ impl Repo {
 
     /// Who last changed each line of `path`, as it is in the working tree.
     pub fn blame(&self, path: &str) -> Result<Vec<BlameLine>, String> {
-        let out = self.run_ok(&["blame", "--porcelain", "--", path])?;
+        self.blame_at(path, None)
+    }
+
+    /// Who last changed each line of `path` as of `rev` (the working tree,
+    /// uncommitted lines included, when `None`). Uncommitted lines have an
+    /// all-zero hash.
+    pub fn blame_at(&self, path: &str, rev: Option<&str>) -> Result<Vec<BlameLine>, String> {
+        let out = match rev {
+            Some(rev) => self.run_ok(&["blame", "--porcelain", rev, "--", path])?,
+            None => self.run_ok(&["blame", "--porcelain", "--", path])?,
+        };
         Ok(parse_blame(&out))
     }
 
@@ -1210,34 +1220,6 @@ pub enum LineAction {
     Discard,
 }
 
-/// Run a network git command (push, fetch) in `dir` without ever asking:
-/// no terminal prompt, and ssh in batch mode (unless the user set their own
-/// `GIT_SSH_COMMAND`). Credentials must come from a helper or ssh-agent;
-/// without them it fails with git's first error line. Returns stdout.
-pub fn network(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let ssh = std::env::var("GIT_SSH_COMMAND").unwrap_or_else(|_| "ssh -o BatchMode=yes".into());
-    let out = Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_SSH_COMMAND", ssh)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("Couldn't run git: {e}"))?;
-    if out.status.success() {
-        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let err = error_text(&out);
-    Err(err
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("git failed")
-        .trim_start_matches("fatal: ")
-        .trim_start_matches("error: ")
-        .to_string())
-}
-
 /// Does this error message indicate that the working tree blocked the switch?
 pub fn is_worktree_conflict(err: &str) -> bool {
     err.contains("would be overwritten") || err.contains("local changes")
@@ -1419,7 +1401,8 @@ fn parse_refs(s: &str) -> (Vec<String>, Option<String>) {
     let refs = s
         .split(',')
         .map(|r| r.trim())
-        .filter(|r| !r.is_empty())
+        // `origin/HEAD` only says which branch is origin's default.
+        .filter(|r| !r.is_empty() && !r.ends_with("/HEAD"))
         .map(|r| {
             if let Some(rest) = r.strip_prefix("HEAD -> ") {
                 head_ref = Some(rest.to_string());
@@ -1611,7 +1594,7 @@ mod tests {
 
     #[test]
     fn parse_refs_head_and_tags() {
-        let (refs, head) = parse_refs("HEAD -> main, origin/main, tag: v1.0");
+        let (refs, head) = parse_refs("HEAD -> main, origin/main, origin/HEAD, tag: v1.0");
         assert_eq!(refs, vec!["main", "origin/main", "tag:v1.0"]);
         assert_eq!(head.as_deref(), Some("main"));
     }

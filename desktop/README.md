@@ -8,8 +8,8 @@ composer at the bottom.
 
 | Section | ⌘ | Sidebar | Page | Details card | Bottom |
 |---|---|---|---|---|---|
-| **Changes** | 1 | Conflicts, staged and unstaged files | The file's diff: click lines, shift-click to extend, then stage, unstage or discard them | Branch and upstream, Fetch / Pull / Push, its PR, stashes (pop, apply, drop) | Commit box (⌘↩), amend |
-| **History** | 2 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more | The commit graph with PR badges, a commit's diff, and Rewrite (interactive rebase) | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
+| **Changes** | 1 | Conflicts, staged and unstaged files | The file's diff (unified or side by side): click lines, shift-click to extend, then stage, unstage or discard them; a conflicted file's regions, a side picked for each | Branch and upstream, Fetch / Pull / Push, its PR, stashes (pop, apply, drop) | Commit box (⌘↩), amend |
+| **History** | 2 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
 | **Issues** | 3 | Assigned / Yours / Open / Closed | The issue and its comments | Labels, assignees, its agent task and PR, close or reopen | *Start agent task*: the issue as the prompt (editable), the base and the agent |
 | **Pull requests** | 4 | Review / Yours / Open / Closed | Conversation · Files · Checks | Branches, checks, conflicts, linked agent task, merge, check out, close | Comment / Approve, with line comments from Files |
 | **Actions** | 5 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | Run, commit, linked agent task, re-run, cancel | |
@@ -47,10 +47,17 @@ What one app makes possible:
   index, the working tree (what `.gitignore` doesn't exclude) or agent
   tasks, the last two at most once a second. Each section reloads on the
   changes it shows, and every 30 s anyway in case an event went missing.
-- **⌘K palette and recent repositories.** Commands, sections, branches and
-  recent repositories by typing; the repository name at the top of every
-  sidebar switches between recent ones. The first launch imports the
-  repository list of the old native (GPUI) app.
+- **⌘K palette and workspaces.** Commands, sections, branches and every
+  workspace's repositories by typing. Workspaces sit at the top of the rail;
+  the repository name at the top of every sidebar lists the workspace's
+  repositories. The first launch imports the old native (GPUI) app's
+  workspaces (`shared/workspaces.ts`).
+- **Settings (⌘,).** Appearance and themes (`shared/theme.ts`, with the
+  editor in `shared/ThemeEditor.tsx`), diffs, the graph's options, and
+  shortcuts. Settings are one object in localStorage (`shared/settings.ts`);
+  every command and its default shortcut is in one table in `App.tsx`, read
+  by the key handler, the palette and the Shortcuts page (`shared/keys.ts`
+  resolves them).
 
 The graph's lanes are laid out by `spor::graph::assign_lanes`, and the
 segments for each row are worked out in Rust (`src-tauri/src/history.rs`).
@@ -77,7 +84,8 @@ finishes while you watch.
 
 ## Tests
 
-- `pnpm test`: the transcript folding and summaries, and how reloads coalesce.
+- `pnpm test`: the transcript folding and summaries, shortcut parsing, and
+  how reloads coalesce.
 - `cargo test` in `src-tauri`: the watcher, on scratch repositories.
 - `e2e/run.mjs` (agent tasks), `e2e/setup.mjs` (setup scripts) and
   `e2e/sections.mjs` (Changes, History, renaming and tagging, a conflicting
@@ -125,12 +133,7 @@ dependency-free library.
 
 ## Not here yet
 
-Left behind with the old native (GPUI) and terminal apps, each with its
-own issue: themes and a theme editor (#54), changing keyboard shortcuts
-(#55), named workspaces (#56; recent repositories meanwhile), blame (#57),
-the graph's column options (#58), side-by-side diffs (#59), dragging a
-branch onto another to merge it (#60), resolving conflicts one region at a
-time (#61), and a signed, notarized Mac app (#62).
+A signed, notarized Mac app (#62): CI's `Spor.app` is ad-hoc signed.
 
 The rules for starting an agent live in `src-tauri/src/agents.rs`; they
 belong in the core (#39). On Linux the watcher uses inotify, which needs a

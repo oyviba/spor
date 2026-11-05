@@ -368,3 +368,68 @@ fn label(verb: &str, paths: &[String]) -> String {
         many => format!("{verb} {} files", many.len()),
     }
 }
+
+/// A conflicted file as text and conflict regions, for picking a side per
+/// region.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ConflictPart {
+    Text {
+        text: String,
+    },
+    Conflict {
+        ours: String,
+        ours_label: String,
+        theirs: String,
+        theirs_label: String,
+        base: Option<String>,
+    },
+}
+
+#[tauri::command(async)]
+pub(crate) fn conflict_regions(app: State<App>, path: String) -> Result<Vec<ConflictPart>, String> {
+    let repo = app.repo()?;
+    let text = std::fs::read_to_string(repo.path(&path))
+        .map_err(|e| format!("Couldn't read {path}: {e}"))?;
+    Ok(spor::conflict::parse(&text)
+        .into_iter()
+        .map(|s| match s {
+            spor::conflict::Segment::Text(text) => ConflictPart::Text { text },
+            spor::conflict::Segment::Conflict(r) => ConflictPart::Conflict {
+                ours: r.ours,
+                ours_label: r.ours_label,
+                theirs: r.theirs,
+                theirs_label: r.theirs_label,
+                base: r.base,
+            },
+        })
+        .collect())
+}
+
+/// Write the file with a side picked for each region (ours, theirs, both,
+/// both_theirs_first), and mark it resolved.
+#[tauri::command(async)]
+pub(crate) fn resolve_regions(
+    app: State<App>,
+    path: String,
+    choices: Vec<String>,
+) -> Result<String, String> {
+    use spor::conflict::{self, Choice};
+    let repo = app.repo()?;
+    let file = repo.path(&path);
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("Couldn't read {path}: {e}"))?;
+    let choices = choices
+        .iter()
+        .map(|c| match c.as_str() {
+            "ours" => Ok(Choice::Ours),
+            "theirs" => Ok(Choice::Theirs),
+            "both" => Ok(Choice::Both),
+            "both_theirs_first" => Ok(Choice::BothTheirsFirst),
+            other => Err(format!("Unknown choice {other}")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let resolved = conflict::resolve(&conflict::parse(&text), &choices)?;
+    std::fs::write(&file, resolved).map_err(|e| format!("Couldn't write {path}: {e}"))?;
+    repo.mark_resolved(&path).map_err(|e| first_line(&e))?;
+    Ok(format!("Resolved {path}"))
+}
