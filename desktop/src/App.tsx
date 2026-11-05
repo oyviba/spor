@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary } from "./types";
-import { usePoll, useRepoChanges, useStored } from "./shared/hooks";
+import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
@@ -658,18 +658,43 @@ export function App() {
         <div className="section">
           {state?.operation && <OperationBanner state={state} />}
           <div className="section-body">
-            {section === "agents" && <AgentsSection />}
-            {section === "history" && <HistorySection />}
-            {section === "changes" && <ChangesSection />}
-            {section === "issues" && <IssuesSection />}
-            {section === "pulls" && <PullsSection />}
-            {section === "actions" && <ActionsSection />}
+            <Sections key={repo.root} section={section} />
           </div>
         </div>
         <Toasts toasts={toasts} onUndo={undo} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
         {overlays}
       </div>
     </ShellContext.Provider>
+  );
+}
+
+const SECTION_VIEWS: Record<SectionId, () => React.ReactNode> = {
+  changes: ChangesSection,
+  history: HistorySection,
+  issues: IssuesSection,
+  pulls: PullsSection,
+  actions: ActionsSection,
+  agents: AgentsSection,
+};
+
+/** The sections opened so far, kept mounted so going back to one shows it
+ * as it was at once, and then brings it up to date. A hidden one keeps its
+ * state but not its effects: it doesn't poll, watch or take keys. */
+function Sections({ section }: { section: SectionId }) {
+  const [opened, setOpened] = useState<SectionId[]>([section]);
+  if (!opened.includes(section)) setOpened([...opened, section]);
+  return (
+    <>
+      <KeepScroll shown={section} />
+      {SECTIONS.filter((s) => opened.includes(s.id)).map((s) => {
+        const View = SECTION_VIEWS[s.id];
+        return (
+          <Activity key={s.id} mode={s.id === section ? "visible" : "hidden"}>
+            <View />
+          </Activity>
+        );
+      })}
+    </>
   );
 }
 
