@@ -369,3 +369,8 @@ export interface BlameRow {
   line: number;
   text: string;
 }
+
+/** A conflicted file, split into text and conflict regions. */
+export type ConflictPart =
+  | { kind: "text"; text: string }
+  | { kind: "conflict"; ours: string; ours_label: string; theirs: string; theirs_label: string; base: string | null };

@@ -3,6 +3,7 @@ import type {
   BlameRow,
   BranchInfo,
   CommitDetail,
+  ConflictPart,
   Credential,
   FileEntry,
   Graph,
@@ -111,6 +112,9 @@ export const api = {
   stashApply: (index: number) => call<string>("stash_apply", { index }),
   stashDrop: (index: number) => call<string>("stash_drop", { index }),
   skipOperation: () => call<string>("skip_operation"),
+  conflictRegions: (path: string) => call<ConflictPart[]>("conflict_regions", { path }),
+  /** A side per region, in order; writes the file and marks it resolved. */
+  resolveRegions: (path: string, choices: string[]) => call<string>("resolve_regions", { path, choices }),
   /** Quiet background fetch: never prompts, never complains. */
   autoFetch: () => call<void>("auto_fetch"),
   resolve: (path: string, how: "ours" | "theirs" | "resolved") => call<void>("resolve", { path, how }),

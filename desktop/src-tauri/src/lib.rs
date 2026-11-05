@@ -350,6 +350,8 @@ pub fn run() {
             changes::stash_apply,
             changes::stash_drop,
             changes::skip_operation,
+            changes::conflict_regions,
+            changes::resolve_regions,
             changes::auto_fetch,
             changes::resolve,
             changes::continue_operation,

@@ -785,6 +785,14 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
         return { hash: r.hash, author: r.author, time: r.time, summary: r.subject, line: i + 1, text: `line ${i + 1} of ${args.path}` };
       });
     }
+    case "conflict_regions":
+      return [
+        { kind: "text", text: "# postplan\n\nSchedule posts.\n" },
+        { kind: "conflict", ours: "Install with pip.\n", ours_label: "HEAD", theirs: "Install with uv.\n", theirs_label: "fix/readme-install", base: null },
+        { kind: "text", text: "\n## Usage\n" },
+      ];
+    case "resolve_regions":
+      return `Resolved ${args.path}`;
     case "skip_operation":
       return "Skipped that commit";
     default:

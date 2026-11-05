@@ -241,6 +241,28 @@ fn conflicting_branches(f: &Fixture) {
 }
 
 #[test]
+fn conflict_regions_from_a_real_merge() {
+    use spor::conflict::{self, Choice, Segment};
+    let f = fixture();
+    conflicting_branches(&f);
+    f.repo.merge("other").unwrap();
+    let segments = conflict::parse(&f.read("f.txt"));
+    assert_eq!(conflict::count(&segments), 1);
+    let Segment::Conflict(r) = &segments[0] else {
+        panic!("{segments:?}")
+    };
+    assert_eq!((r.ours.as_str(), r.theirs.as_str()), ("ours\n", "theirs\n"));
+    assert_eq!(r.theirs_label, "other");
+    f.write(
+        "f.txt",
+        &conflict::resolve(&segments, &[Choice::Both]).unwrap(),
+    );
+    f.repo.mark_resolved("f.txt").unwrap();
+    assert_eq!(f.repo.continue_operation().unwrap(), Outcome::Done);
+    assert_eq!(f.read("f.txt"), "ours\ntheirs\n");
+}
+
+#[test]
 fn merge_conflict_resolve_and_continue() {
     let f = fixture();
     conflicting_branches(&f);
