@@ -8,6 +8,8 @@ import { X } from "./Icons";
 export interface SettingsPage {
   id: string;
   label: string;
+  /** Leave the app behind visible (no dimming), to preview changes. */
+  preview?: boolean;
   render: () => React.ReactNode;
 }
 
@@ -61,7 +63,7 @@ export function SettingsDialog({ pages, initial, onClose }: { pages: SettingsPag
   const [page, setPage] = useState(initial ?? pages[0].id);
   const shown = pages.find((p) => p.id === page) ?? pages[0];
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className={`overlay${shown.preview ? " clear" : ""}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         className="settings"
         role="dialog"

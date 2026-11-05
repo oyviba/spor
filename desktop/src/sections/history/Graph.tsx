@@ -8,6 +8,7 @@ import type { Graph as GraphData, GraphRow, PrBadge, Segment } from "../../types
 import { ago } from "../agents/transcript";
 import { Bot, Tag } from "../../shared/Icons";
 import { DEFAULT_GRAPH, setSettings, useSettings, type GraphOptions } from "../../shared/settings";
+import { useMode } from "../../shared/theme";
 
 const PAD = 12;
 const OVERSCAN = 12;
@@ -50,7 +51,7 @@ export const BRANCH_DRAG = "application/x-spor-branch";
 export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
   const scroller = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ top: 0, height: 800 });
-  const dark = useDark();
+  const dark = useMode() === "dark";
   const palette = useMemo(() => p.graph.palette.map((hex) => (dark ? hex : deepen(hex))), [p.graph.palette, dark]);
   const index = useMemo(() => new Map(p.graph.rows.map((r, i) => [r.hash, i])), [p.graph.rows]);
   const options = useSettings().graph;
@@ -402,19 +403,6 @@ function pathOf(s: Segment, node: number, g: Geo): string {
     case "fork":
       return `M${node} ${MID}C${node} ${MID + dy} ${lx} ${ROW - dy} ${lx} ${ROW}`;
   }
-}
-
-function useDark(): boolean {
-  const query = "(prefers-color-scheme: dark)";
-  const [dark, setDark] = useState(() => window.matchMedia?.(query).matches ?? false);
-  useEffect(() => {
-    const m = window.matchMedia?.(query);
-    if (!m) return;
-    const on = () => setDark(m.matches);
-    m.addEventListener("change", on);
-    return () => m.removeEventListener("change", on);
-  }, []);
-  return dark;
 }
 
 /** The palette is tuned for dark backgrounds; on light ones, lines and

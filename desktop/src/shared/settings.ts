@@ -18,11 +18,39 @@ export interface GraphOptions {
   widths: { refs: number; author: number; date: number; hash: number };
 }
 
+/** Colors as CSS variable values, by variable name without the `--`. */
+export type Palette = Record<string, string>;
+
+/** One mode's theme: a preset and the user's changes to it. */
+export interface ModeTheme {
+  preset: string;
+  overrides: Palette;
+}
+
+export interface ThemeSettings {
+  appearance: "system" | "light" | "dark";
+  light: ModeTheme;
+  dark: ModeTheme;
+  /** Corner radius of cards and panels, px. */
+  radius: number;
+  /** Base text size, px. */
+  fontSize: number;
+}
+
+export const DEFAULT_THEME: ThemeSettings = {
+  appearance: "system",
+  light: { preset: "spor-light", overrides: {} },
+  dark: { preset: "spor-dark", overrides: {} },
+  radius: 8,
+  fontSize: 13,
+};
+
 export interface Settings {
   diffLayout: "unified" | "split";
   graph: GraphOptions;
   /** Changes to the default shortcuts, by command id (null removes one). */
   keymap: Keymap;
+  theme: ThemeSettings;
 }
 
 export const DEFAULT_GRAPH: GraphOptions = {
@@ -37,6 +65,7 @@ const DEFAULTS: Settings = {
   diffLayout: "unified",
   graph: DEFAULT_GRAPH,
   keymap: {},
+  theme: DEFAULT_THEME,
 };
 
 const KEY = "spor.settings";
@@ -51,6 +80,12 @@ function load(): Settings {
     return {
       ...DEFAULTS,
       ...saved,
+      theme: {
+        ...DEFAULT_THEME,
+        ...saved.theme,
+        light: { ...DEFAULT_THEME.light, ...saved.theme?.light },
+        dark: { ...DEFAULT_THEME.dark, ...saved.theme?.dark },
+      },
       graph: {
         ...DEFAULT_GRAPH,
         ...saved.graph,

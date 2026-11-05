@@ -7,6 +7,8 @@ import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, IssueIcon, 
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/Settings";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
+import { AppearancePage } from "./shared/ThemeEditor";
+import { useApplyTheme } from "./shared/theme";
 import { display, effective, isMac, lookup, shortcutOf } from "./shared/keys";
 import { getSettings, setSettings, useSettings } from "./shared/settings";
 import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuSpec } from "./shared/Overlay";
@@ -91,6 +93,7 @@ export function App() {
   const [settingsPage, setSettingsPage] = useState<string | null>(null);
   const { keymap } = useSettings();
   const mac = isMac();
+  useApplyTheme();
   const setRepo = useCallback(
     (r: RepoInfo | null) => {
       setRepoRaw(r);
@@ -320,7 +323,7 @@ export function App() {
       run: () => setSection(x.id),
     })),
     { id: "palette", label: "Command palette", group: "App", keys: "Mod+K", whileTyping: true, run: () => openPalette() },
-    { id: "settings", label: "Settings", group: "App", keys: "Mod+,", whileTyping: true, run: () => setSettingsPage("diffs") },
+    { id: "settings", label: "Settings", group: "App", keys: "Mod+,", whileTyping: true, run: () => setSettingsPage("appearance") },
     { id: "shortcuts", label: "Keyboard shortcuts", group: "App", keys: "Mod+/", whileTyping: true, run: () => setSettingsPage("shortcuts") },
     // Not while typing: there ⌘Z undoes the typing.
     { id: "undo", label: state?.undo ? `Undo: ${state.undo}` : "Undo", group: "App", keys: "Mod+Z", run: () => undo() },
@@ -331,6 +334,13 @@ export function App() {
       whileTyping: true,
       run: () => setSettings({ diffLayout: getSettings().diffLayout === "split" ? "unified" : "split" }),
     },
+    ...(["system", "light", "dark"] as const).map((a) => ({
+      id: `appearance:${a}`,
+      label: a === "system" ? "Appearance: follow the system" : `Appearance: ${a}`,
+      group: "App",
+      whileTyping: true,
+      run: () => setSettings((s) => ({ ...s, theme: { ...s.theme, appearance: a } })),
+    })),
     ...(shell ? repoCommands(shell) : []),
   ];
   const shortcuts = effective(appCommands, keymap);
@@ -382,6 +392,17 @@ export function App() {
   };
 
   const settingsPages: SettingsPage[] = [
+    {
+      id: "appearance",
+      label: "Appearance",
+      preview: true,
+      render: () => (
+        <AppearancePage
+          toast={toast}
+          prompt={(spec) => new Promise((resolve) => setDialog({ kind: "prompt", ...spec, resolve }))}
+        />
+      ),
+    },
     { id: "diffs", label: "Diffs", render: () => <DiffSettings /> },
     { id: "history", label: "History graph", render: () => <GraphOptionsPanel /> },
     {
@@ -401,9 +422,9 @@ export function App() {
 
   const overlays = (
     <>
+      {settingsPage && <SettingsDialog pages={settingsPages} initial={settingsPage} onClose={() => setSettingsPage(null)} />}
       {menu && <MenuView spec={menu} onClose={() => setMenu(null)} />}
       {dialog && <DialogView spec={dialog} onClose={() => setDialog(null)} />}
-      {settingsPage && <SettingsDialog pages={settingsPages} initial={settingsPage} onClose={() => setSettingsPage(null)} />}
       {palette && <Palette commands={commands(palette.branches)} onClose={() => setPalette(null)} />}
       {credential && (
         <CredentialDialog
@@ -455,7 +476,7 @@ export function App() {
             );
           })}
           <span className="flex-1" />
-          <button className="rail-item" onClick={() => setSettingsPage("diffs")} title={keyLabel("settings") ? `Settings (${keyLabel("settings")})` : "Settings"} aria-label="Settings">
+          <button className="rail-item" onClick={() => setSettingsPage("appearance")} title={keyLabel("settings") ? `Settings (${keyLabel("settings")})` : "Settings"} aria-label="Settings">
             <Gear size={17} />
           </button>
         </nav>
