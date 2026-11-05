@@ -14,6 +14,8 @@ export interface MenuItem {
   disabled?: boolean;
   /** A line above this item. */
   separator?: boolean;
+  /** A color dot before the label. */
+  swatch?: string;
 }
 
 export interface MenuSpec {
@@ -62,6 +64,7 @@ export function MenuView({ spec, onClose }: { spec: MenuSpec; onClose: () => voi
               item.run();
             }}
           >
+            {item.swatch && <span className="menu-swatch" style={{ background: item.swatch }} />}
             {item.label}
           </button>
         </div>
