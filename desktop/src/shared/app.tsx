@@ -11,7 +11,7 @@ export type SectionId = "changes" | "history" | "issues" | "pulls" | "actions" |
 /** Where to go: a section, and what to open there. */
 export type Target =
   | { section: "changes"; path?: string }
-  | { section: "history"; hash?: string; branch?: string }
+  | { section: "history"; hash?: string; branch?: string; blame?: { path: string; rev: string | null } }
   | { section: "issues"; number?: number }
   | { section: "pulls"; number?: number }
   | { section: "actions"; runId?: number; jobId?: number }
@@ -44,9 +44,13 @@ export interface Shell {
   /** The last target sent to a section, with a counter so a repeat still lands. */
   target: Target & { seq: number };
   openRepo: (path: string) => void;
-  /** Repositories opened before, most recent first (this one included). */
+  /** The repositories in the active workspace (this one included). */
   recent: string[];
+  /** Take a repository out of its workspace (nothing on disk changes). */
   forgetRepo: (path: string) => void;
+  workspaceName: string;
+  otherWorkspaces: { id: string; name: string }[];
+  moveRepo: (path: string, workspaceId: string) => void;
   /** A context menu at the pointer (right-click or a ⋯ button). */
   menu: (e: { clientX: number; clientY: number; preventDefault?: () => void }, items: MenuItem[]) => void;
   /** Ask for a name; null when cancelled. */
