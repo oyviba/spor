@@ -4,6 +4,7 @@ import type { BranchInfo, Credential, RepoInfo, RepoState } from "./types";
 import { usePoll, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
+import { Button } from "./shared/Button";
 import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuSpec } from "./shared/Overlay";
 import { AgentsSection } from "./sections/agents/AgentsSection";
 import { HistorySection } from "./sections/history/HistorySection";
@@ -15,7 +16,8 @@ import { ActionsSection } from "./sections/actions/ActionsSection";
 interface Toast {
   id: number;
   text: string;
-  tone: "ok" | "error";
+  /** progress: something still going; it stays until that's done. */
+  tone: "ok" | "error" | "progress";
   undo?: boolean;
   action?: ToastAction;
 }
@@ -80,6 +82,32 @@ export function App() {
     );
   }, []);
   const fail = useCallback((e: unknown) => toast(errorText(e), "error"), [toast]);
+  // Something slow under way: say so if it takes more than a moment, until
+  // it's done (the returned function). Quick ones never show.
+  const progress = useCallback((text: string) => {
+    const id = Date.now() + Math.random();
+    let shown = false;
+    const timer = setTimeout(() => {
+      shown = true;
+      setToasts((t) => [...t.slice(-2), { id, text, tone: "progress" }]);
+    }, 400);
+    return () => {
+      clearTimeout(timer);
+      if (shown) setToasts((t) => t.filter((x) => x.id !== id));
+    };
+  }, []);
+  /** Run `work` with a progress toast, then toast its message (or the error). */
+  const track = useCallback(
+    async <T,>(text: string, work: () => Promise<T>): Promise<T> => {
+      const done = progress(text);
+      try {
+        return await work();
+      } finally {
+        done();
+      }
+    },
+    [progress],
+  );
 
   useEffect(() => {
     api.currentRepo().then(setRepo, () => setRepo(null));
@@ -144,8 +172,7 @@ export function App() {
     else toast(`${upstream} has ${commits} to pull`, "ok", false, { label: "Pull", run: () => doPull() });
   };
   const doPull = () =>
-    api
-      .sync("pull")
+    track("Pulling…", () => api.sync("pull"))
       .then((m) => toast(m, "ok", true), (e) => toast(errorText(e), "error"))
       .finally(() => refresh());
   usePoll(refresh, 2000, [repo?.root], !!repo);
@@ -179,18 +206,16 @@ export function App() {
   );
 
   const undo = useCallback(() => {
-    api
-      .undo()
+    track("Undoing…", api.undo)
       .then(async (msg) => {
         toast(msg);
         await refresh();
       })
       .catch(fail);
-  }, [toast, fail, refresh]);
+  }, [toast, fail, refresh, track]);
 
   const openRepo = (path: string) =>
-    api
-      .openRepo(path)
+    track(`Opening ${path.split("/").pop()}…`, () => api.openRepo(path))
       .then((r) => {
         lastState.current = null;
         setRepo(r);
@@ -210,7 +235,7 @@ export function App() {
             undo,
             act: async (run, opts) => {
               try {
-                const msg = await run();
+                const msg = await track(opts?.pending ?? "Working…", run);
                 if (msg) toast(msg, "ok", opts?.undo ?? true);
                 return true;
               } catch (e) {
@@ -222,7 +247,7 @@ export function App() {
             },
             switchBranch: async (run) => {
               try {
-                toast(await run(false), "ok", true);
+                toast(await track("Switching…", () => run(false)), "ok", true);
                 return true;
               } catch (e) {
                 const text = errorText(e);
@@ -233,7 +258,7 @@ export function App() {
                 toast(text.slice(9), "error", false, {
                   label: "Stash and switch",
                   run: () =>
-                    run(true)
+                    track("Stashing and switching…", () => run(true))
                       .then((msg) => toast(msg, "ok", true), fail)
                       .finally(refresh),
                 });
@@ -258,7 +283,7 @@ export function App() {
             confirm: (spec) => new Promise((resolve) => setDialog({ kind: "confirm", ...spec, resolve })),
           }
         : null,
-    [repo, state, refresh, toast, fail, undo, target, recent], // eslint-disable-line react-hooks/exhaustive-deps
+    [repo, state, refresh, toast, fail, undo, track, target, recent], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // ⌘1–⌘6 switch sections; ⌘Z undoes the last change anywhere (not while
@@ -288,7 +313,11 @@ export function App() {
 
   const commands = (branches: BranchInfo[]): Command[] => {
     if (!shell) return [];
-    const sync = (what: "fetch" | "pull" | "push") => () => shell.act(() => api.sync(what), { undo: what === "pull" });
+    const sync = (what: "fetch" | "pull" | "push") => () =>
+      shell.act(() => api.sync(what), {
+        undo: what === "pull",
+        pending: { fetch: "Fetching…", pull: "Pulling…", push: state?.upstream ? "Pushing…" : "Publishing…" }[what],
+      });
     return [
       ...SECTIONS.map((x) => ({ id: `go:${x.id}`, label: `Go to ${x.label}`, keys: `⌘${x.key}`, run: () => setSection(x.id) })),
       { id: "fetch", label: "Fetch", hint: "all remotes", run: sync("fetch") },
@@ -299,7 +328,7 @@ export function App() {
         label: "Open pull request for this branch",
         run: () => api.pullRequestUrl().then(api.openUrl).catch(fail),
       },
-      { id: "stash", label: "Stash changes", run: () => shell.act(() => api.stash(null), { undo: false }) },
+      { id: "stash", label: "Stash changes", run: () => shell.act(() => api.stash(null), { undo: false, pending: "Stashing…" }) },
       { id: "undo", label: state?.undo ? `Undo: ${state.undo}` : "Undo", keys: "⌘Z", run: undo },
       ...branches
         .filter((b) => !b.current && !b.remote)
@@ -420,22 +449,28 @@ function OperationBanner({ state }: { state: RepoState }) {
           Resolve in Changes
         </button>
       ) : (
-        <button className="primary small" onClick={() => shell.act(api.continueOperation, { undo: false })}>
+        <Button
+          className="primary small"
+          onClick={() => shell.act(api.continueOperation, { undo: false, pending: `Continuing the ${what.toLowerCase()}…` })}
+        >
           Continue {what.toLowerCase()}
-        </button>
+        </Button>
       )}
       {state.operation !== "merge" && (
-        <button
+        <Button
           className="ghost small"
           title="Leave out the commit it stopped on"
-          onClick={() => shell.act(api.skipOperation, { undo: false })}
+          onClick={() => shell.act(api.skipOperation, { undo: false, pending: "Skipping the commit…" })}
         >
           Skip commit
-        </button>
+        </Button>
       )}
-      <button className="ghost small" onClick={() => shell.act(api.abortOperation, { undo: false })}>
+      <Button
+        className="ghost small"
+        onClick={() => shell.act(api.abortOperation, { undo: false, pending: `Aborting the ${what.toLowerCase()}…` })}
+      >
         Abort
-      </button>
+      </Button>
     </div>
   );
 }
@@ -445,6 +480,7 @@ function Toasts({ toasts, onUndo, onClose }: { toasts: Toast[]; onUndo: () => vo
     <div className="toasts" role="status" aria-live="polite">
       {toasts.map((t) => (
         <div key={t.id} className={`toast ${t.tone}`}>
+          {t.tone === "progress" && <span className="spinner" aria-hidden />}
           <span>{t.text}</span>
           {t.action && (
             <button
@@ -468,9 +504,11 @@ function Toasts({ toasts, onUndo, onClose }: { toasts: Toast[]; onUndo: () => vo
               Undo <kbd>⌘Z</kbd>
             </button>
           )}
-          <button className="icon-button tiny" onClick={() => onClose(t.id)} aria-label="Dismiss">
-            <X size={11} />
-          </button>
+          {t.tone !== "progress" && (
+            <button className="icon-button tiny" onClick={() => onClose(t.id)} aria-label="Dismiss">
+              <X size={11} />
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -484,16 +522,23 @@ function OpenRepo({
   toasts,
 }: {
   recent: string[];
-  onOpen: (path: string) => void;
+  onOpen: (path: string) => Promise<unknown>;
   onForget: (path: string) => void;
   toasts: Toast[];
 }) {
+  // The one being opened: it shows busy, and nothing else opens meanwhile.
+  const [opening, setOpening] = useState<string | null>(null);
+  const open = (path: string) => {
+    if (opening || !path.trim()) return;
+    setOpening(path);
+    onOpen(path).finally(() => setOpening(null));
+  };
   return (
     <div className="open-repo">
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onOpen(new FormData(e.currentTarget).get("path") as string);
+          open(new FormData(e.currentTarget).get("path") as string);
         }}
       >
         <h1>Open a repository</h1>
@@ -501,17 +546,25 @@ function OpenRepo({
           <Branch size={12} /> Spor shows its history, changes, issues, pull requests, Actions and agent tasks.
         </p>
         <input name="path" autoFocus placeholder="~/code/my-project" />
-        <button className="primary" type="submit">
+        <Button className="primary" type="submit" busy={opening != null && !recent.includes(opening)}>
           Open
-        </button>
+        </Button>
         {recent.length > 0 && (
           <div className="recent-repos">
             <div className="list-label">Recent</div>
             {recent.map((r) => (
               <div key={r} className="recent-row">
-                <button type="button" className="recent-open" onClick={() => onOpen(r)} title={r}>
+                <button
+                  type="button"
+                  className={`recent-open${opening === r ? " opening" : ""}`}
+                  onClick={() => open(r)}
+                  disabled={opening != null}
+                  aria-busy={opening === r || undefined}
+                  title={r}
+                >
                   <span className="repo-name">{r.split("/").pop()}</span>
                   <span className="muted small-text truncate">{r}</span>
+                  {opening === r && <span className="spinner" aria-hidden />}
                 </button>
                 <button type="button" className="icon-button tiny" title="Remove from the list" onClick={() => onForget(r)}>
                   <X size={11} />
@@ -524,7 +577,7 @@ function OpenRepo({
       <div className="toasts">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.tone}`}>
-            {t.text}
+            <span>{t.text}</span>
           </div>
         ))}
       </div>

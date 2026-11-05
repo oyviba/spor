@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { RepoInfo } from "../../types";
 import { ModePicker, type AgentSettings } from "./Composer";
 import { ArrowUp, Branch } from "../../shared/Icons";
+import { Button } from "../../shared/Button";
 
 interface Props {
   repo: RepoInfo;
@@ -77,9 +78,9 @@ export function NewTask({ repo, settings, onSettings, onCreate }: Props) {
             )}
             <span className="flex-1" />
             <span className="hint-keys">↩ {verb.toLowerCase()} · ⌘↩ {verb.toLowerCase()} &amp; next</span>
-            <button className="send" disabled={!prompt.trim() || busy} onClick={() => submit(false)} title={`${verb} (↩)`}>
+            <Button className="send" disabled={!prompt.trim()} busy={busy} onClick={() => submit(false)} title={`${verb} (↩)`}>
               <ArrowUp size={14} />
-            </button>
+            </Button>
           </div>
         </div>
         {settings.agent === "command" && (

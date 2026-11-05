@@ -164,6 +164,10 @@ kbd {
   border-radius: 6px;
   font-weight: 500;
   white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    filter 120ms ease,
+    transform 80ms ease;
 }
 .primary {
   background: var(--accent);
@@ -182,6 +186,20 @@ kbd {
   background: color-mix(in oklab, var(--red) 14%, transparent);
   color: var(--red);
 }
+.danger:not(:disabled):hover {
+  background: color-mix(in oklab, var(--red) 20%, transparent);
+}
+/* Pressed: the click is felt before anything else happens. */
+.primary:not(:disabled):active,
+.ghost:not(:disabled):active,
+.danger:not(:disabled):active,
+.send:not(:disabled):active,
+.icon-button:not(:disabled):active {
+  transform: scale(0.97);
+}
+.primary:not(:disabled):active {
+  filter: brightness(0.95);
+}
 .small {
   height: 24px;
   padding: 0 8px;
@@ -192,7 +210,7 @@ kbd {
   font-weight: 500;
   margin-left: 8px;
 }
-.link:hover {
+.link:not(:disabled):hover {
   text-decoration: underline;
 }
 .icon-button {
@@ -202,8 +220,12 @@ kbd {
   height: 28px;
   border-radius: 6px;
   color: var(--muted);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    transform 80ms ease;
 }
-.icon-button:hover,
+.icon-button:not(:disabled):hover,
 .icon-button.active {
   background: var(--hover);
   color: var(--fg);
@@ -211,6 +233,58 @@ kbd {
 .icon-button.tiny {
   width: 18px;
   height: 18px;
+}
+
+/* Busy (shared/Button): it can't be pressed again, and after a beat (so a
+   quick action doesn't flicker) a spinner takes the label's place. The
+   label stays in the layout, so nothing moves. */
+.button-label {
+  display: contents;
+}
+button.busy {
+  position: relative;
+}
+button.busy:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+button.busy .button-label {
+  animation: busy-label 0s linear 150ms forwards;
+}
+button.busy::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  opacity: 0;
+  animation:
+    busy-spinner 0s linear 150ms forwards,
+    spin 0.7s linear infinite;
+}
+.icon-button.tiny.busy::after,
+.link.busy::after {
+  width: 10px;
+  height: 10px;
+}
+@media (prefers-reduced-motion: reduce) {
+  button.busy::after {
+    animation: busy-spinner 0s linear 150ms forwards;
+  }
+}
+@keyframes busy-label {
+  to {
+    visibility: hidden;
+  }
+}
+@keyframes busy-spinner {
+  to {
+    opacity: 1;
+  }
 }
 
 /* ---- Layout ---- */
@@ -242,8 +316,36 @@ kbd {
   flex-direction: column;
   background: var(--bg);
 }
+/* Something on its way: blank at first, a spinner if it takes a while. */
 .boot {
   height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+.boot::after {
+  content: "";
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  opacity: 0;
+  animation:
+    busy-spinner 0s linear 300ms forwards,
+    spin 0.7s linear infinite;
+}
+.sidebar-empty.loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  animation: busy-spinner 0s linear 300ms forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .boot::after {
+    animation: busy-spinner 0s linear 300ms forwards;
+  }
 }
 
 /* ---- Sidebar ---- */
@@ -1229,6 +1331,20 @@ kbd {
   background: color-mix(in oklab, var(--red) 88%, black);
   color: #fff;
 }
+.toast.progress {
+  padding-right: 14px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .toast {
+    animation: toast-in 160ms ease-out;
+  }
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
 .toast .link {
   color: inherit;
   text-decoration: underline;
@@ -1335,6 +1451,21 @@ kbd {
     transform: rotate(360deg);
   }
 }
+/* The same ring as a busy button's, on its own (a toast, a row). */
+.spinner {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .spinner {
+    animation: spin 0.7s linear infinite;
+  }
+}
 .empty-state {
   flex: 1;
   display: flex;
@@ -1433,6 +1564,25 @@ kbd {
   color: var(--fg);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
+.segmented button:not([aria-pressed="true"]):hover {
+  color: var(--fg-2);
+}
+
+/* Rows and chips answer the pointer softly rather than snapping. */
+.task-row,
+.file-row,
+.branch-row,
+.inspector-row.action,
+.rail-item,
+.segmented button,
+.chip-toggle,
+.chip-select,
+.menu button,
+.palette-item {
+  transition:
+    background-color 100ms ease,
+    color 100ms ease;
+}
 .filters {
   display: flex;
   gap: 6px;
@@ -1497,7 +1647,8 @@ kbd {
 }
 .branch-row:hover .row-actions,
 .file-row:hover .row-actions,
-.file-row.selected .row-actions {
+.file-row.selected .row-actions,
+.row-actions:has(.busy) {
   display: inline-flex;
 }
 .branch-name {
@@ -2312,6 +2463,14 @@ kbd {
   gap: 8px;
   padding: 6px 8px;
   text-align: left;
+}
+.recent-open.opening:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+.recent-open .spinner {
+  align-self: center;
+  margin-left: auto;
 }
 .stash-row .link + .link {
   margin-left: 6px;

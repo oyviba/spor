@@ -385,8 +385,31 @@ const slug = (s: string) =>
     .slice(0, 4)
     .join("-") || "task";
 
+/** What talks to a remote or GitHub, or makes a folder, takes as long as it
+ * would for real, so the UI's busy states show here too. */
+const SLOW: Record<string, number> = {
+  sync: 1500,
+  publish_task: 2500,
+  push_task: 1500,
+  create_task: 1200,
+  create_issue_task: 1200,
+  land_task: 1000,
+  pull_action: 1500,
+  issue_action: 1200,
+  run_action: 1200,
+  review_feedback: 800,
+  push_tag: 1200,
+  delete_remote_branch: 1200,
+  pulls: 900,
+  issues: 900,
+  runs: 900,
+  pull_detail: 700,
+  issue_detail: 700,
+  run_detail: 700,
+};
+
 export async function invoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
-  await new Promise((r) => setTimeout(r, 60));
+  await new Promise((r) => setTimeout(r, SLOW[cmd] ?? 60));
   const id = args.id as string;
   const recorded = await fromFixtures(cmd, args);
   if (recorded !== undefined) return recorded as T;

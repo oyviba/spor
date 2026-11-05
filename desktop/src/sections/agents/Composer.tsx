@@ -1,6 +1,7 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import type { AgentChoice, Ask, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
 import { useStored } from "../../shared/hooks";
+import { Button } from "../../shared/Button";
 import { AgentIcon, Alert, ArrowUp, Check, Clock, CornerDownRight, MessageSquare, Square, X } from "../../shared/Icons";
 
 export interface AgentSettings {
@@ -63,19 +64,19 @@ interface Props {
   onUnqueue: (index: number) => void;
   /** Questions the agent is waiting on (it runs under the host). */
   asks: Ask[];
-  onAnswer: (ask: Ask, allow: boolean, message?: string) => void;
-  onAllowForSession: (ask: Ask) => void;
+  onAnswer: (ask: Ask, allow: boolean, message?: string) => unknown;
+  onAllowForSession: (ask: Ask) => unknown;
   /** The running agent's mode, changeable while it works; null otherwise. */
   liveMode: Mode | null;
   onLiveMode: (m: Mode) => void;
   /** Start the task's own prompt (no runs yet). */
-  onStart: () => void;
+  onStart: () => unknown;
   /** A follow-up; queued by the caller when the agent is working. */
-  onSend: (text: string) => void;
+  onSend: (text: string) => unknown;
   /** The running agent can take a message into the turn it's on (#22). */
   canSteer: boolean;
-  onSteer: (text: string) => void;
-  onStop: () => void;
+  onSteer: (text: string) => unknown;
+  onStop: () => unknown;
 }
 
 export interface ComposerHandle {
@@ -112,6 +113,10 @@ export function verbOf(tool: string): string {
 
 export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, ref) {
   const [text, setText] = useState("");
+  // Sending, starting or stopping (the button spins); answering a question
+  // (its buttons wait). By click or by key, nothing goes twice.
+  const [sending, setSending] = useState(false);
+  const [answering, setAnswering] = useState<"deny" | "allow" | "session" | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   useImperativeHandle(ref, () => ({ focus: () => input.current?.focus() }));
 
@@ -143,14 +148,26 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
 
   const submit = (flip = false) => {
     const act = actionFor(flip);
-    if (disabled) return;
-    if (act === "stop") return p.onStop();
-    if (act === "start") return p.onStart();
+    if (disabled || sending) return;
     const message = withComments(text, p.comments);
-    if (act === "reply") p.onAnswer(ask!, false, message);
-    else if (act === "steer") p.onSteer(message);
-    else p.onSend(message);
-    setText("");
+    const result =
+      act === "stop"
+        ? p.onStop()
+        : act === "start"
+          ? p.onStart()
+          : act === "reply"
+            ? p.onAnswer(ask!, false, message)
+            : act === "steer"
+              ? p.onSteer(message)
+              : p.onSend(message);
+    if (act !== "stop" && act !== "start") setText("");
+    setSending(true);
+    Promise.resolve(result).finally(() => setSending(false));
+  };
+  const answer = (how: NonNullable<typeof answering>, run: () => unknown) => {
+    if (answering) return;
+    setAnswering(how);
+    Promise.resolve(run()).finally(() => setAnswering(null));
   };
 
   const placeholder = ask
@@ -193,21 +210,33 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
                 </div>
                 {ask.detail && <code className="ask-detail">{ask.detail}</code>}
               </div>
-              <button className="ghost small" onClick={() => p.onAnswer(ask, false)}>
+              <Button
+                className="ghost small"
+                busy={answering === "deny"}
+                disabled={answering != null}
+                onClick={() => answer("deny", () => p.onAnswer(ask, false))}
+              >
                 <X size={11} /> Deny
-              </button>
+              </Button>
               {ask.session && (
-                <button
+                <Button
                   className="ghost small"
-                  onClick={() => p.onAllowForSession(ask)}
+                  busy={answering === "session"}
+                  disabled={answering != null}
+                  onClick={() => answer("session", () => p.onAllowForSession(ask))}
                   title={`Allow it, and don't ask again this session about ${ask.session.replace(/`/g, "")}`}
                 >
                   Allow for this session
-                </button>
+                </Button>
               )}
-              <button className="primary small" onClick={() => p.onAnswer(ask, true)}>
+              <Button
+                className="primary small"
+                busy={answering === "allow"}
+                disabled={answering != null}
+                onClick={() => answer("allow", () => p.onAnswer(ask, true))}
+              >
                 <Check size={11} /> Allow
-              </button>
+              </Button>
             </div>
           )}
           {p.comments.length > 0 && (
@@ -290,10 +319,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
                   ? "↩ deny with this reply"
                   : "↩ send · ⇧↩ new line"}
             </span>
-            <button
+            <Button
               className={`send ${action}`}
               onClick={() => submit()}
               disabled={disabled}
+              busy={sending}
               title={
                 action === "stop"
                   ? "Stop the agent: it ends the turn and keeps the conversation"
@@ -319,7 +349,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
               ) : (
                 <ArrowUp size={14} />
               )}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

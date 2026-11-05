@@ -29,13 +29,13 @@ interface Props {
   onFocus: (c: LineComment) => void;
   queued: string[];
   onUnqueue: (i: number) => void;
-  onStart: () => void;
-  onSend: (text: string) => void;
-  onStop: () => void;
-  onLand: (merge: boolean, commitUncommitted: boolean) => void;
-  onDiscard: () => void;
+  onStart: () => unknown;
+  onSend: (text: string) => unknown;
+  onStop: () => unknown;
+  onLand: (merge: boolean, commitUncommitted: boolean) => unknown;
+  onDiscard: () => unknown;
   onAskRebase: () => void;
-  onOpenFolder: () => void;
+  onOpenFolder: () => unknown;
   onCopy: (text: string, what: string) => void;
   onShowBranch: () => void;
   /** What Changes shows: everything, or run N's changes. */
@@ -44,14 +44,14 @@ interface Props {
   /** For one run: files left out because they came with the base. */
   fromBase: string[];
   onRunChanges: (index: number) => void;
-  onUndoRun: () => void;
-  onAnswer: (ask: Ask, allow: boolean, message?: string) => void;
+  onUndoRun: () => unknown;
+  onAnswer: (ask: Ask, allow: boolean, message?: string) => unknown;
   /** Allow it, and don't ask again about this kind of action this session. */
-  onAllowForSession: (ask: Ask) => void;
+  onAllowForSession: (ask: Ask) => unknown;
   onLiveMode: (mode: Mode) => void;
-  onSteer: (text: string) => void;
-  onRetrySetup: () => void;
-  onSkipSetup: () => void;
+  onSteer: (text: string) => unknown;
+  onRetrySetup: () => unknown;
+  onSkipSetup: () => unknown;
   github: GithubActions;
 }
 

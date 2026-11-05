@@ -184,14 +184,14 @@ export function AgentsSection() {
       setQueue((q) => ({ ...q, [id]: [...(q[id] ?? []), text] }));
       return;
     }
-    api
+    return api
       .sendToAgent(id, text, choiceOf(settings), settings.mode)
       .then(() => setTab("conversation"))
       .then(afterChange, fail);
   };
 
   const settle = (id: string, commit: string) =>
-    shell.act(() => api.settleTask(id, commit)).then(async () => {
+    shell.act(() => api.settleTask(id, commit), { pending: "Cleaning up…" }).then(async () => {
       await refreshTasks();
       await refreshPulls();
     });
@@ -202,15 +202,18 @@ export function AgentsSection() {
     onShowPull: (n: number) => shell.go({ section: "pulls", number: n }),
     onPublish: (draft: boolean, commitUncommitted: boolean) =>
       shell
-        .act(() => api.publishTask(id, draft, commitUncommitted), { undo: false })
+        .act(() => api.publishTask(id, draft, commitUncommitted), {
+          undo: false,
+          pending: draft ? "Pushing and opening a draft pull request…" : "Pushing and opening a pull request…",
+        })
         .then(async () => {
           await afterChange();
           await refreshPulls();
         }),
-    onPush: () => shell.act(() => api.pushTask(id), { undo: false }).then(afterChange),
+    onPush: () => shell.act(() => api.pushTask(id), { undo: false, pending: "Pushing…" }).then(afterChange),
     onSendReview: () =>
-      api.reviewFeedback(id).then((text) => {
-        send(text);
+      api.reviewFeedback(id).then(async (text) => {
+        await send(text);
         toast(shown?.task.run?.state === "running" ? "The review is queued for when the agent is done" : `Sent the review to ${id}`);
       }, fail),
     onSettle: (commit: string) => settle(id, commit),
@@ -267,7 +270,7 @@ export function AgentsSection() {
               setSource(index);
               setTab("changes");
             }}
-            onUndoRun={() => shell.act(() => api.undoRun(shown.task.id)).then(afterChange)}
+            onUndoRun={() => shell.act(() => api.undoRun(shown.task.id), { pending: "Undoing the run…" }).then(afterChange)}
             onAnswer={(ask, allow, message) =>
               api.answerAsk(shown.task.id, ask.id, allow, message ?? "").then(afterChange, fail)
             }
@@ -285,7 +288,7 @@ export function AgentsSection() {
             }
             onSteer={(text) => {
               setComments((c) => ({ ...c, [shown.task.id]: [] }));
-              api.steer(shown.task.id, text).then(afterChange, fail);
+              return api.steer(shown.task.id, text).then(afterChange, fail);
             }}
             onLiveMode={(mode) =>
               api.setMode(shown.task.id, mode).then(() => toast(`The agent is now in ${mode === "acceptEdits" ? "auto-accept edits" : mode} mode`), fail)
@@ -319,10 +322,10 @@ export function AgentsSection() {
             onSend={send}
             onStop={() => api.stopAgent(shown.task.id).then(afterChange, fail)}
             onLand={(merge, commitUncommitted) =>
-              shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted)).then(afterChange)
+              shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted), { pending: `Landing on ${shown.task.base}…` }).then(afterChange)
             }
             onDiscard={() =>
-              shell.act(() => api.discardTask(shown.task.id)).then((ok) => {
+              shell.act(() => api.discardTask(shown.task.id), { pending: "Discarding…" }).then((ok) => {
                 if (ok) setView({ kind: "new" });
                 return refreshTasks();
               })
