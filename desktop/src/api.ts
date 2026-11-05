@@ -31,14 +31,14 @@ import type {
 } from "./types";
 import type { Place } from "./shared/DiffView";
 
-type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+type Invoke = <T>(cmd: string, args?: Record<string, unknown> | Uint8Array) => Promise<T>;
 
 /** True inside the Tauri window; false in a plain browser (`pnpm dev`). */
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 let invokeImpl: Invoke | null = null;
 
-async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+async function call<T>(cmd: string, args?: Record<string, unknown> | Uint8Array): Promise<T> {
   if (!invokeImpl) {
     invokeImpl = inTauri
       ? (await import("@tauri-apps/api/core")).invoke
@@ -204,6 +204,9 @@ export const api = {
     call<void>("answer_ask", { id, requestId, allow, message, always }),
   /** Start the next agent without the folder's setup script (#23). */
   skipSetup: (id: string) => call<void>("skip_setup", { id }),
+  /** Keep an image for a prompt; returns the path the prompt names it by.
+   * The bytes go as the request's raw body. */
+  attachImage: (data: Uint8Array) => call<string>("attach_image", data),
   /** A message into the turn the agent is on (#22). */
   steer: (id: string, text: string) => call<void>("steer", { id, text }),
   /** Change the running agent's permission mode. */

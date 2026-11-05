@@ -423,8 +423,15 @@ const SLOW: Record<string, number> = {
   run_detail: 700,
 };
 
-export async function invoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
+let attached = 0;
+
+export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uint8Array = {}): Promise<T> {
   await new Promise((r) => setTimeout(r, SLOW[cmd] ?? 60));
+  if (body instanceof Uint8Array) {
+    if (cmd !== "attach_image") throw new Error(`${cmd} takes arguments, not bytes`);
+    return `${repo.root}/.git/spor/attachments/mock-${++attached}.png` as T;
+  }
+  const args = body;
   const id = args.id as string;
   const recorded = await fromFixtures(cmd, args);
   if (recorded !== undefined) return recorded as T;

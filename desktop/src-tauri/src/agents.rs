@@ -484,6 +484,20 @@ pub(crate) fn stop_agent(app: State<App>, id: String) -> Result<(), String> {
     Runs::of(&tasks, &task).finish(std::time::Duration::from_secs(4))
 }
 
+/// Keep an image pasted or dropped into a prompt, and say where it is: the
+/// prompt names it by that path. The image is the request's raw body.
+#[tauri::command(async)]
+pub(crate) fn attach_image(
+    app: State<App>,
+    request: tauri::ipc::Request,
+) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("No image was sent".into());
+    };
+    let path = app.tasks()?.attach(data)?;
+    Ok(path.display().to_string())
+}
+
 /// A message into the turn the agent is on (steering, #22).
 #[tauri::command(async)]
 pub(crate) fn steer(app: State<App>, id: String, text: String) -> Result<(), String> {

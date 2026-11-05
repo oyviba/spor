@@ -209,6 +209,8 @@ pub struct Runs {
     base: String,
     /// The main checkout, for setup scripts that copy from it.
     repo_root: PathBuf,
+    /// Images attached to prompts, which Claude may read.
+    attachments: PathBuf,
 }
 
 impl Runs {
@@ -219,6 +221,7 @@ impl Runs {
             worktree: task.worktree.clone(),
             base: task.base.clone(),
             repo_root: tasks.root().to_path_buf(),
+            attachments: tasks.attachments_dir(),
         }
     }
 
@@ -268,7 +271,9 @@ impl Runs {
         }
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         let index = self.count();
-        let (program, args) = command_for(kind, prompt, resume, permissions);
+        // Made up front, so an image attached while it works can be read.
+        let _ = std::fs::create_dir_all(&self.attachments);
+        let (program, args) = command_for(kind, prompt, resume, permissions, &self.attachments);
         let log = self.file(index, "log");
         let exit = self.file(index, "exit");
         // What the folder was like before, for this run's diff and undo.
@@ -778,6 +783,7 @@ fn command_for(
     prompt: &str,
     resume: Option<&str>,
     permissions: Permissions,
+    attachments: &Path,
 ) -> (String, Vec<String>) {
     match kind {
         AgentKind::Claude => {
@@ -795,6 +801,8 @@ fn command_for(
                 // stays as it was: undoing this run resumes from there.
                 args.extend(["--resume".into(), session.into(), "--fork-session".into()]);
             }
+            // Images attached to prompts are named by their path there.
+            args.extend(["--add-dir".into(), attachments.display().to_string()]);
             // Publishing is always a person's call, from spor.
             args.extend(["--disallowedTools".into(), "Bash(git push:*)".into()]);
             args.extend(["-p".into(), prompt.into()]);
@@ -1348,12 +1356,16 @@ not json at all
             "Fix it",
             Some("s-1"),
             Permissions::commands(false),
+            Path::new("/r/.git/spor/attachments"),
         );
         assert_eq!(program, "claude");
         assert!(args
             .windows(2)
             .any(|w| w == ["--permission-mode", "acceptEdits"]));
         assert!(args.windows(2).any(|w| w == ["--resume", "s-1"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--add-dir", "/r/.git/spor/attachments"]));
         assert!(args
             .windows(2)
             .any(|w| w == ["--disallowedTools", "Bash(git push:*)"]));
@@ -1367,6 +1379,7 @@ not json at all
             "Don't",
             None,
             Permissions::commands(true),
+            Path::new("/r/.git/spor/attachments"),
         );
         assert_eq!(program, "sh");
         assert_eq!(args, ["-c", r"codex exec 'Don'\''t'"]);

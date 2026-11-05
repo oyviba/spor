@@ -61,6 +61,9 @@ details card:
   work at once without touching your checkout. A task is a prompt: spor
   creates `agent/<name>` from a base, checks it out in `<repo>.spor/<name>`
   beside the repository, and starts Claude Code (or any command) there.
+  Paste, drop or attach images (screenshots, mockups) into any prompt —
+  a new task, an issue's, or a follow-up; they're kept in
+  `.git/spor/attachments/` and the agent is told where to find them.
   Watch the conversation, answer its questions, steer it while it works,
   review its changes with line comments, send feedback, undo a run, then
   **Land** it (one squashed commit, or a merge commit), open a pull request

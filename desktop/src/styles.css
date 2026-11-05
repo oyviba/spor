@@ -877,6 +877,53 @@ button.busy::after {
   margin-left: auto;
   flex-shrink: 0;
 }
+/* An image being dragged over the prompt. */
+.composer.dropping {
+  border-color: var(--accent);
+  border-style: dashed;
+}
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.attachment {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background: var(--hover);
+}
+.attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.attachment.saving img {
+  opacity: 0.45;
+}
+.attachment-x {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  border: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklab, var(--fg) 70%, transparent);
+  color: var(--bg);
+  opacity: 0;
+}
+.attachment:hover .attachment-x,
+.attachment-x:focus-visible {
+  opacity: 1;
+}
 .composer-footer {
   display: flex;
   align-items: center;

@@ -1,6 +1,8 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import type { AgentChoice, Ask, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
 import { useStored } from "../../shared/hooks";
+import { useShell } from "../../shared/app";
+import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
 import { Button } from "../../shared/Button";
 import { AgentIcon, Alert, ArrowUp, Check, Clock, CornerDownRight, MessageSquare, Square, X } from "../../shared/Icons";
 
@@ -119,9 +121,10 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
   const [answering, setAnswering] = useState<"deny" | "allow" | "session" | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   useImperativeHandle(ref, () => ({ focus: () => input.current?.focus() }));
+  const attachments = useAttachments(useShell().fail);
 
   const running = p.latest?.state === "running";
-  const hasContent = text.trim().length > 0 || p.comments.length > 0;
+  const hasContent = text.trim().length > 0 || p.comments.length > 0 || attachments.images.length > 0;
   const neverRan = p.latest == null;
   const ask = p.asks[0];
   // While it works, a message waits for the next turn (queue) or goes into
@@ -144,12 +147,15 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
           ? "start"
           : "send";
   const action = actionFor(false);
-  const disabled = (action === "send" && !hasContent) || (action === "start" && p.settings.agent === "none");
+  const disabled =
+    (action === "send" && !hasContent) ||
+    (action === "start" && p.settings.agent === "none") ||
+    (action !== "stop" && attachments.saving);
 
   const submit = (flip = false) => {
     const act = actionFor(flip);
     if (disabled || sending) return;
-    const message = withComments(text, p.comments);
+    const message = withImages(withComments(text, p.comments), attachments.images);
     const result =
       act === "stop"
         ? p.onStop()
@@ -160,7 +166,10 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
             : act === "steer"
               ? p.onSteer(message)
               : p.onSend(message);
-    if (act !== "stop" && act !== "start") setText("");
+    if (act !== "stop" && act !== "start") {
+      setText("");
+      attachments.clear();
+    }
     setSending(true);
     Promise.resolve(result).finally(() => setSending(false));
   };
@@ -199,7 +208,10 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
             ))}
           </div>
         )}
-        <div className={`composer${ask ? " asking" : ""}`}>
+        <div
+          className={`composer${ask ? " asking" : ""}${attachments.dragging ? " dropping" : ""}`}
+          {...attachments.handlers}
+        >
           {ask && (
             <div className="ask-card" role="alert">
               <Alert size={14} />
@@ -257,6 +269,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
               ))}
             </div>
           )}
+          <AttachmentStrip images={attachments.images} onRemove={attachments.remove} />
           <textarea
             ref={input}
             value={text}
@@ -312,6 +325,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
               </button>
             )}
             <span className="flex-1" />
+            {(p.latest?.agent ?? p.settings.agent) !== "none" && <AttachButton onFiles={attachments.add} />}
             <span className="hint-keys">
               {action === "queue" || action === "steer"
                 ? `↩ ${action}${other !== action ? ` · ⌘↩ ${other}` : ""}`
