@@ -646,7 +646,13 @@ pub(crate) fn publish_task(
     }
     let remote = remote(&app)?;
     let (number, _) = tasks
-        .publish(&task, &remote, draft, commit_uncommitted)
+        .publish(
+            &task,
+            &remote,
+            draft,
+            commit_uncommitted,
+            agent::available("claude"),
+        )
         .map_err(|e| first_line(&e))?;
     Ok(format!(
         "Opened {}pull request #{number}",
