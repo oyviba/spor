@@ -45,10 +45,13 @@ details card:
   commits that touched a file. The sidebar has local, agent and remote
   branches, tags and linked worktrees. Right-click a branch to check it out,
   merge it, rebase onto it, rename or delete it, or delete it from the
-  remote. Right-click a commit to branch or tag it, check it out detached,
-  cherry-pick, revert, rebase onto it, reset to it (soft, mixed, or hard
-  after asking), or **Rewrite after here** — an interactive rebase on screen:
-  reorder, reword, squash, fix up or drop, then Rewrite history
+  remote, or drag it onto another branch to merge it there or open a pull
+  request between the two. Right-click a commit to branch or tag it, check
+  it out detached, cherry-pick, revert, rebase onto it, reset to it (soft,
+  mixed, or hard after asking), or **Rewrite after here** — an interactive
+  rebase on screen: reorder, reword, squash, fix up or drop, then Rewrite
+  history. **Blame** any file, at a commit or in the working tree. The ⚙
+  picks the graph's columns, row height and lane width
 - **Issues**, **Pull requests**, **Actions** — through `gh`: an issue and its
   comments (and *Start agent task* from it); a PR's conversation, files and
   checks, with comments, line comments, approve, merge, check out; a run's
@@ -72,8 +75,9 @@ Across the app:
   toast's Undo. Pushing makes commits final: their undos go. Only what git
   can't take back asks first (a hard reset, deleting on the remote)
 - **One conflict banner.** A merge, rebase, cherry-pick or revert that stops
-  shows on every section, with *Resolve in Changes* (take ours, take theirs,
-  or edit and mark resolved), *Continue*, *Skip commit* and *Abort*
+  shows on every section, with *Resolve in Changes* — pick a side (or both)
+  for each conflict in a file, take one side for all of it, or edit it and
+  mark it resolved — *Continue*, *Skip commit* and *Abort*
 - **Stash and switch.** A switch that uncommitted changes would block says
   so and offers to stash them
 - **Knowing when to pull.** The repository is fetched quietly every five
@@ -81,9 +85,16 @@ Across the app:
   Pull button
 - **Credentials.** The app has no terminal, so a passphrase, password or
   new-host question from git or ssh opens a dialog (an askpass bridge)
-- **⌘K** — a palette for every command, section, branch and recent
-  repository. The repository name at the top of the sidebar switches
-  between recent repositories (the old native app's list is imported once)
+- **Workspaces** — named, colored groups of repositories on the rail, like
+  Slack's (⌘⌥1–9), each reopening the repository last open in it. The
+  repository name at the top of the sidebar lists the workspace's
+  repositories with their branch and what there is to pull. The old native
+  app's workspaces are imported on the first run
+- **⌘K** — a palette for every command, section, branch and repository
+- **Settings** (⌘,) — System, Light or Dark, themes (Spor, Nord, Dracula,
+  Midnight; Solarized, Paper) and a live theme editor; unified or
+  side-by-side diffs; the graph's options; and your own keyboard shortcuts
+  (⌘/ lists them)
 
 ## Design notes
 
