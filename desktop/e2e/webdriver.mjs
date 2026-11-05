@@ -19,6 +19,16 @@ async function wd(method, path, body) {
   return json.value;
 }
 
+/** Put before every script run in the page: `$` and `$$`, querySelector
+ * and querySelectorAll for what's on screen. Sections opened before stay
+ * in the page, hidden (React's Activity sets `display: none` on them), so
+ * a plain query can find a hidden section's copy of an element. */
+const PRELUDE = `
+  const shown = (e) => { const top = e.closest(".section-body > *"); return !top || top.style.display !== "none"; };
+  const $$ = (css) => [...document.querySelectorAll(css)].filter(shown);
+  const $ = (css) => $$(css)[0] ?? null;
+`;
+
 export function check(ok, what) {
   if (!ok) throw new Error(`FAILED: ${what}`);
   console.log(`  ok  ${what}`);
@@ -33,7 +43,12 @@ export async function open(app, out) {
     capabilities: { alwaysMatch: { "tauri:options": { application: app } } },
   });
   const S = `/session/${session.sessionId}`;
-  const find = async (css) => (await wd("POST", `${S}/element`, { using: "css selector", value: css }))[ELEMENT];
+  const js = (script, ...args) => wd("POST", `${S}/execute/sync`, { script: PRELUDE + script, args });
+  const find = async (css) => {
+    const el = await js(`return $(arguments[0])`, css);
+    if (!el) throw new Error(`No ${css}`);
+    return el[ELEMENT];
+  };
   const waitFor = async (css, ms = 20000) => {
     const until = Date.now() + ms;
     for (;;) {
@@ -45,7 +60,6 @@ export async function open(app, out) {
       }
     }
   };
-  const js = (script, ...args) => wd("POST", `${S}/execute/sync`, { script, args });
   const self = {
     find,
     waitFor,
@@ -64,17 +78,17 @@ export async function open(app, out) {
     /** Click the first element matching `css` whose text includes `text`. */
     clickText: (css, text) =>
       js(
-        `const el = [...document.querySelectorAll(arguments[0])].find(e => e.textContent.includes(arguments[1]));
+        `const el = [...$$(arguments[0])].find(e => e.textContent.includes(arguments[1]));
          if (!el) throw new Error("No " + arguments[0] + " with " + arguments[1]); el.click();`,
         css,
         text,
       ),
-    text: (css) => js(`return document.querySelector(arguments[0])?.innerText ?? ""`, css),
-    count: (css) => js(`return document.querySelectorAll(arguments[0]).length`, css),
+    text: (css) => js(`return $(arguments[0])?.innerText ?? ""`, css),
+    count: (css) => js(`return $$(arguments[0]).length`, css),
     // Set a React-controlled field's value and fire its input event.
     fill: (css, text) =>
       js(
-        `const el = document.querySelector(arguments[0]);
+        `const el = $(arguments[0]);
          const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
          Object.getOwnPropertyDescriptor(proto, "value").set.call(el, arguments[1]);
          el.dispatchEvent(new Event("input", { bubbles: true })); el.focus();`,
@@ -83,7 +97,7 @@ export async function open(app, out) {
       ),
     key: (css, key, mods = {}) =>
       js(
-        `document.querySelector(arguments[0]).dispatchEvent(new KeyboardEvent("keydown", Object.assign({ key: arguments[1], bubbles: true }, arguments[2])));`,
+        `$(arguments[0]).dispatchEvent(new KeyboardEvent("keydown", Object.assign({ key: arguments[1], bubbles: true }, arguments[2])));`,
         css,
         key,
         mods,
