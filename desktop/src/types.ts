@@ -374,3 +374,13 @@ export interface BlameRow {
 export type ConflictPart =
   | { kind: "text"; text: string }
   | { kind: "conflict"; ours: string; ours_label: string; theirs: string; theirs_label: string; base: string | null };
+
+/** A repository in the workspace's list. */
+export interface RepoHead {
+  path: string;
+  exists: boolean;
+  branch: string | null;
+  ahead: number;
+  behind: number;
+  changes: number;
+}

@@ -11,7 +11,27 @@ import { AppearancePage } from "./shared/ThemeEditor";
 import { useApplyTheme } from "./shared/theme";
 import { display, effective, isMac, lookup, shortcutOf } from "./shared/keys";
 import { getSettings, setSettings, useSettings } from "./shared/settings";
-import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuSpec } from "./shared/Overlay";
+import {
+  WORKSPACE_COLORS,
+  activeWorkspace,
+  create as createWorkspace,
+  firstRun,
+  fromList,
+  getWorkspaces,
+  initials,
+  landing,
+  moveRepo,
+  noteOpened,
+  recolor,
+  remove as removeWorkspace,
+  removeRepo,
+  rename as renameWorkspace,
+  replaceAll,
+  switchTo,
+  useWorkspaces,
+  type Workspace,
+} from "./shared/workspaces";
+import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuItem, type MenuSpec } from "./shared/Overlay";
 import { AgentsSection } from "./sections/agents/AgentsSection";
 import { HistorySection } from "./sections/history/HistorySection";
 import { ChangesSection } from "./sections/changes/ChangesSection";
@@ -79,12 +99,12 @@ function repoCommands(shell: Shell): AppCommand[] {
 
 /** How often the open repository is fetched in the background. */
 const AUTO_FETCH_MS = 5 * 60 * 1000;
-const RECENT_MAX = 12;
 
 export function App() {
   const [repo, setRepoRaw] = useState<RepoInfo | null | undefined>(undefined);
-  const [recent, setRecent] = useStored<string[]>("recent", []);
-  const [imported, setImported] = useStored("recent.imported", false);
+  const workspaces = useWorkspaces();
+  const ws = activeWorkspace(workspaces);
+  const recent = ws.repos;
   const [menu, setMenu] = useState<MenuSpec | null>(null);
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
   const [credential, setCredential] = useState<Credential | null>(null);
@@ -97,7 +117,7 @@ export function App() {
   const setRepo = useCallback(
     (r: RepoInfo | null) => {
       setRepoRaw(r);
-      if (r) setRecent((old) => [r.root, ...old.filter((x) => x !== r.root)].slice(0, RECENT_MAX));
+      if (r) noteOpened(r.root);
     },
     [], // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -125,13 +145,19 @@ export function App() {
 
   useEffect(() => {
     api.currentRepo().then(setRepo, () => setRepo(null));
-    // The old native app's repositories, once, so the list carries over.
-    if (!imported)
+    // The first run takes the old native app's workspaces, so they carry over.
+    if (firstRun)
       api
-        .legacyRepos()
-        .then((paths) => {
-          setRecent((old) => [...old, ...paths.filter((p) => !old.includes(p))].slice(0, RECENT_MAX));
-          setImported(true);
+        .legacyWorkspaces()
+        .then((legacy) => {
+          if (!legacy) return;
+          const open = getWorkspaces().list.flatMap((w) => w.repos);
+          const next = fromList(legacy.list, legacy.active);
+          // Keep a repository opened before the import finished.
+          for (const path of open) if (!next.list.some((w) => w.repos.includes(path))) next.list[0].repos.push(path);
+          replaceAll(next);
+          const current = open[0];
+          if (current) noteOpened(current);
         })
         .catch(() => undefined);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -291,7 +317,10 @@ export function App() {
             target,
             openRepo,
             recent,
-            forgetRepo: (path) => setRecent((old) => old.filter((x) => x !== path)),
+            forgetRepo: removeRepo,
+            workspaceName: ws.name,
+            otherWorkspaces: workspaces.list.filter((w) => w.id !== ws.id).map((w) => ({ id: w.id, name: w.name })),
+            moveRepo,
             menu: (e, items) => {
               e.preventDefault?.();
               setMenu({ x: e.clientX, y: e.clientY, items });
@@ -300,8 +329,70 @@ export function App() {
             confirm: (spec) => new Promise((resolve) => setDialog({ kind: "confirm", ...spec, resolve })),
           }
         : null,
-    [repo, state, refresh, toast, fail, undo, target, recent], // eslint-disable-line react-hooks/exhaustive-deps
+    [repo, state, refresh, toast, fail, undo, target, workspaces], // eslint-disable-line react-hooks/exhaustive-deps
   );
+
+  /** Switch workspace, opening the repository last open there. */
+  const goToWorkspace = (id: string) => {
+    const target = workspaces.list.find((w) => w.id === id);
+    if (!target) return;
+    switchTo(id);
+    const path = landing(target);
+    if (path && path !== repo?.root) openRepo(path);
+    else if (!path) {
+      // An empty workspace: the page to open one.
+      setRepoRaw(null);
+      setState(null);
+    }
+  };
+  const workspaceMenu = (w: Workspace): MenuItem[] => [
+    {
+      label: "Rename…",
+      run: async () => {
+        const r = await new Promise<{ value: string } | null>((resolve) =>
+          setDialog({ kind: "prompt", title: `Rename ${w.name}`, initial: w.name, action: "Rename", resolve }),
+        );
+        if (r) renameWorkspace(w.id, r.value);
+      },
+    },
+    ...WORKSPACE_COLORS.map((c, i) => ({
+      label: i === w.color ? `Color ${i + 1} ✓` : `Color ${i + 1}`,
+      swatch: c,
+      run: () => recolor(w.id, i),
+      separator: i === 0,
+    })),
+    {
+      label: `Delete ${w.name}`,
+      danger: true,
+      separator: true,
+      disabled: workspaces.list.length === 1,
+      run: async () => {
+        const ok = await new Promise<boolean>((resolve) =>
+          setDialog({
+            kind: "confirm",
+            title: `Delete the workspace ${w.name}?`,
+            detail: w.repos.length
+              ? `Its ${w.repos.length} ${w.repos.length === 1 ? "repository moves" : "repositories move"} to ${workspaces.list.find((x) => x.id !== w.id)!.name}. Nothing on disk changes.`
+              : "Nothing on disk changes.",
+            action: "Delete workspace",
+            danger: true,
+            resolve,
+          }),
+        );
+        if (ok) removeWorkspace(w.id);
+      },
+    },
+  ];
+  const newWorkspace = async () => {
+    const r = await new Promise<{ value: string } | null>((resolve) =>
+      setDialog({ kind: "prompt", title: "New workspace", placeholder: "Work, Side projects…", action: "Create", resolve }),
+    );
+    if (r) {
+      createWorkspace(r.value);
+      setRepoRaw(null);
+      setState(null);
+    }
+  };
 
   const openPalette = () => {
     if (!repo) return;
@@ -334,6 +425,15 @@ export function App() {
       whileTyping: true,
       run: () => setSettings({ diffLayout: getSettings().diffLayout === "split" ? "unified" : "split" }),
     },
+    ...workspaces.list.slice(0, 9).map((w, i) => ({
+      id: `workspace:${i + 1}`,
+      label: `Workspace ${i + 1}: ${w.name}`,
+      group: "Workspaces",
+      keys: `Mod+Alt+${i + 1}`,
+      whileTyping: true,
+      run: () => goToWorkspace(w.id),
+    })),
+    { id: "workspace:new", label: "New workspace…", group: "Workspaces", whileTyping: true, run: () => newWorkspace() },
     ...(["system", "light", "dark"] as const).map((a) => ({
       id: `appearance:${a}`,
       label: a === "system" ? "Appearance: follow the system" : `Appearance: ${a}`,
@@ -377,9 +477,11 @@ export function App() {
           hint: "branch",
           run: () => shell.switchBranch((stash) => api.checkout(b.name, stash)),
         })),
-      ...recent
-        .filter((r) => r !== repo?.root)
-        .map((r) => ({ id: `repo:${r}`, label: `Open ${r.split("/").pop()}`, hint: r, run: () => openRepo(r) })),
+      ...workspaces.list.flatMap((w) =>
+        w.repos
+          .filter((r) => r !== repo?.root)
+          .map((r) => ({ id: `repo:${r}`, label: `Open ${r.split("/").pop()}`, hint: `${w.name} · ${r}`, run: () => openRepo(r) })),
+      ),
       ...branches
         .filter((b) => b.remote)
         .map((b) => ({
@@ -438,21 +540,67 @@ export function App() {
     </>
   );
 
+  const workspaceRail = (
+    <div className="rail-workspaces" aria-label="Workspaces">
+      {workspaces.list.map((w, i) => (
+        <button
+          key={w.id}
+          className={`workspace-badge${w.id === ws.id ? " active" : ""}`}
+          style={{ "--ws": WORKSPACE_COLORS[w.color] } as React.CSSProperties}
+          onClick={() => goToWorkspace(w.id)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setMenu({ x: e.clientX, y: e.clientY, items: workspaceMenu(w) });
+          }}
+          title={`${w.name}${keyLabel(`workspace:${i + 1}`) ? ` (${keyLabel(`workspace:${i + 1}`)})` : ""} — right-click to rename, recolor or delete`}
+          aria-label={`Workspace ${w.name}`}
+          aria-current={w.id === ws.id ? "true" : undefined}
+        >
+          {initials(w.name)}
+        </button>
+      ))}
+      <button className="workspace-badge add" onClick={newWorkspace} title="New workspace" aria-label="New workspace">
+        +
+      </button>
+      <span className="rail-divider" />
+    </div>
+  );
+  const settingsButton = (
+    <button
+      className="rail-item"
+      onClick={() => setSettingsPage("appearance")}
+      title={keyLabel("settings") ? `Settings (${keyLabel("settings")})` : "Settings"}
+      aria-label="Settings"
+    >
+      <Gear size={17} />
+    </button>
+  );
+
   if (repo === undefined) return <div className="boot" />;
   if (repo === null || !shell)
     return (
-      <OpenRepo
-        recent={recent}
-        onOpen={(path) => api.openRepo(path).then(setRepo, fail)}
-        onForget={(path) => setRecent((old) => old.filter((x) => x !== path))}
-        toasts={toasts}
-      />
+      <div className="app">
+        <nav className="rail" aria-label="Workspaces">
+          {workspaceRail}
+          <span className="flex-1" />
+          {settingsButton}
+        </nav>
+        <OpenRepo
+          workspace={ws.name}
+          recent={recent}
+          onOpen={(path) => api.openRepo(path).then(setRepo, fail)}
+          onForget={removeRepo}
+          toasts={toasts}
+        />
+        {overlays}
+      </div>
     );
 
   return (
     <ShellContext.Provider value={shell}>
       <div className="app">
         <nav className="rail" aria-label="Sections">
+          {workspaceRail}
           {SECTIONS.map((s) => {
             const count =
               s.id === "changes"
@@ -476,9 +624,7 @@ export function App() {
             );
           })}
           <span className="flex-1" />
-          <button className="rail-item" onClick={() => setSettingsPage("appearance")} title={keyLabel("settings") ? `Settings (${keyLabel("settings")})` : "Settings"} aria-label="Settings">
-            <Gear size={17} />
-          </button>
+          {settingsButton}
         </nav>
         <div className="section">
           {state?.operation && <OperationBanner state={state} />}
@@ -580,11 +726,13 @@ function Toasts({ toasts, onUndo, onClose }: { toasts: Toast[]; onUndo: () => vo
 }
 
 function OpenRepo({
+  workspace,
   recent,
   onOpen,
   onForget,
   toasts,
 }: {
+  workspace: string;
   recent: string[];
   onOpen: (path: string) => void;
   onForget: (path: string) => void;
@@ -599,6 +747,7 @@ function OpenRepo({
         }}
       >
         <h1>Open a repository</h1>
+        <p className="muted small-text">It joins the workspace {workspace}.</p>
         <p className="lede">
           <Branch size={12} /> Spor shows its history, changes, issues, pull requests, Actions and agent tasks.
         </p>
@@ -608,14 +757,14 @@ function OpenRepo({
         </button>
         {recent.length > 0 && (
           <div className="recent-repos">
-            <div className="list-label">Recent</div>
+            <div className="list-label">In {workspace}</div>
             {recent.map((r) => (
               <div key={r} className="recent-row">
                 <button type="button" className="recent-open" onClick={() => onOpen(r)} title={r}>
                   <span className="repo-name">{r.split("/").pop()}</span>
                   <span className="muted small-text truncate">{r}</span>
                 </button>
-                <button type="button" className="icon-button tiny" title="Remove from the list" onClick={() => onForget(r)}>
+                <button type="button" className="icon-button tiny" title={`Remove from ${workspace}`} onClick={() => onForget(r)}>
                   <X size={11} />
                 </button>
               </div>

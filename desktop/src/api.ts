@@ -17,6 +17,7 @@ import type {
   Pull,
   PullDetail,
   RepoInfo,
+  RepoHead,
   RepoState,
   Run,
   RunDetail,
@@ -57,8 +58,11 @@ export const api = {
   askpassPending: () => call<Credential | null>("askpass_pending"),
   /** `null` cancels. */
   askpassAnswer: (id: number, answer: string | null) => call<void>("askpass_answer", { id, answer }),
-  /** Repositories the old native (GPUI) app had in its workspaces, to carry over. */
-  legacyRepos: () => call<string[]>("legacy_repos"),
+  /** The old native (GPUI) app's workspaces, to carry over; null when it had none. */
+  legacyWorkspaces: () =>
+    call<{ list: { name: string; color: number; repos: string[]; last: string | null }[]; active: number } | null>("legacy_workspaces"),
+  /** Branch, ahead/behind and changed files of each repository, for the workspace's list. */
+  repoHeads: (paths: string[]) => call<RepoHead[]>("repo_heads", { paths }),
 
   // History
   graph: (limit: number) => call<Graph>("graph", { limit }),

@@ -726,8 +726,10 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
     case "askpass_answer":
     case "auto_fetch":
       return null;
-    case "legacy_repos":
-      return [];
+    case "legacy_workspaces":
+      return null;
+    case "repo_heads":
+      return (args.paths as string[]).map((path) => ({ path, exists: true, branch: "main", ahead: 0, behind: path.endsWith("postplan") ? 0 : 2, changes: 1 }));
     case "tags":
       return f.tags ?? [];
     case "worktrees":
