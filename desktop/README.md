@@ -118,14 +118,14 @@ dependency-free library.
 
 ## Not here yet
 
-Left behind with the old native (GPUI) and terminal apps: the theme editor
-and a light/dark switch (the app follows the system), the keymap editor,
-named and colored workspaces (recent repositories instead), side-by-side
-diffs, the graph's column options, dragging a branch onto another to merge,
-and picking sides per conflict within a file (take ours or theirs for the
-whole file, or edit it and mark it resolved).
+Left behind with the old native (GPUI) and terminal apps, each with its
+own issue: themes and a theme editor (#54), changing keyboard shortcuts
+(#55), named workspaces (#56; recent repositories meanwhile), blame (#57),
+the graph's column options (#58), side-by-side diffs (#59), dragging a
+branch onto another to merge it (#60), resolving conflicts one region at a
+time (#61), and a signed, notarized Mac app (#62).
 
 Polling, not events: the window polls the repository's state every 2 s
 (cheap: refs and the index's mtime) and each section reloads when that
-changes. A file watcher would be better. The rules for starting an agent
-live in `src-tauri/src/agents.rs`; they belong in the core.
+changes. A file watcher would be better (#38). The rules for starting an
+agent live in `src-tauri/src/agents.rs`; they belong in the core (#39).
