@@ -7,6 +7,8 @@ import type {
   Credential,
   FileEntry,
   Graph,
+  InboxGithub,
+  InboxTask,
   Issue,
   IssueDetail,
   LogLine,
@@ -93,6 +95,10 @@ export const api = {
     call<{ list: { name: string; color: number; repos: string[]; last: string | null }[]; active: number } | null>("legacy_workspaces"),
   /** Branch, ahead/behind and changed files of each repository, for the workspace's list. */
   repoHeads: (paths: string[]) => call<RepoHead[]>("repo_heads", { paths }),
+  /** The open tasks of every repository in `roots` (no network). */
+  inboxTasks: (roots: string[]) => call<InboxTask[]>("inbox_tasks", { roots }),
+  /** Review requests and failing runs on your branches, across `roots`. */
+  inboxGithub: (roots: string[]) => call<InboxGithub>("inbox_github", { roots }),
 
   // History
   graph: (limit: number) => call<Graph>("graph", { limit }),

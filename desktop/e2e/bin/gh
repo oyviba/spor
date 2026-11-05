@@ -164,6 +164,16 @@ def main():
         save_state(state)
     elif cmd in (["pr", "ready"], ["pr", "checkout"]):
         pass
+    elif cmd == ["search", "prs"]:
+        items = [
+            p
+            for p in pulls(fixtures, state)
+            if p["state"] == "OPEN" and fixtures["me"] in p.get("reviewRequests", [])
+        ]
+        for p in items:
+            owner, name = p["url"].split("/")[3:5]
+            p["repository"] = {"name": name, "nameWithOwner": f"{owner}/{name}"}
+        out(items, opts)
     elif cmd == ["run", "list"]:
         items = runs(fixtures, state)
         if "branch" in opts:

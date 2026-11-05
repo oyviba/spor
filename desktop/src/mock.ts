@@ -434,6 +434,19 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
         return repo;
       case "open_repo":
         return { ...repo, root: args.path as string };
+      case "inbox_tasks":
+        return tasks
+          .filter((t) => !t.summary.landed)
+          .map((t) => ({
+            repo: fixtures?.repo.root ?? repo.root,
+            id: t.summary.id,
+            title: t.summary.title,
+            asks: t.summary.asks,
+            run: t.summary.run?.state ?? null,
+            started: t.summary.run?.started ?? null,
+            ended: t.summary.run?.ended ?? null,
+            created: t.summary.created,
+          }));
       case "list_tasks":
         return [
           ...tasks.filter((t) => !t.summary.landed).sort((a, b) => b.summary.created - a.summary.created),
@@ -754,6 +767,25 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       );
     case "workflows":
       return f.workflows;
+    case "inbox_github": {
+      // Each workflow's latest run per branch, if it failed.
+      const latest = new Set<string>();
+      const runs = (f.runs as { workflow: string; branch: string; status: string }[]).filter(
+        (r) => !latest.has(`${r.workflow}\t${r.branch}`) && !!latest.add(`${r.workflow}\t${r.branch}`) && r.status === "failure",
+      );
+      return {
+        reviews: (f.pulls.review ?? []).map((p: { number: number; title: string; author: string; updated: number; url: string }) => ({
+          repo: f.repo.root,
+          number: p.number,
+          title: p.title,
+          author: p.author,
+          updated: p.updated,
+          url: p.url,
+        })),
+        runs: runs.map((r) => ({ ...r, repo: f.repo.root })),
+        errors: [],
+      };
+    }
     case "run_detail":
       return f.runDetails[args.id as number];
     case "run_action":

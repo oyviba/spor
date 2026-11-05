@@ -3,7 +3,7 @@ import { api, errorText } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary } from "./types";
 import { usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
-import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
+import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
@@ -39,6 +39,8 @@ import { ChangesSection } from "./sections/changes/ChangesSection";
 import { IssuesSection } from "./sections/issues/IssuesSection";
 import { PullsSection } from "./sections/pulls/PullsSection";
 import { ActionsSection } from "./sections/actions/ActionsSection";
+import { InboxSection, useInbox } from "./sections/inbox/InboxSection";
+import type { InboxItem } from "./sections/inbox/inbox";
 
 interface Toast {
   id: number;
@@ -50,6 +52,7 @@ interface Toast {
 }
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string }[] = [
+  { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "Mod+0" },
   { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "Mod+1" },
   { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+2" },
   { id: "issues", label: "Issues", icon: <IssueIcon size={17} />, key: "Mod+3" },
@@ -278,7 +281,10 @@ export function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useRepoChanges(reloadTasks, ["tasks", "refs"], [repo?.root], !!repo);
   const working = tasks.filter((t) => t.run?.state === "running").length;
-  const askingNow = tasks.filter((t) => t.asks > 0).length;
+
+  // What needs you in every repository of every workspace: the Inbox, and its badge.
+  const everyRepo = [...new Set(workspaces.list.flatMap((w) => w.repos))];
+  const inbox = useInbox(everyRepo, !!repo);
 
   const undo = useCallback(() => {
     track("Undoing…", api.undo)
@@ -289,14 +295,30 @@ export function App() {
       .catch(fail);
   }, [toast, fail, refresh, track]);
 
+  /** Resolves to whether it opened. */
   const openRepo = (path: string) =>
-    track(`Opening ${path.split("/").pop()}…`, () => api.openRepo(path))
-      .then((r) => {
+    track(`Opening ${path.split("/").pop()}…`, () => api.openRepo(path)).then(
+      (r) => {
         lastState.current = null;
         setRepo(r);
         setState(null);
-      })
-      .catch(fail);
+        return true;
+      },
+      (e) => {
+        fail(e);
+        return false;
+      },
+    );
+
+  /** An Inbox row: its workspace and repository (switching if need be),
+   * then its section. */
+  const openItem = async (item: InboxItem) => {
+    if (item.repo !== repo?.root && !(await openRepo(item.repo))) return;
+    const owner = workspaces.list.find((w) => w.repos.includes(item.repo));
+    if (owner && owner.id !== workspaces.active) switchTo(owner.id);
+    setSection(item.target.section);
+    setTarget((old) => ({ ...item.target, seq: old.seq + 1 }));
+  };
 
   const shell: Shell | null = useMemo(
     () =>
@@ -636,8 +658,9 @@ export function App() {
         <nav className="rail" aria-label="Sections">
           {workspaceRail}
           {SECTIONS.map((s) => {
-            const count = s.id === "changes" ? changed : s.id === "agents" ? askingNow || working : 0;
-            const tone = s.id === "agents" ? (askingNow ? " asking" : " live") : "";
+            const count =
+              s.id === "inbox" ? inbox.items.length : s.id === "changes" ? changed : s.id === "agents" ? working : 0;
+            const tone = s.id === "inbox" ? " asking" : s.id === "agents" ? " live" : "";
             return (
               <button
                 key={s.id}
@@ -658,6 +681,7 @@ export function App() {
         <div className="section">
           {state?.operation && <OperationBanner state={state} />}
           <div className="section-body">
+            {section === "inbox" && <InboxSection inbox={inbox} onOpen={openItem} />}
             {section === "agents" && <AgentsSection />}
             {section === "history" && <HistorySection />}
             {section === "changes" && <ChangesSection />}

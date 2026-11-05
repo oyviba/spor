@@ -7,6 +7,7 @@ mod agents;
 mod changes;
 mod github;
 mod history;
+mod inbox;
 mod undo;
 mod watch;
 
@@ -410,6 +411,8 @@ pub fn run() {
             askpass_answer,
             legacy_workspaces,
             repo_heads,
+            inbox::inbox_tasks,
+            inbox::inbox_github,
             agents::list_tasks,
             agents::task_detail,
             agents::task_patch,

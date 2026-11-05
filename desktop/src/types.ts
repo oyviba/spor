@@ -360,6 +360,27 @@ export interface IssueDetail {
   prompt: string;
 }
 
+/** An open task in any known repository, for the Inbox (#42). */
+export interface InboxTask {
+  /** The repository's root. */
+  repo: string;
+  id: string;
+  title: string;
+  asks: number;
+  run: "running" | "finished" | "failed" | "stopped" | null;
+  started: number | null;
+  ended: number | null;
+  created: number;
+}
+
+/** What GitHub has waiting for you, across the known repositories. */
+export interface InboxGithub {
+  reviews: { repo: string; number: number; title: string; author: string; updated: number; url: string }[];
+  runs: (Run & { repo: string })[];
+  /** What couldn't be asked, one line each. */
+  errors: string[];
+}
+
 /** One line of `git blame`. `hash` is empty for an uncommitted line. */
 export interface BlameRow {
   hash: string;
