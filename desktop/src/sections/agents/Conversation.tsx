@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { RunInfo, TaskDetail } from "../../types";
 import { duration, runs as toRuns, stoppedLabel, summarize, type Block, type RunView, type Tool } from "./transcript";
-import { useNow } from "../../shared/hooks";
+import { useChanged, useNow } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { Markdown } from "../../shared/Markdown";
 import { Alert, Check, Chevron, Square, Terminal, ToolIcon, X } from "../../shared/Icons";
@@ -31,7 +31,7 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetryS
       else next.add(key);
       return next;
     });
-  useEffect(() => setOpen(new Set()), [detail.task.id]);
+  useChanged(() => setOpen(new Set()), [detail.task.id]);
 
   // Follow new output while you're at the bottom; stay put if you scrolled up.
   const scroller = useRef<HTMLDivElement>(null);
@@ -40,7 +40,7 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetryS
     const el = scroller.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   });
-  useEffect(() => {
+  useChanged(() => {
     pinned.current = true;
   }, [detail.task.id]);
 

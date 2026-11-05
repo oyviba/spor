@@ -2,7 +2,8 @@
 // shows the current and incoming sides; pick one, both, or both the other
 // way round, then Save and mark resolved.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useChanged } from "../../shared/hooks";
 import { api, errorText } from "../../api";
 import type { ConflictPart } from "../../types";
 import { Check } from "../../shared/Icons";
@@ -25,7 +26,7 @@ export function ConflictRegions({
   const [error, setError] = useState<string | null>(null);
   const [choices, setChoices] = useState<(Choice | null)[]>([]);
 
-  useEffect(() => {
+  useChanged(() => {
     setParts(null);
     setError(null);
     api.conflictRegions(path).then(
