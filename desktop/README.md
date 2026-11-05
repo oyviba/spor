@@ -44,9 +44,9 @@ What one app makes possible:
   never asks; it just fails quietly without stored credentials.
 - **Live, without polling.** The backend watches the repository
   (`src-tauri/src/watch.rs`) and tells the window what changed: refs, the
-  index, the working tree (what `.gitignore` doesn't exclude, at most once
-  a second) or agent tasks. Each section reloads on the changes it shows,
-  and every 30 s anyway in case an event went missing.
+  index, the working tree (what `.gitignore` doesn't exclude) or agent
+  tasks, the last two at most once a second. Each section reloads on the
+  changes it shows, and every 30 s anyway in case an event went missing.
 - **⌘K palette and recent repositories.** Commands, sections, branches and
   recent repositories by typing; the repository name at the top of every
   sidebar switches between recent ones. The first launch imports the

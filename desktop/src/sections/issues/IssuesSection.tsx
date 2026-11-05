@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Issue, IssueDetail, TaskSummary } from "../../types";
 import { useShell } from "../../shared/app";
-import { usePoll, useRepoChanges, useStored } from "../../shared/hooks";
+import { usePoll, useStored } from "../../shared/hooks";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { Markdown } from "../../shared/Markdown";
 import { StatusPill, type Status } from "../../shared/StatusPill";
@@ -30,13 +30,12 @@ export function issueStatus(issue: Issue, task?: TaskSummary): Status {
  * whose pull request closes it (#47). */
 export function IssuesSection() {
   const shell = useShell();
-  const { fail } = shell;
+  const { fail, tasks } = shell;
   const [filter, setFilter] = useStored<Filter>("issues.filter", "assigned");
   const [issues, setIssues] = useState<Issue[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useStored<number | null>("issues.selected", null);
   const [detail, setDetail] = useState<IssueDetail | null>(null);
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
 
   usePoll(
     async () => {
@@ -51,7 +50,6 @@ export function IssuesSection() {
     60_000,
     [filter],
   );
-  useRepoChanges(async () => setTasks(await api.listTasks()), ["tasks", "refs"], [shell.repo.root]);
   useEffect(() => {
     if (shell.target.section === "issues" && shell.target.number) setSelected(shell.target.number);
   }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps

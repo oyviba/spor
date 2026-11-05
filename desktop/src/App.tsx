@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
-import type { BranchInfo, Credential, RepoInfo, RepoState } from "./types";
+import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary } from "./types";
 import { usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
@@ -63,11 +63,8 @@ export function App() {
   const [section, setSection] = useStored<SectionId>("section", "agents");
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "agents", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [badges, setBadges] = useState<{ changes: number; working: number; asking: number }>({
-    changes: 0,
-    working: 0,
-    asking: 0,
-  });
+  const [changed, setChanged] = useState(0);
+  const [tasks, setTasks] = useState<TaskSummary[]>([]);
   // Tasks known to be waiting, so a new question toasts once.
   const asking = useRef<Set<string> | null>(null);
 
@@ -150,33 +147,39 @@ export function App() {
       .finally(() => refresh());
   useRepoChanges(refresh, ["refs", "index"], [repo?.root], !!repo);
 
-  // Rail counts: files changed, agents working.
+  // The rail's count of files changed.
   useRepoChanges(
     async () => {
-      const [files, tasks] = await Promise.all([api.status(), api.listTasks()]);
-      const waiting = tasks.filter((t) => t.asks > 0);
-      setBadges({
-        changes: new Set(files.map((f) => f.path)).size,
-        working: tasks.filter((t) => t.run?.state === "running").length,
-        asking: waiting.length,
-      });
-      if (asking.current) {
-        for (const t of waiting)
-          if (!asking.current.has(t.id) && !viewing(t.id))
-            toast(`${t.title} is waiting for you`, "ok", false, {
-              label: "Answer",
-              run: () => {
-                setSection("agents");
-                setTarget((old) => ({ section: "agents", taskId: t.id, seq: old.seq + 1 }));
-              },
-            });
-      }
-      asking.current = new Set(waiting.map((t) => t.id));
+      const files = await api.status();
+      setChanged(new Set(files.map((f) => f.path)).size);
     },
-    ["index", "worktree", "tasks"],
+    ["index", "worktree"],
     [repo?.root],
     !!repo,
   );
+
+  // Agent tasks, loaded here once for the rail, Agents and Issues: a task's
+  // commits are refs, the rest is in `.git/spor/tasks`.
+  const reloadTasks = useCallback(async () => {
+    const list = await api.listTasks();
+    setTasks(list);
+    const waiting = list.filter((t) => t.asks > 0);
+    if (asking.current) {
+      for (const t of waiting)
+        if (!asking.current.has(t.id) && !viewing(t.id))
+          toast(`${t.title} is waiting for you`, "ok", false, {
+            label: "Answer",
+            run: () => {
+              setSection("agents");
+              setTarget((old) => ({ section: "agents", taskId: t.id, seq: old.seq + 1 }));
+            },
+          });
+    }
+    asking.current = new Set(waiting.map((t) => t.id));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useRepoChanges(reloadTasks, ["tasks", "refs"], [repo?.root], !!repo);
+  const working = tasks.filter((t) => t.run?.state === "running").length;
+  const askingNow = tasks.filter((t) => t.asks > 0).length;
 
   const undo = useCallback(() => {
     api
@@ -205,6 +208,8 @@ export function App() {
             repo,
             state,
             refresh,
+            tasks,
+            reloadTasks,
             toast,
             fail,
             undo,
@@ -258,7 +263,7 @@ export function App() {
             confirm: (spec) => new Promise((resolve) => setDialog({ kind: "confirm", ...spec, resolve })),
           }
         : null,
-    [repo, state, refresh, toast, fail, undo, target, recent], // eslint-disable-line react-hooks/exhaustive-deps
+    [repo, state, refresh, tasks, toast, fail, undo, target, recent], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // ⌘1–⌘6 switch sections; ⌘Z undoes the last change anywhere (not while
@@ -356,13 +361,8 @@ export function App() {
       <div className="app">
         <nav className="rail" aria-label="Sections">
           {SECTIONS.map((s) => {
-            const count =
-              s.id === "changes"
-                ? badges.changes
-                : s.id === "agents"
-                  ? badges.asking || badges.working
-                  : 0;
-            const tone = s.id === "agents" ? (badges.asking ? " asking" : " live") : "";
+            const count = s.id === "changes" ? changed : s.id === "agents" ? askingNow || working : 0;
+            const tone = s.id === "agents" ? (askingNow ? " asking" : " live") : "";
             return (
               <button
                 key={s.id}

@@ -16,7 +16,9 @@ type View = { kind: "new" } | { kind: "task"; id: string };
 export function AgentsSection() {
   const shell = useShell();
   const { repo, fail, toast } = shell;
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  // The shell's list, with the open task's row kept in step with its detail.
+  const [tasks, setTasks] = useState<TaskSummary[]>(shell.tasks);
+  useEffect(() => setTasks(shell.tasks), [shell.tasks]);
   const [view, setView] = useStored<View>("agents.view", { kind: "new" });
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
@@ -40,11 +42,7 @@ export function AgentsSection() {
     if (shell.target.section === "agents" && shell.target.taskId) setView({ kind: "task", id: shell.target.taskId });
   }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const refreshTasks = useCallback(async () => {
-    setTasks(await api.listTasks());
-  }, []);
-  // A task's commits are refs; the rest is in `.git/spor/tasks`.
-  useRepoChanges(refreshTasks, ["tasks", "refs"], [repo.root]);
+  const refreshTasks = shell.reloadTasks;
 
   // Open tasks' pull requests (one `gh` call), and a note when one merges.
   const [pulls, setPulls] = useState<Record<string, TaskPull>>({});

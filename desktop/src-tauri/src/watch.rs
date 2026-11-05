@@ -8,7 +8,8 @@
 //! - `worktree-changed`: a file in the working tree that `.gitignore`
 //!   doesn't exclude, at most once a second (Changes)
 //! - `tasks-changed`: `.git/spor/tasks/**`, or an agent's folder staging or
-//!   committing (Agents, and the open task's transcript)
+//!   committing, at most once a second (Agents, and the open task's
+//!   transcript)
 //!
 //! A burst (a checkout writing a thousand files) comes out as one event of
 //! each kind. The UI still reloads every 30 s in case an event is missed,
@@ -16,7 +17,7 @@
 
 use notify::{EventKind, RecursiveMode, Watcher as _};
 use spor::git::Repo;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -25,9 +26,10 @@ use std::time::{Duration, Instant};
 
 /// How long to gather a burst of file events before sending them.
 const SETTLE: Duration = Duration::from_millis(100);
-/// The least time between two `worktree-changed`: a build or an agent can
-/// write files many times a second, and each one costs a `git status`.
-const WORKTREE_EVERY: Duration = Duration::from_secs(1);
+/// The least time between two `worktree-changed` or `tasks-changed`: a
+/// build can write files, and an agent its transcript, many times a second,
+/// and each event costs a `git status` or reading every task.
+const BUSY_EVERY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Change {
@@ -45,6 +47,14 @@ impl Change {
             Change::Index => "index-changed",
             Change::Worktree => "worktree-changed",
             Change::Tasks => "tasks-changed",
+        }
+    }
+
+    /// The least time between two events of this kind.
+    fn every(self) -> Duration {
+        match self {
+            Change::Refs | Change::Index => Duration::ZERO,
+            Change::Worktree | Change::Tasks => BUSY_EVERY,
         }
     }
 }
@@ -254,36 +264,35 @@ pub(crate) fn start(repo: &Repo, emit: impl Fn(Change) + Send + 'static) -> Resu
     Ok(Watch { _watcher: watcher })
 }
 
-/// Turn file events into changes until the watcher is dropped: git's after
-/// `SETTLE`, the working tree's no more than once every `WORKTREE_EVERY`.
+/// Turn file events into changes until the watcher is dropped: each after
+/// `SETTLE`, and no sooner than `Change::every` after the last of its kind.
 fn sort_events(layout: &Layout, rx: Receiver<Vec<PathBuf>>, emit: impl Fn(Change)) {
     let mut ignores = Ignores::default();
-    let mut git: Option<(Instant, BTreeSet<Change>)> = None;
-    let mut tree: Option<(Instant, Vec<PathBuf>)> = None;
-    let mut tree_last: Option<Instant> = None;
+    // Changes waiting to be sent: since when, and (the working tree's) paths.
+    let mut pending: BTreeMap<Change, (Instant, Vec<PathBuf>)> = BTreeMap::new();
+    let mut last: BTreeMap<Change, Instant> = BTreeMap::new();
+    let due = |change: &Change, since: Instant, last: &BTreeMap<Change, Instant>| {
+        (since + SETTLE).max(last.get(change).map_or(since, |t| *t + change.every()))
+    };
     loop {
-        let git_due = git.as_ref().map(|(since, _)| *since + SETTLE);
-        let tree_due = tree.as_ref().map(|(since, _)| {
-            (*since + SETTLE).max(tree_last.map_or(*since, |t| t + WORKTREE_EVERY))
-        });
-        let received = match git_due.into_iter().chain(tree_due).min() {
+        let next = pending
+            .iter()
+            .map(|(c, (since, _))| due(c, *since, &last))
+            .min();
+        let received = match next {
             None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
-            Some(due) => rx.recv_timeout(due.saturating_duration_since(Instant::now())),
+            Some(at) => rx.recv_timeout(at.saturating_duration_since(Instant::now())),
         };
         match received {
             Ok(paths) => {
                 for path in paths {
-                    match layout.classify(&path) {
-                        Some(Change::Worktree) => tree
-                            .get_or_insert_with(|| (Instant::now(), Vec::new()))
-                            .1
-                            .push(path),
-                        Some(change) => {
-                            git.get_or_insert_with(|| (Instant::now(), BTreeSet::new()))
-                                .1
-                                .insert(change);
+                    if let Some(change) = layout.classify(&path) {
+                        let (_, paths) = pending
+                            .entry(change)
+                            .or_insert_with(|| (Instant::now(), Vec::new()));
+                        if change == Change::Worktree {
+                            paths.push(path);
                         }
-                        None => {}
                     }
                 }
             }
@@ -291,16 +300,16 @@ fn sort_events(layout: &Layout, rx: Receiver<Vec<PathBuf>>, emit: impl Fn(Change
             Err(RecvTimeoutError::Timeout) => {}
         }
         let now = Instant::now();
-        if git_due.is_some_and(|due| due <= now) {
-            for change in git.take().map(|(_, c)| c).unwrap_or_default() {
+        let ready: Vec<Change> = pending
+            .iter()
+            .filter(|(c, (since, _))| due(c, *since, &last) <= now)
+            .map(|(c, _)| *c)
+            .collect();
+        for change in ready {
+            let paths = pending.remove(&change).map(|(_, p)| p).unwrap_or_default();
+            last.insert(change, now);
+            if change != Change::Worktree || ignores.any_seen(&layout.root, &paths) {
                 emit(change);
-            }
-        }
-        if tree_due.is_some_and(|due| due <= now) {
-            let paths = tree.take().map(|(_, p)| p).unwrap_or_default();
-            tree_last = Some(now);
-            if ignores.any_seen(&layout.root, &paths) {
-                emit(Change::Worktree);
             }
         }
     }
@@ -448,11 +457,11 @@ mod tests {
         wait_for(&[Change::Worktree]);
 
         // An ignored file: nothing.
-        std::thread::sleep(WORKTREE_EVERY + SETTLE);
+        std::thread::sleep(BUSY_EVERY + SETTLE);
         seen.lock().unwrap().clear();
         std::fs::create_dir_all(root.join("target")).unwrap();
         std::fs::write(root.join("target/out"), "x").unwrap();
-        std::thread::sleep(WORKTREE_EVERY + SETTLE * 5);
+        std::thread::sleep(BUSY_EVERY + SETTLE * 5);
         assert_eq!(*seen.lock().unwrap(), vec![]);
 
         git(&root, &["add", "a.txt"]);
@@ -463,5 +472,22 @@ mod tests {
         std::fs::create_dir_all(root.join(".git/spor/tasks")).unwrap();
         std::fs::write(root.join(".git/spor/tasks/fix"), "task").unwrap();
         wait_for(&[Change::Tasks]);
+
+        // An agent writing its transcript ten times a second: one event a
+        // second, not ten.
+        std::thread::sleep(BUSY_EVERY + SETTLE);
+        seen.lock().unwrap().clear();
+        for i in 0..20 {
+            std::fs::write(root.join(".git/spor/tasks/fix"), format!("line {i}")).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        std::thread::sleep(BUSY_EVERY + SETTLE);
+        let tasks = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| **c == Change::Tasks)
+            .count();
+        assert!((2..=4).contains(&tasks), "{tasks} tasks-changed in 3 s");
     }
 }

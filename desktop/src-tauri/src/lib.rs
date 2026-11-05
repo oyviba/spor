@@ -300,7 +300,8 @@ pub fn run() {
         .manage(app)
         .setup(|tauri| {
             let handle = tauri.handle();
-            if let Some(repo) = handle.state::<App>().repo.lock().unwrap().clone() {
+            let repo = handle.state::<App>().repo.lock().unwrap().clone();
+            if let Some(repo) = repo {
                 watch_repo(handle, &repo);
             }
             Ok(())
