@@ -5,7 +5,7 @@
 use crate::undo::Undo;
 use crate::{first_line, App};
 use serde::{Deserialize, Serialize};
-use spor::agent::{self, AgentKind, Entry, Mode, Permissions, Run, RunState, Runs};
+use spor::agent::{self, AgentKind, Effort, Entry, Mode, Model, Permissions, Run, RunState, Runs};
 use spor::tasks::{LandMode, Task, TaskState, TaskStats, Tasks};
 use tauri::State;
 
@@ -83,7 +83,10 @@ impl From<Run> for RunInfo {
                 AgentKind::Claude => "claude",
                 AgentKind::Command(_) => "command",
             },
-            label: r.kind.label().to_string(),
+            label: match r.model.describe() {
+                Some(model) => format!("{} · {model}", r.kind.label()),
+                None => r.kind.label().to_string(),
+            },
             prompt: r.prompt.clone(),
             state,
             exit_code,
@@ -291,21 +294,44 @@ fn mode_of(name: &str) -> Result<Mode, String> {
         .ok_or_else(|| format!("Unknown permission mode {name}"))
 }
 
-/// Which agent to run, as the UI names it.
+/// Which agent to run, as the UI names it. Claude's model and effort are
+/// left to Claude Code when they're missing or empty.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum AgentChoice {
-    Claude,
-    Command { template: String },
+    Claude {
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        effort: Option<String>,
+    },
+    Command {
+        template: String,
+    },
     None,
 }
 
 impl AgentChoice {
     fn kind(&self) -> Option<AgentKind> {
         match self {
-            AgentChoice::Claude => Some(AgentKind::Claude),
+            AgentChoice::Claude { .. } => Some(AgentKind::Claude),
             AgentChoice::Command { template } => Some(AgentKind::Command(template.clone())),
             AgentChoice::None => None,
+        }
+    }
+
+    fn model(&self) -> Result<Model, String> {
+        match self {
+            AgentChoice::Claude { model, effort } => {
+                let effort = match effort.as_deref().filter(|e| !e.is_empty()) {
+                    Some(e) => {
+                        Some(Effort::from_flag(e).ok_or_else(|| format!("Unknown effort {e}"))?)
+                    }
+                    None => None,
+                };
+                Model::new(model.as_deref(), effort)
+            }
+            _ => Ok(Model::default()),
         }
     }
 }
@@ -385,6 +411,7 @@ pub(crate) fn create_issue_task(
     mode: String,
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
+    let model = agent.model()?;
     let kind = agent.kind();
     if let Some(e) = kind.as_ref().and_then(missing) {
         return Err(e);
@@ -406,7 +433,14 @@ pub(crate) fn create_issue_task(
         .create_for_issue(&prompt, &base, number, title)
         .map_err(|e| format!("Couldn't create the task: {}", first_line(&e)))?;
     if let Some(kind) = kind {
-        Runs::of(&tasks, &task).start(&task, &kind, &task.prompt, None, Permissions { mode })?;
+        Runs::of(&tasks, &task).start_with(
+            &task,
+            &kind,
+            &task.prompt,
+            None,
+            Permissions { mode },
+            &model,
+        )?;
     }
     Ok(summary(&tasks, &task))
 }
@@ -420,6 +454,7 @@ pub(crate) fn create_task(
     mode: String,
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
+    let model = agent.model()?;
     let kind = agent.kind();
     if let Some(e) = kind.as_ref().and_then(missing) {
         return Err(e);
@@ -429,7 +464,14 @@ pub(crate) fn create_task(
         .create(&prompt, &base)
         .map_err(|e| format!("Couldn't create the task: {}", first_line(&e)))?;
     if let Some(kind) = kind {
-        Runs::of(&tasks, &task).start(&task, &kind, &task.prompt, None, Permissions { mode })?;
+        Runs::of(&tasks, &task).start_with(
+            &task,
+            &kind,
+            &task.prompt,
+            None,
+            Permissions { mode },
+            &model,
+        )?;
     }
     Ok(summary(&tasks, &task))
 }
@@ -448,10 +490,12 @@ pub(crate) fn send_to_agent(
     let (tasks, task) = app.task(&id)?;
     let runs = Runs::of(&tasks, &task);
     let follow_up = message.is_some();
-    // Follow-ups go to the agent that did the work, whatever's picked now.
-    let previous = runs.latest().map(|r| r.kind);
-    let kind = match (follow_up, previous, agent.kind()) {
-        (true, Some(k), _) | (_, _, Some(k)) => k,
+    // Follow-ups go to the agent that did the work, on the model it used,
+    // whatever's picked now.
+    let previous = runs.latest().map(|r| (r.kind, r.model));
+    let (kind, model) = match (follow_up, previous, agent.kind()) {
+        (true, Some(p), _) => p,
+        (_, _, Some(k)) => (k, agent.model()?),
         _ => return Err("Pick an agent first".into()),
     };
     if let Some(e) = missing(&kind) {
@@ -469,12 +513,13 @@ pub(crate) fn send_to_agent(
         Some(m) => m.trim().to_string(),
         None => task.prompt.clone(),
     };
-    runs.start(
+    runs.start_with(
         &task,
         &kind,
         &prompt,
         session.as_deref(),
         Permissions { mode },
+        &model,
     )
     .map(|_| ())
 }

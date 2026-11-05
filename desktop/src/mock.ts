@@ -373,7 +373,12 @@ function start(t: MockTask, prompt: string, agent: AgentChoice) {
   const r = run({
     index: t.runs.length,
     agent: agent.kind === "command" ? "command" : "claude",
-    label: agent.kind === "command" ? "Custom command" : "Claude Code",
+    label:
+      agent.kind === "command"
+        ? "Custom command"
+        : ["Claude Code", agent.kind === "claude" && agent.model, agent.kind === "claude" && agent.effort && `${agent.effort} effort`]
+            .filter(Boolean)
+            .join(" · "),
     state: "running",
     exit_code: null,
     started: now(),
