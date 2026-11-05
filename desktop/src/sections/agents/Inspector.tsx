@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useChanged } from "../../shared/hooks";
 import type { TaskDetail, TaskPull } from "../../types";
 import { duration } from "./transcript";
 import { pullStatus } from "../pulls/PullsSection";
@@ -60,7 +61,7 @@ export function Inspector({ detail, ...p }: Props) {
     setWorking(what);
     return Promise.resolve(run()).finally(() => setWorking(null));
   };
-  useEffect(() => {
+  useChanged(() => {
     setConfirmDiscard(false);
     setLandMenu(false);
     setPrMenu(false);

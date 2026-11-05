@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { LineComment, Pull, PullDetail, TaskSummary } from "../../types";
 import { useShell } from "../../shared/app";
-import { usePoll, useStored } from "../../shared/hooks";
+import { useChanged, usePoll, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
@@ -37,7 +37,7 @@ export function pullStatus(p: Pull): Status {
 /** Pull requests on GitHub, through `gh`: read, review, merge. */
 export function PullsSection() {
   const shell = useShell();
-  const { fail } = shell;
+  const { fail, tasks } = shell;
   const [filter, setFilter] = useStored<Filter>("pulls.filter", "open");
   const [pulls, setPulls] = useState<Pull[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +46,6 @@ export function PullsSection() {
   const [tab, setTab] = useState<"conversation" | "files" | "checks">("conversation");
   const [diff, setDiff] = useState<string | null>(null);
   const [comments, setComments] = useState<LineComment[]>([]);
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
 
   // The filter shown: an answer for one picked before it is dropped.
   const wanted = useRef(filter);
@@ -68,12 +67,9 @@ export function PullsSection() {
     60_000,
     [filter],
   );
-  useEffect(() => {
-    api.listTasks().then(setTasks, () => {});
-  }, []);
-  useEffect(() => {
+  useChanged(() => {
     if (shell.target.section === "pulls" && shell.target.number) setSelected(shell.target.number);
-  }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shell.target.seq]);
 
   const loadDetail = async () => {
     if (selected == null) return;
@@ -84,7 +80,7 @@ export function PullsSection() {
     }
   };
   usePoll(loadDetail, 30_000, [selected], selected != null && !error);
-  useEffect(() => {
+  useChanged(() => {
     setDetail(null);
     setDiff(null);
     setComments([]);
@@ -303,7 +299,7 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
   const shell = useShell();
   const [menu, setMenu] = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null);
-  useEffect(() => {
+  useChanged(() => {
     setMenu(false);
     setConfirm(null);
   }, [pr.pull.number]);

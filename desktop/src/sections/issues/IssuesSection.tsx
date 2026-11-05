@@ -1,14 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Issue, IssueDetail, TaskSummary } from "../../types";
 import { useShell } from "../../shared/app";
-import { usePoll, useStored } from "../../shared/hooks";
+import { useChanged, usePoll, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { Markdown } from "../../shared/Markdown";
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
-import { ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
+import { ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
 import { ArrowUp, Bot, Branch, External, MessageSquare, Tag, Users } from "../../shared/Icons";
 
 type Filter = "assigned" | "yours" | "open" | "closed";
@@ -58,9 +58,9 @@ export function IssuesSection() {
     60_000,
     [filter],
   );
-  useEffect(() => {
+  useChanged(() => {
     if (shell.target.section === "issues" && shell.target.number) setSelected(shell.target.number);
-  }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shell.target.seq]);
 
   const loadDetail = async () => {
     if (selected == null) return;
@@ -71,7 +71,7 @@ export function IssuesSection() {
     }
   };
   usePoll(loadDetail, 60_000, [selected], selected != null && !error);
-  useEffect(() => setDetail(null), [selected]);
+  useChanged(() => setDetail(null), [selected]);
 
   // The newest task on an issue: an open one, else the last that landed.
   const taskFor = (n: number) =>
@@ -335,7 +335,10 @@ function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: 
               <option value="none">No agent — I'll run one</option>
             </select>
             {settings.agent === "claude" && (
-              <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
+              <>
+                <ModelPicker settings={settings} onSettings={setSettings} />
+                <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
+              </>
             )}
             <span className="flex-1" />
             <Button className="primary" disabled={!prompt.trim()} busy={busy} onClick={start}>

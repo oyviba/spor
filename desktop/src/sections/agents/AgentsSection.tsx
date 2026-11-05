@@ -3,7 +3,7 @@ import { api } from "../../api";
 import type { LineComment, RunPatch, TaskDetail, TaskPull, TaskSummary } from "../../types";
 import { activityAt } from "./status";
 import { catchUpPrompt } from "./prompts";
-import { usePoll, useRepoChanges, useStored } from "../../shared/hooks";
+import { useChanged, usePoll, useRepoChanges, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { Sidebar } from "./Sidebar";
 import { NewTask } from "./NewTask";
@@ -39,9 +39,9 @@ export function AgentsSection() {
   const selectedId = view.kind === "task" ? view.id : null;
 
   // Another section sent us to a task.
-  useEffect(() => {
+  useChanged(() => {
     if (shell.target.section === "agents" && shell.target.taskId) setView({ kind: "task", id: shell.target.taskId });
-  }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shell.target.seq]);
 
   const refreshTasks = shell.reloadTasks;
 
@@ -82,7 +82,7 @@ export function AgentsSection() {
     }
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
   useRepoChanges(refreshDetail, ["tasks", "refs"], [selectedId], !!selectedId);
-  useEffect(() => {
+  useChanged(() => {
     setDetail(null);
     setTab("conversation");
     setFocus(null);

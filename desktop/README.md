@@ -51,8 +51,10 @@ What one app makes possible:
   changes it shows, and every 30 s anyway in case an event went missing.
 - **⌘K palette and workspaces.** Commands, sections, branches and every
   workspace's repositories by typing. Workspaces sit at the top of the rail;
-  the repository name at the top of every sidebar lists the workspace's
-  repositories. The first launch imports the old native (GPUI) app's
+  beside it, the workspace's repositories, the open one marked, with their
+  branch, changed files and what there is to pull or push (⌘⇧E hides the
+  column; the repository name at the top of every sidebar lists them too).
+  The first launch imports the old native (GPUI) app's
   workspaces (`shared/workspaces.ts`).
 - **Settings (⌘,).** Appearance and themes (`shared/theme.ts`, with the
   editor in `shared/ThemeEditor.tsx`), diffs, the graph's options, and

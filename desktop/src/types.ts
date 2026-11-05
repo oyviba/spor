@@ -64,6 +64,9 @@ export interface TaskSummary {
 /** How much an agent may do without asking (#21). */
 export type Mode = "supervised" | "acceptEdits" | "auto" | "full";
 
+/** Claude Code's `--effort`. */
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface Ask {
   id: string;
   tool: string;
@@ -111,7 +114,7 @@ export interface RunPatch {
 }
 
 export type AgentChoice =
-  | { kind: "claude" }
+  | { kind: "claude"; model?: string; effort?: Effort | "" }
   | { kind: "command"; template: string }
   | { kind: "none" };
 

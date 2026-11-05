@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import type { FileEntry, StashInfo } from "../../types";
 import { useShell } from "../../shared/app";
-import { useRepoChanges } from "../../shared/hooks";
+import { useChanged, useRepoChanges } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView, selectionRange, type LineSelection } from "../../shared/DiffView";
@@ -44,9 +44,9 @@ export function ChangesSection() {
   useRepoChanges(load, ["refs", "index", "worktree"], []);
 
   // Sent here (conflict banner): open that file.
-  useEffect(() => {
+  useChanged(() => {
     if (shell.target.section === "changes" && shell.target.path) setPick({ path: shell.target.path, staged: false });
-  }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shell.target.seq]);
 
   const conflicted = files?.filter((f) => f.status === "conflicted") ?? [];
   const staged = files?.filter((f) => f.staged) ?? [];
@@ -67,14 +67,14 @@ export function ChangesSection() {
 
   // The picked file's diff, when it or anything about it changes.
   const filesKey = JSON.stringify(files);
-  useEffect(() => {
+  useChanged(() => {
     setSelection(null);
     if (!pick || !entry) return setPatch(null);
     api.fileDiff(pick.path, pick.staged).then(setPatch, (e) => {
       setPatch("");
       fail(e);
     });
-  }, [pick?.path, pick?.staged, filesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pick?.path, pick?.staged, filesKey]);
 
   const after = () => load().then(shell.refresh);
   const both = pick ? files?.filter((f) => f.path === pick.path && f.status !== "conflicted").length === 2 : false;
