@@ -176,7 +176,7 @@ export function Inspector({ detail, ...p }: Props) {
             <span>
               Conflicts with {t.base} in {detail.conflicts.join(", ")}
               <button className="link" onClick={p.onAskRebase} disabled={running}>
-                Ask agent to rebase
+                {t.pull != null ? `Ask agent to merge ${t.base} in` : "Ask agent to rebase"}
               </button>
             </span>
           </div>
