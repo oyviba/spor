@@ -1210,34 +1210,6 @@ pub enum LineAction {
     Discard,
 }
 
-/// Run a network git command (push, fetch) in `dir` without ever asking:
-/// no terminal prompt, and ssh in batch mode (unless the user set their own
-/// `GIT_SSH_COMMAND`). Credentials must come from a helper or ssh-agent;
-/// without them it fails with git's first error line. Returns stdout.
-pub fn network(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let ssh = std::env::var("GIT_SSH_COMMAND").unwrap_or_else(|_| "ssh -o BatchMode=yes".into());
-    let out = Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_SSH_COMMAND", ssh)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("Couldn't run git: {e}"))?;
-    if out.status.success() {
-        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let err = error_text(&out);
-    Err(err
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("git failed")
-        .trim_start_matches("fatal: ")
-        .trim_start_matches("error: ")
-        .to_string())
-}
-
 /// Does this error message indicate that the working tree blocked the switch?
 pub fn is_worktree_conflict(err: &str) -> bool {
     err.contains("would be overwritten") || err.contains("local changes")
