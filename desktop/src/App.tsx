@@ -5,6 +5,7 @@ import { usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
+import { RepoPanel } from "./shared/Layout";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
@@ -129,6 +130,7 @@ export function App() {
   );
   const [state, setState] = useState<RepoState | null>(null);
   const [section, setSection] = useStored<SectionId>("section", "agents");
+  const [reposShown, setReposShown] = useStored("repos.shown", true);
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "agents", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [changed, setChanged] = useState(0);
@@ -450,6 +452,14 @@ export function App() {
     { id: "palette", label: "Command palette", group: "App", keys: "Mod+K", whileTyping: true, run: () => openPalette() },
     { id: "settings", label: "Settings", group: "App", keys: "Mod+,", whileTyping: true, run: () => setSettingsPage("appearance") },
     { id: "shortcuts", label: "Keyboard shortcuts", group: "App", keys: "Mod+/", whileTyping: true, run: () => setSettingsPage("shortcuts") },
+    {
+      id: "repos",
+      label: reposShown ? "Hide repositories" : "Show repositories",
+      group: "App",
+      keys: "Mod+Shift+E",
+      whileTyping: true,
+      run: () => setReposShown((v) => !v),
+    },
     // Not while typing: there ⌘Z undoes the typing.
     { id: "undo", label: state?.undo ? `Undo: ${state.undo}` : "Undo", group: "App", keys: "Mod+Z", run: () => undo() },
     {
@@ -632,7 +642,7 @@ export function App() {
 
   return (
     <ShellContext.Provider value={shell}>
-      <div className="app">
+      <div className={`app${reposShown ? " with-repos" : ""}`}>
         <nav className="rail" aria-label="Sections">
           {workspaceRail}
           {SECTIONS.map((s) => {
@@ -655,6 +665,7 @@ export function App() {
           <span className="flex-1" />
           {settingsButton}
         </nav>
+        {reposShown && <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed} />}
         <div className="section">
           {state?.operation && <OperationBanner state={state} />}
           <div className="section-body">
