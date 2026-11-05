@@ -8,7 +8,7 @@ import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from 
 import { Markdown } from "../../shared/Markdown";
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
-import { ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
+import { ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
 import { ArrowUp, Bot, Branch, External, MessageSquare, Tag, Users } from "../../shared/Icons";
 
 type Filter = "assigned" | "yours" | "open" | "closed";
@@ -335,7 +335,10 @@ function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: 
               <option value="none">No agent — I'll run one</option>
             </select>
             {settings.agent === "claude" && (
-              <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
+              <>
+                <ModelPicker settings={settings} onSettings={setSettings} />
+                <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
+              </>
             )}
             <span className="flex-1" />
             <Button className="primary" disabled={!prompt.trim()} busy={busy} onClick={start}>
