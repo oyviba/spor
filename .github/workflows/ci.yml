@@ -18,6 +18,12 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # macOS and Windows file systems ignore case: two paths that differ
+      # only in case are one file there (Settings.tsx and settings.ts).
+      - name: No paths that differ only in case
+        run: |
+          dupes=$(git ls-files | tr '[:upper:]' '[:lower:]' | sort | uniq -d)
+          if [ -n "$dupes" ]; then echo "Paths that differ only in case:"; echo "$dupes"; exit 1; fi
       - name: Format
         run: cargo fmt --check
       - name: Clippy

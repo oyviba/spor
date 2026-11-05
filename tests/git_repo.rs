@@ -241,6 +241,28 @@ fn conflicting_branches(f: &Fixture) {
 }
 
 #[test]
+fn conflict_regions_from_a_real_merge() {
+    use spor::conflict::{self, Choice, Segment};
+    let f = fixture();
+    conflicting_branches(&f);
+    f.repo.merge("other").unwrap();
+    let segments = conflict::parse(&f.read("f.txt"));
+    assert_eq!(conflict::count(&segments), 1);
+    let Segment::Conflict(r) = &segments[0] else {
+        panic!("{segments:?}")
+    };
+    assert_eq!((r.ours.as_str(), r.theirs.as_str()), ("ours\n", "theirs\n"));
+    assert_eq!(r.theirs_label, "other");
+    f.write(
+        "f.txt",
+        &conflict::resolve(&segments, &[Choice::Both]).unwrap(),
+    );
+    f.repo.mark_resolved("f.txt").unwrap();
+    assert_eq!(f.repo.continue_operation().unwrap(), Outcome::Done);
+    assert_eq!(f.read("f.txt"), "ours\ntheirs\n");
+}
+
+#[test]
 fn merge_conflict_resolve_and_continue() {
     let f = fixture();
     conflicting_branches(&f);
@@ -431,6 +453,17 @@ fn search_blame_and_file_history() {
     assert_eq!(blame[0].line, 1);
     let history = f.repo.file_log("f.txt", 10).unwrap();
     assert_eq!(history.len(), 2);
+
+    // As of the first commit there's one line; uncommitted lines show up
+    // in the working tree's blame with an all-zero hash.
+    let then = f.repo.blame_at("f.txt", Some(&history[1].hash)).unwrap();
+    assert_eq!(then.len(), 1);
+    assert_eq!(then[0].summary, "Add the parser");
+    f.write("f.txt", "one\ntwo\nthree\n");
+    let now = f.repo.blame_at("f.txt", None).unwrap();
+    assert_eq!(now.len(), 3);
+    assert!(now[2].hash.chars().all(|c| c == '0'));
+    assert_eq!(now[2].text, "three");
 }
 
 #[test]

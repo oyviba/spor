@@ -6,6 +6,7 @@ import { usePoll } from "../../shared/hooks";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView, selectionRange, type LineSelection } from "../../shared/DiffView";
 import { parsePatch } from "../../shared/diff";
+import { ConflictRegions } from "./Conflicts";
 import { Alert, Archive, ArrowDown, ArrowUp, Branch, Check, Minus, Plus, PullRequest, Refresh, Undo } from "../../shared/Icons";
 
 interface Pick {
@@ -158,6 +159,15 @@ export function ChangesSection() {
               )
             }
           >
+            {pick && entry && entry.status !== "untracked" && entry.status !== "deleted" && entry.status !== "stageddeleted" && (
+              <button
+                className="ghost small"
+                title="Who last changed each line (the working tree, uncommitted lines included)"
+                onClick={() => shell.go({ section: "history", blame: { path: pick.path, rev: null } })}
+              >
+                Blame
+              </button>
+            )}
             {pick && entry?.status !== "conflicted" && (both || pick.staged) && (
               <Tabs
                 value={pick.staged ? "staged" : "unstaged"}
@@ -200,12 +210,22 @@ export function ChangesSection() {
                         </button>
                       </div>
                     )}
+                    {entry.status === "conflicted" ? (
+                      <ConflictRegions
+                        key={`${pick.path}:${filesKey}`}
+                        path={pick.path}
+                        operation={state?.operation ?? null}
+                        onSave={(choices) =>
+                          shell.act(() => api.resolveRegions(pick.path, choices), { undo: false }).then(after)
+                        }
+                      />
+                    ) : (
                     <DiffView
                       bare
                       patch={patch}
                       empty={entry.status === "untracked" ? "An empty new file." : "No changes."}
-                      selection={entry.status === "conflicted" ? null : selection}
-                      onSelect={entry.status === "conflicted" ? undefined : setSelection}
+                      selection={selection}
+                      onSelect={setSelection}
                       selectionBar={
                         nSelected > 0 && (
                           <div className="selection-bar">
@@ -232,6 +252,7 @@ export function ChangesSection() {
                         )
                       }
                     />
+                    )}
                   </>
                 )}
               </div>

@@ -7,14 +7,20 @@ import { forwardRef, memo, useEffect, useImperativeHandle, useMemo, useRef, useS
 import type { Graph as GraphData, GraphRow, PrBadge, Segment } from "../../types";
 import { ago } from "../agents/transcript";
 import { Bot, Tag } from "../../shared/Icons";
+import { DEFAULT_GRAPH, setSettings, useSettings, type GraphOptions } from "../../shared/settings";
+import { useMode } from "../../shared/theme";
 
-export const ROW = 30;
 const PAD = 12;
-const LANE = 14;
-const MID = ROW / 2;
 const OVERSCAN = 12;
 
-const x = (lane: number) => PAD + lane * LANE;
+/** Row height and lane spacing, from the History options (#58). */
+interface Geo {
+  row: number;
+  lane: number;
+  mid: number;
+}
+
+const xOf = (g: Geo, lane: number) => PAD + lane * g.lane;
 
 export interface GraphHandle {
   scrollTo: (hash: string) => void;
@@ -35,21 +41,36 @@ interface Props {
   prs: Map<string, PrBadge>;
   /** Right-click on a row. */
   onContext: (hash: string, e: React.MouseEvent) => void;
+  /** A branch dragged onto a row's branch. */
+  onDropBranch: (source: string, target: string, e: React.DragEvent) => void;
 }
+
+/** What a dragged branch carries. */
+export const BRANCH_DRAG = "application/x-spor-branch";
 
 export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
   const scroller = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ top: 0, height: 800 });
-  const dark = useDark();
+  const dark = useMode() === "dark";
   const palette = useMemo(() => p.graph.palette.map((hex) => (dark ? hex : deepen(hex))), [p.graph.palette, dark]);
   const index = useMemo(() => new Map(p.graph.rows.map((r, i) => [r.hash, i])), [p.graph.rows]);
-  const width = x(Math.min(p.graph.lanes, 12)) + 4;
+  const options = useSettings().graph;
+  const geo = useMemo<Geo>(
+    () => ({ row: options.rowHeight, lane: options.laneWidth, mid: options.rowHeight / 2 }),
+    [options.rowHeight, options.laneWidth],
+  );
+  const ROW = geo.row;
+  const width = xOf(geo, Math.min(p.graph.lanes, 12)) + 4;
   // Stable handlers, so scrolling re-renders only rows coming into view.
   const latest = useRef(p);
   latest.current = p;
   const select = useMemo(() => (hash: string) => latest.current.onSelect(hash), []);
   const openRow = useMemo(() => (hash: string) => latest.current.onOpen(hash), []);
   const context = useMemo(() => (hash: string, e: React.MouseEvent) => latest.current.onContext(hash, e), []);
+  const dropBranch = useMemo(
+    () => (source: string, target: string, e: React.DragEvent) => latest.current.onDropBranch(source, target, e),
+    [],
+  );
 
   useImperativeHandle(ref, () => ({
     scrollTo: (hash) => {
@@ -94,6 +115,8 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
   };
 
   return (
+    <div className="graph-frame">
+    <GraphHeader width={width} options={options} />
     <div
       className="graph"
       ref={scroller}
@@ -108,6 +131,8 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
             row={row}
             top={(first + k) * ROW}
             width={width}
+            geo={geo}
+            options={options}
             palette={palette}
             selected={p.selected === row.hash}
             dimmed={!!p.hits && !p.hits.has(row.hash)}
@@ -118,17 +143,67 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
             onSelect={select}
             onOpen={openRow}
             onContext={context}
+            onDropBranch={dropBranch}
           />
         ))}
       </div>
     </div>
+    </div>
   );
 });
+
+/** Column titles, with edges to drag (double-click resets a width). */
+function GraphHeader({ width, options }: { width: number; options: GraphOptions }) {
+  const resize = (col: keyof GraphOptions["widths"], grow: 1 | -1) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    const start = e.clientX;
+    const from = options.widths[col];
+    const move = (m: MouseEvent) => {
+      const w = Math.max(40, Math.min(600, from + grow * (m.clientX - start)));
+      setSettings((s) => ({ ...s, graph: { ...s.graph, widths: { ...s.graph.widths, [col]: w } } }));
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.classList.remove("resizing");
+    };
+    document.body.classList.add("resizing");
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+  const reset = (col: keyof GraphOptions["widths"]) => () =>
+    setSettings((s) => ({ ...s, graph: { ...s.graph, widths: { ...s.graph.widths, [col]: DEFAULT_GRAPH.widths[col] } } }));
+  // Columns right of the subject grow leftwards: their handle is on their left edge.
+  const right = (col: "hash" | "author" | "date", label: string) =>
+    options.columns[col] && (
+      <span className={`graph-col graph-${col}`} style={{ width: options.widths[col] }}>
+        <span className="col-resize left" onMouseDown={resize(col, -1)} onDoubleClick={reset(col)} title="Drag to resize; double-click resets" />
+        {label}
+      </span>
+    );
+  return (
+    <div className="graph-header">
+      <span style={{ width, flexShrink: 0 }} />
+      {options.refColumn && (
+        <span className="graph-col graph-refs-col" style={{ width: options.widths.refs }}>
+          Branches
+          <span className="col-resize" onMouseDown={resize("refs", 1)} onDoubleClick={reset("refs")} title="Drag to resize; double-click resets" />
+        </span>
+      )}
+      <span className="graph-col graph-text">Message</span>
+      {right("hash", "Commit")}
+      {right("author", "Author")}
+      {right("date", "Date")}
+    </div>
+  );
+}
 
 const Row = memo(function Row({
   row,
   top,
   width,
+  geo,
+  options,
   palette,
   selected,
   dimmed,
@@ -139,10 +214,13 @@ const Row = memo(function Row({
   onSelect,
   onOpen,
   onContext,
+  onDropBranch,
 }: {
   row: GraphRow;
   top: number;
   width: number;
+  geo: Geo;
+  options: GraphOptions;
   palette: string[];
   selected: boolean;
   dimmed: boolean;
@@ -153,13 +231,22 @@ const Row = memo(function Row({
   onSelect: (hash: string) => void;
   onOpen: (hash: string) => void;
   onContext: (hash: string, e: React.MouseEvent) => void;
+  onDropBranch: (source: string, target: string, e: React.DragEvent) => void;
 }) {
-  const node = x(row.lane);
+  const [over, setOver] = useState(false);
+  // The branch a drop here lands on: a local one if there's one, else a remote one.
+  const branches = row.refs.filter((r) => !r.startsWith("tag:"));
+  const target = branches.find((r) => !remotes.has(r)) ?? branches[0];
+  const node = xOf(geo, row.lane);
   const color = palette[row.color] ?? "#888";
+  const { row: ROW, mid: MID } = geo;
+  const refs = row.refs.map((r) => (
+    <RefBadge key={r} name={r} current={r === currentBranch} remote={remotes.has(r)} color={color} pr={prs.get(r)} />
+  ));
   return (
     <div
-      className={`graph-row${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}`}
-      style={{ top }}
+      className={`graph-row${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}${over ? " drop-target" : ""}`}
+      style={{ top, height: ROW }}
       onClick={() => onSelect(row.hash)}
       onDoubleClick={() => onOpen(row.hash)}
       onContextMenu={(e) => {
@@ -168,12 +255,35 @@ const Row = memo(function Row({
         onContext(row.hash, e);
       }}
       data-hash={row.hash}
+      onDragOver={
+        target
+          ? (e) => {
+              if (!e.dataTransfer.types.includes(BRANCH_DRAG)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              setOver(true);
+            }
+          : undefined
+      }
+      onDragLeave={() => setOver(false)}
+      onDrop={
+        target
+          ? (e) => {
+              setOver(false);
+              const source = e.dataTransfer.getData(BRANCH_DRAG);
+              if (source && source !== target) {
+                e.preventDefault();
+                onDropBranch(source, target, e);
+              }
+            }
+          : undefined
+      }
     >
       <svg width={width} height={ROW} className="graph-svg" aria-hidden>
         {row.segments.map((s, i) => (
           <path
             key={i}
-            d={pathOf(s, node)}
+            d={pathOf(s, node, geo)}
             stroke={palette[s.color] ?? "#888"}
             strokeWidth={s.bold ? 2.5 : 1.5}
             fill="none"
@@ -195,14 +305,30 @@ const Row = memo(function Row({
           <circle cx={node} cy={MID} r={3.5} fill={color} />
         )}
       </svg>
+      {options.refColumn && (
+        <div className="graph-refs-col" style={{ width: options.widths.refs }}>
+          {refs}
+        </div>
+      )}
       <div className="graph-text">
-        {row.refs.map((r) => (
-          <RefBadge key={r} name={r} current={r === currentBranch} remote={remotes.has(r)} color={color} pr={prs.get(r)} />
-        ))}
+        {!options.refColumn && refs}
         <span className="graph-subject">{row.subject}</span>
       </div>
-      <span className="graph-author truncate">{row.author}</span>
-      <span className="graph-time num">{ago(row.time, nowMs)}</span>
+      {options.columns.hash && (
+        <span className="graph-hash mono" style={{ width: options.widths.hash }}>
+          {row.short}
+        </span>
+      )}
+      {options.columns.author && (
+        <span className="graph-author truncate" style={{ width: options.widths.author }}>
+          {row.author}
+        </span>
+      )}
+      {options.columns.date && (
+        <span className="graph-time num" style={{ width: options.widths.date }} title={new Date(row.time * 1000).toLocaleString()}>
+          {ago(row.time, nowMs)}
+        </span>
+      )}
     </div>
   );
 });
@@ -227,6 +353,16 @@ function RefBadge({
   const agent = label.startsWith("agent/");
   return (
     <span
+      draggable={!tag}
+      onDragStart={
+        tag
+          ? undefined
+          : (e) => {
+              e.dataTransfer.setData(BRANCH_DRAG, label);
+              e.dataTransfer.setData("text/plain", label);
+              e.dataTransfer.effectAllowed = "move";
+            }
+      }
       className={`ref${current ? " current" : ""}${remote ? " remote" : ""}${tag ? " tag" : ""}`}
       style={!tag && !remote ? ({ "--ref": color } as React.CSSProperties) : undefined}
       title={current ? `${label} (checked out)` : label}
@@ -247,8 +383,9 @@ function RefBadge({
   );
 }
 
-function pathOf(s: Segment, node: number): string {
-  const lx = x(s.lane);
+function pathOf(s: Segment, node: number, g: Geo): string {
+  const { row: ROW, mid: MID } = g;
+  const lx = xOf(g, s.lane);
   const dy = MID * 0.6;
   switch (s.shape) {
     case "through":
@@ -266,19 +403,6 @@ function pathOf(s: Segment, node: number): string {
     case "fork":
       return `M${node} ${MID}C${node} ${MID + dy} ${lx} ${ROW - dy} ${lx} ${ROW}`;
   }
-}
-
-function useDark(): boolean {
-  const query = "(prefers-color-scheme: dark)";
-  const [dark, setDark] = useState(() => window.matchMedia?.(query).matches ?? false);
-  useEffect(() => {
-    const m = window.matchMedia?.(query);
-    if (!m) return;
-    const on = () => setDark(m.matches);
-    m.addEventListener("change", on);
-    return () => m.removeEventListener("change", on);
-  }, []);
-  return dark;
 }
 
 /** The palette is tuned for dark backgrounds; on light ones, lines and
