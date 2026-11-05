@@ -3,6 +3,7 @@
 // section sees a change at once.
 
 import { useSyncExternalStore } from "react";
+import type { Keymap } from "./keys";
 
 export interface GraphOptions {
   /** Row height in px. */
@@ -20,6 +21,8 @@ export interface GraphOptions {
 export interface Settings {
   diffLayout: "unified" | "split";
   graph: GraphOptions;
+  /** Changes to the default shortcuts, by command id (null removes one). */
+  keymap: Keymap;
 }
 
 export const DEFAULT_GRAPH: GraphOptions = {
@@ -33,6 +36,7 @@ export const DEFAULT_GRAPH: GraphOptions = {
 const DEFAULTS: Settings = {
   diffLayout: "unified",
   graph: DEFAULT_GRAPH,
+  keymap: {},
 };
 
 const KEY = "spor.settings";

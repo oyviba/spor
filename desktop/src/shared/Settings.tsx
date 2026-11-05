@@ -57,8 +57,8 @@ export function Choice<T extends string>({
   );
 }
 
-export function SettingsDialog({ pages, onClose }: { pages: SettingsPage[]; onClose: () => void }) {
-  const [page, setPage] = useState(pages[0].id);
+export function SettingsDialog({ pages, initial, onClose }: { pages: SettingsPage[]; initial?: string; onClose: () => void }) {
+  const [page, setPage] = useState(initial ?? pages[0].id);
   const shown = pages.find((p) => p.id === page) ?? pages[0];
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

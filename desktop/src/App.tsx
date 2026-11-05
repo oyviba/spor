@@ -6,7 +6,9 @@ import { ShellContext, useShell, type SectionId, type Shell, type Target, type T
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/Settings";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
-import { getSettings, setSettings } from "./shared/settings";
+import { ShortcutsPage } from "./shared/Shortcuts";
+import { display, effective, isMac, lookup, shortcutOf } from "./shared/keys";
+import { getSettings, setSettings, useSettings } from "./shared/settings";
 import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuSpec } from "./shared/Overlay";
 import { AgentsSection } from "./sections/agents/AgentsSection";
 import { HistorySection } from "./sections/history/HistorySection";
@@ -24,12 +26,12 @@ interface Toast {
 }
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string }[] = [
-  { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "1" },
-  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "2" },
-  { id: "issues", label: "Issues", icon: <IssueIcon size={17} />, key: "3" },
-  { id: "pulls", label: "Pull requests", icon: <PullRequest size={17} />, key: "4" },
-  { id: "actions", label: "Actions", icon: <Play size={17} />, key: "5" },
-  { id: "agents", label: "Agents", icon: <Bot size={17} />, key: "6" },
+  { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "Mod+1" },
+  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+2" },
+  { id: "issues", label: "Issues", icon: <IssueIcon size={17} />, key: "Mod+3" },
+  { id: "pulls", label: "Pull requests", icon: <PullRequest size={17} />, key: "Mod+4" },
+  { id: "actions", label: "Actions", icon: <Play size={17} />, key: "Mod+5" },
+  { id: "agents", label: "Agents", icon: <Bot size={17} />, key: "Mod+6" },
 ];
 
 /** Is the task open on screen (Agents, its page)? Then it needs no toast. */
@@ -41,6 +43,36 @@ function viewing(taskId: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** A command the palette lists and a shortcut can run. */
+interface AppCommand {
+  id: string;
+  label: string;
+  group: string;
+  hint?: string;
+  /** Its default shortcut ("Mod+K"). */
+  keys?: string;
+  /** Also runs when the focus is in a text field. */
+  whileTyping?: boolean;
+  run: () => void;
+}
+
+/** What can be done to the open repository, for the palette and shortcuts. */
+function repoCommands(shell: Shell): AppCommand[] {
+  const sync = (what: "fetch" | "pull" | "push") => () => shell.act(() => api.sync(what), { undo: what === "pull" });
+  return [
+    { id: "fetch", label: "Fetch", hint: "all remotes", group: "Git", run: sync("fetch") },
+    { id: "pull", label: "Pull", hint: "with rebase", group: "Git", run: sync("pull") },
+    { id: "push", label: shell.state?.upstream ? "Push" : "Publish branch", group: "Git", run: sync("push") },
+    { id: "stash", label: "Stash changes", group: "Git", run: () => shell.act(() => api.stash(null), { undo: false }) },
+    {
+      id: "pr",
+      label: "Open pull request for this branch",
+      group: "Git",
+      run: () => api.pullRequestUrl().then(api.openUrl).catch(shell.fail),
+    },
+  ];
 }
 
 /** How often the open repository is fetched in the background. */
@@ -55,7 +87,10 @@ export function App() {
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
   const [credential, setCredential] = useState<Credential | null>(null);
   const [palette, setPalette] = useState<{ branches: BranchInfo[] } | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** The Settings page open, if Settings is. */
+  const [settingsPage, setSettingsPage] = useState<string | null>(null);
+  const { keymap } = useSettings();
+  const mac = isMac();
   const setRepo = useCallback(
     (r: RepoInfo | null) => {
       setRepoRaw(r);
@@ -265,29 +300,56 @@ export function App() {
     [repo, state, refresh, toast, fail, undo, target, recent], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  // ⌘1–⌘6 switch sections; ⌘Z undoes the last change anywhere (not while
-  // typing, where it undoes the typing).
+  const openPalette = () => {
+    if (!repo) return;
+    api.branches().then(
+      (branches) => setPalette({ branches }),
+      () => setPalette({ branches: [] }),
+    );
+  };
+
+  // Every command with a shortcut, and the shortcuts the user changed
+  // (Settings → Shortcuts, ⌘/). The palette and the key handler read this.
+  const appCommands: AppCommand[] = [
+    ...SECTIONS.map((x) => ({
+      id: `go:${x.id}`,
+      label: `Go to ${x.label}`,
+      group: "Sections",
+      keys: x.key,
+      whileTyping: true,
+      run: () => setSection(x.id),
+    })),
+    { id: "palette", label: "Command palette", group: "App", keys: "Mod+K", whileTyping: true, run: () => openPalette() },
+    { id: "settings", label: "Settings", group: "App", keys: "Mod+,", whileTyping: true, run: () => setSettingsPage("diffs") },
+    { id: "shortcuts", label: "Keyboard shortcuts", group: "App", keys: "Mod+/", whileTyping: true, run: () => setSettingsPage("shortcuts") },
+    // Not while typing: there ⌘Z undoes the typing.
+    { id: "undo", label: state?.undo ? `Undo: ${state.undo}` : "Undo", group: "App", keys: "Mod+Z", run: () => undo() },
+    {
+      id: "diff-layout",
+      label: getSettings().diffLayout === "split" ? "Show diffs unified" : "Show diffs side by side",
+      group: "App",
+      whileTyping: true,
+      run: () => setSettings({ diffLayout: getSettings().diffLayout === "split" ? "unified" : "split" }),
+    },
+    ...(shell ? repoCommands(shell) : []),
+  ];
+  const shortcuts = effective(appCommands, keymap);
+  const keyLabel = (id: string) => {
+    const k = shortcuts.get(id);
+    return k ? display(k, mac) : undefined;
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      const typing = (e.target as HTMLElement)?.closest?.("input, textarea, select");
-      const s = SECTIONS.find((x) => x.key === e.key);
-      if (e.key === ",") {
-        e.preventDefault();
-        setSettingsOpen(true);
-      } else if (e.key === "k" && repo) {
-        e.preventDefault();
-        api.branches().then(
-          (branches) => setPalette({ branches }),
-          () => setPalette({ branches: [] }),
-        );
-      } else if (s) {
-        e.preventDefault();
-        setSection(s.id);
-      } else if (e.key === "z" && !e.shiftKey && !typing) {
-        e.preventDefault();
-        undo();
-      }
+      const sc = shortcutOf(e, mac);
+      if (!sc) return;
+      const id = lookup(appCommands, keymap, sc);
+      const command = id ? appCommands.find((c) => c.id === id) : undefined;
+      if (!command) return;
+      const typing = (e.target as HTMLElement)?.closest?.("input, textarea, select, [contenteditable]");
+      if (typing && !command.whileTyping) return;
+      e.preventDefault();
+      command.run();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -295,25 +357,8 @@ export function App() {
 
   const commands = (branches: BranchInfo[]): Command[] => {
     if (!shell) return [];
-    const sync = (what: "fetch" | "pull" | "push") => () => shell.act(() => api.sync(what), { undo: what === "pull" });
     return [
-      ...SECTIONS.map((x) => ({ id: `go:${x.id}`, label: `Go to ${x.label}`, keys: `⌘${x.key}`, run: () => setSection(x.id) })),
-      { id: "fetch", label: "Fetch", hint: "all remotes", run: sync("fetch") },
-      { id: "pull", label: "Pull", hint: "with rebase", run: sync("pull") },
-      { id: "push", label: state?.upstream ? "Push" : "Publish branch", run: sync("push") },
-      {
-        id: "pr",
-        label: "Open pull request for this branch",
-        run: () => api.pullRequestUrl().then(api.openUrl).catch(fail),
-      },
-      { id: "stash", label: "Stash changes", run: () => shell.act(() => api.stash(null), { undo: false }) },
-      { id: "undo", label: state?.undo ? `Undo: ${state.undo}` : "Undo", keys: "⌘Z", run: undo },
-      { id: "settings", label: "Settings", keys: "⌘,", run: () => setSettingsOpen(true) },
-      {
-        id: "diff-layout",
-        label: getSettings().diffLayout === "split" ? "Show diffs unified" : "Show diffs side by side",
-        run: () => setSettings({ diffLayout: getSettings().diffLayout === "split" ? "unified" : "split" }),
-      },
+      ...appCommands.filter((c) => c.id !== "palette").map((c) => ({ id: c.id, label: c.label, hint: c.hint, keys: keyLabel(c.id), run: c.run })),
       ...branches
         .filter((b) => !b.current && !b.remote)
         .map((b) => ({
@@ -339,13 +384,26 @@ export function App() {
   const settingsPages: SettingsPage[] = [
     { id: "diffs", label: "Diffs", render: () => <DiffSettings /> },
     { id: "history", label: "History graph", render: () => <GraphOptionsPanel /> },
+    {
+      id: "shortcuts",
+      label: "Shortcuts",
+      render: () => (
+        <ShortcutsPage
+          commands={appCommands.map((c) => ({ id: c.id, label: c.id === "undo" ? "Undo" : c.label, group: c.group, keys: c.keys }))}
+          menu={(e, items) => {
+            e.preventDefault?.();
+            setMenu({ x: e.clientX, y: e.clientY, items });
+          }}
+        />
+      ),
+    },
   ];
 
   const overlays = (
     <>
       {menu && <MenuView spec={menu} onClose={() => setMenu(null)} />}
       {dialog && <DialogView spec={dialog} onClose={() => setDialog(null)} />}
-      {settingsOpen && <SettingsDialog pages={settingsPages} onClose={() => setSettingsOpen(false)} />}
+      {settingsPage && <SettingsDialog pages={settingsPages} initial={settingsPage} onClose={() => setSettingsPage(null)} />}
       {palette && <Palette commands={commands(palette.branches)} onClose={() => setPalette(null)} />}
       {credential && (
         <CredentialDialog
@@ -387,7 +445,7 @@ export function App() {
                 key={s.id}
                 className={`rail-item${section === s.id ? " active" : ""}`}
                 onClick={() => setSection(s.id)}
-                title={`${s.label} (⌘${s.key})`}
+                title={keyLabel(`go:${s.id}`) ? `${s.label} (${keyLabel(`go:${s.id}`)})` : s.label}
                 aria-label={s.label}
                 aria-current={section === s.id ? "page" : undefined}
               >
@@ -397,7 +455,7 @@ export function App() {
             );
           })}
           <span className="flex-1" />
-          <button className="rail-item" onClick={() => setSettingsOpen(true)} title="Settings (⌘,)" aria-label="Settings">
+          <button className="rail-item" onClick={() => setSettingsPage("diffs")} title={keyLabel("settings") ? `Settings (${keyLabel("settings")})` : "Settings"} aria-label="Settings">
             <Gear size={17} />
           </button>
         </nav>
