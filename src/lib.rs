@@ -1,8 +1,9 @@
-//! spor's frontend-agnostic core: git plumbing, lane layout, branch colors and
-//! remote-host (PR) integration. The terminal UI (`spor`) and the native app
-//! (`spor-app`, behind the `gui` feature) are both thin shells over this.
+//! spor's frontend-agnostic core: git plumbing, lane layout, branch colors,
+//! remote-host (PR) integration, GitHub, and agent tasks. The app in
+//! `desktop/` (Tauri) is a thin shell over this.
 
 pub mod agent;
+pub mod askpass;
 pub mod checkpoint;
 pub mod color;
 pub mod git;

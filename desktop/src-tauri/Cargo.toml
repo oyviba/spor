@@ -2,12 +2,12 @@
 name = "spor-desktop"
 version = "0.1.0"
 edition = "2021"
-description = "Prototype: spor's agent tasks in a Tauri app, over the same core as the terminal and GPUI builds"
+description = "Spor: a git client for working alongside coding agents, as a Tauri app over the spor core"
 license = "MIT OR Apache-2.0"
 publish = false
 
-# Its own workspace, so building the prototype never touches the root crate's
-# lockfile or its single-dependency terminal build.
+# Its own workspace, so the root crate stays a dependency-free library with
+# its own lockfile.
 [workspace]
 
 [lib]

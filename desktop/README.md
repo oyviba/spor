@@ -1,16 +1,15 @@
 # Spor desktop (Tauri)
 
-Spor's app as a web UI on Tauri, over the same Rust core (`spor::git`,
-`spor::graph`, `spor::github`, `spor::tasks`, `spor::agent`) that the
-terminal and GPUI builds use. It began as a trial of the Agents feature and
-now has six sections. Each is built from the same four pieces: a list
-in the sidebar, a page, a details card on the right, and a bar or composer
-at the bottom.
+Spor's app: a web UI on Tauri over the Rust core in the repository root
+(`spor::git`, `spor::graph`, `spor::github`, `spor::tasks`, `spor::agent`,
+`spor::askpass`). It has six sections, each built from the same four pieces:
+a list in the sidebar, a page, a details card on the right, and a bar or
+composer at the bottom.
 
 | Section | ⌘ | Sidebar | Page | Details card | Bottom |
 |---|---|---|---|---|---|
-| **Changes** | 1 | Conflicts, staged and unstaged files | The file's diff: click lines, shift-click to extend, then stage, unstage or discard them | Branch and upstream, Fetch / Pull / Push, stashes | Commit box (⌘↩), amend |
-| **History** | 2 | Search, branches (local, agent, remote) | The commit graph, and a commit's diff | The commit: message, parents, Branch here, Cherry-pick, Revert | |
+| **Changes** | 1 | Conflicts, staged and unstaged files | The file's diff: click lines, shift-click to extend, then stage, unstage or discard them | Branch and upstream, Fetch / Pull / Push, its PR, stashes (pop, apply, drop) | Commit box (⌘↩), amend |
+| **History** | 2 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more | The commit graph with PR badges, a commit's diff, and Rewrite (interactive rebase) | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
 | **Issues** | 3 | Assigned / Yours / Open / Closed | The issue and its comments | Labels, assignees, its agent task and PR, close or reopen | *Start agent task*: the issue as the prompt (editable), the base and the agent |
 | **Pull requests** | 4 | Review / Yours / Open / Closed | Conversation · Files · Checks | Branches, checks, conflicts, linked agent task, merge, check out, close | Comment / Approve, with line comments from Files |
 | **Actions** | 5 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | Run, commit, linked agent task, re-run, cancel | |
@@ -38,12 +37,19 @@ What one app makes possible:
   and branch go (⌘Z brings them back). PRs opened from a task's branch some
   other way are linked too.
 - **Stash and switch.** A switch that uncommitted changes would block says
-  so and offers to stash them, as the GPUI app does.
+  so and offers to stash them.
+- **Credentials.** Fetch, pull and push run git with this app as its
+  askpass helper (`spor::askpass`): a passphrase, password or new-host
+  question comes up as a dialog. The background fetch (every five minutes)
+  never asks; it just fails quietly without stored credentials.
+- **⌘K palette and recent repositories.** Commands, sections, branches and
+  recent repositories by typing; the repository name at the top of every
+  sidebar switches between recent ones. The first launch imports the
+  repository list of the old native (GPUI) app.
 
 The graph's lanes are laid out by `spor::graph::assign_lanes`, and the
-segments for each row are worked out in Rust (`src-tauri/src/history.rs`,
-mirroring `src/gui/graph.rs`). The UI only draws them as SVG, and only for
-the rows in view.
+segments for each row are worked out in Rust (`src-tauri/src/history.rs`).
+The UI only draws them as SVG, and only for the rows in view.
 
 ## Run it
 
@@ -68,8 +74,8 @@ finishes while you watch.
 
 - `pnpm test`: the transcript folding and summaries.
 - `e2e/run.mjs` (agent tasks), `e2e/setup.mjs` (setup scripts) and
-  `e2e/sections.mjs` (Changes, History, a conflicting merge, stashes, pull
-  requests and Actions) drive the real app through WebDriver and check the
+  `e2e/sections.mjs` (Changes, History, renaming and tagging, a conflicting
+  merge, stashes, pull requests and Actions) drive the real app through WebDriver and check the
   repository with git at every step. CI runs all three on Linux under Xvfb.
 
   They need no real agent or GitHub: `e2e/bin` has stand-ins. `claude` is a
@@ -93,32 +99,33 @@ finishes while you watch.
 
 ```
 src-tauri/src/
-  lib.rs        setup, repository state for the chrome, undo, open_url
+  lib.rs        setup, repository state for the chrome, undo, open_url, the askpass bridge
   undo.rs       the undo stack
-  history.rs    graph (lanes → segments), commits, branches, switch, merge, cherry-pick, revert
+  history.rs    graph (lanes → segments), commits, branches, tags, worktrees, switch, merge,
+                cherry-pick, revert, rebase, reset, rewrite, PR badges
   changes.rs    status, diffs, staging lines, discard, commit, sync, stashes, conflicts
   github.rs     issues, pull requests and Actions, through spor's gh wrappers
   agents.rs     agent tasks, and their pull requests
 src/
-  App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–6, ⌘Z
-  shared/       DiffView, details card, status pills, CI status, icons, hooks
+  App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–6, ⌘Z, ⌘K,
+                background fetch, credential prompts, recent repositories
+  shared/       DiffView, details card, menus and dialogs, palette, status pills, CI status, icons, hooks
   sections/     changes/ history/ issues/ pulls/ actions/ agents/
 ```
 
-`src-tauri` is its own Cargo workspace, so the root crate and its
-single-dependency terminal build don't change.
+`src-tauri` is its own Cargo workspace, so the root crate stays a
+dependency-free library.
 
 ## Not here yet
 
-From the GPUI app: interactive rebase, the theme editor, the keymap editor,
-workspaces (several repositories open), tags, commit search by path, blame,
-and the askpass bridge. Without that bridge, a fetch or push that needs a
-password fails with git's message instead of asking.
-
-From the agent issues: permission prompts and steering (#20). For now a
-follow-up typed while an agent works is queued and sent when the run ends.
+Left behind with the old native (GPUI) and terminal apps, each with its
+own issue: themes and a theme editor (#54), changing keyboard shortcuts
+(#55), named workspaces (#56; recent repositories meanwhile), blame (#57),
+the graph's column options (#58), side-by-side diffs (#59), dragging a
+branch onto another to merge it (#60), resolving conflicts one region at a
+time (#61), and a signed, notarized Mac app (#62).
 
 Polling, not events: the window polls the repository's state every 2 s
 (cheap: refs and the index's mtime) and each section reloads when that
-changes. A file watcher would be better. The rules for starting an agent
-are copied from `src/gui/agents.rs`; they belong in the core.
+changes. A file watcher would be better (#38). The rules for starting an
+agent live in `src-tauri/src/agents.rs`; they belong in the core (#39).

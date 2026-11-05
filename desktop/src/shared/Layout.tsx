@@ -5,10 +5,10 @@ import { useState } from "react";
 import { useShell } from "./app";
 import { Branch } from "./Icons";
 
-/** The top of every sidebar: the repository (click to open another) and
- * the section's own buttons. */
+/** The top of every sidebar: the repository (click to switch to a recent
+ * one or open another) and the section's own buttons. */
 export function SidebarHeader({ children }: { children?: React.ReactNode }) {
-  const { repo, state, openRepo } = useShell();
+  const { repo, state, openRepo, recent, forgetRepo, menu } = useShell();
   const [editing, setEditing] = useState(false);
   const branch = state?.branch ?? repo.branch;
   return (
@@ -32,7 +32,21 @@ export function SidebarHeader({ children }: { children?: React.ReactNode }) {
           />
         </form>
       ) : (
-        <button className="repo-button" onClick={() => setEditing(true)} title={`${repo.root} — click to open another`}>
+        <button
+          className="repo-button"
+          title={`${repo.root} — click to switch repository`}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            const others = recent.filter((x) => x !== repo.root);
+            menu({ clientX: r.left, clientY: r.bottom + 4 }, [
+              ...others.map((path) => ({ label: `${path.split("/").pop()} — ${path}`, run: () => openRepo(path) })),
+              { label: "Open another repository…", run: () => setEditing(true), separator: true },
+              ...(others.length > 0
+                ? [{ label: "Clear recent repositories", run: () => others.forEach(forgetRepo) }]
+                : []),
+            ]);
+          }}
+        >
           <span className="repo-name">{repo.name}</span>
           <span className="repo-branch">
             <Branch size={11} /> {branch ?? "detached HEAD"}

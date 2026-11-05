@@ -1,5 +1,5 @@
 //! Claude Code under the agent host (#20): questions, answers, steering and
-//! interrupts, through the real host (the `spor` binary) and a fake
+//! interrupts, through the real host (the `spor-agent-host` binary) and a fake
 //! `claude` that speaks stream-json both ways.
 //!
 //! Its own test binary: opting in to the host is process-wide.
@@ -37,14 +37,14 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
-/// The host is the `spor` binary; `claude` is a fake that reads stream-json
+/// The host is the `spor-agent-host` binary; `claude` is a fake that reads stream-json
 /// on stdin. What it does depends on the prompt: "ask" asks to run a
 /// command, "steer" waits for a second message, "interrupt" waits to be
 /// interrupted.
 fn setup() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        spor::host::set_program(PathBuf::from(env!("CARGO_BIN_EXE_spor")));
+        spor::host::set_program(PathBuf::from(env!("CARGO_BIN_EXE_spor-agent-host")));
         let bin = std::env::temp_dir().join(format!("spor-fake-stream-claude-{}", std::process::id()));
         std::fs::create_dir_all(&bin).unwrap();
         let script = r#"#!/bin/sh

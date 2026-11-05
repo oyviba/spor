@@ -2,55 +2,13 @@
 name = "spor"
 version = "0.1.0"
 edition = "2021"
-description = "A minimal git client with a GitKraken-inspired timeline, as a TUI and a native app"
+description = "The core of spor, a git client for working alongside coding agents: git plumbing, the commit graph, GitHub and agent tasks"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/oyviba/spor"
-keywords = ["git", "tui", "gui", "terminal", "timeline"]
-categories = ["command-line-utilities", "development-tools"]
-default-run = "spor"
+keywords = ["git", "github", "agents", "timeline"]
+categories = ["development-tools"]
 
-[[bin]]
-name = "spor"
-path = "src/main.rs"
-
-# Native desktop app (macOS .app, also runs on Linux/Windows). Opt-in so the
-# terminal build keeps its single dependency:
-#   cargo run --features gui --bin spor-app
-[[bin]]
-name = "spor-app"
-path = "src/gui/main.rs"
-required-features = ["gui"]
-
-[features]
-gui = ["dep:gpui-kit", "dep:serde_json"]
-# The app's headless UI tests (`cargo test --features ui-tests`): GPUI's test
-# windows, which the app build itself doesn't need. This turns on GPUI's
-# `test-support` directly rather than GPUI Kit's, which would also pull the
-# optional `gpui-fast` backend into Cargo.lock, whose pins conflict with ours.
-ui-tests = ["gui", "dep:gpui-pre"]
-
+# The app is in desktop/ (Tauri), its own Cargo workspace over this crate.
+# This crate has no dependencies: it runs `git` and `gh`, and reads their
+# output itself.
 [dependencies]
-crossterm = "0.27"
-gpui-kit = { version = "0.7.3", optional = true, features = [
-    "tree-sitter-rust",
-    "tree-sitter-toml",
-    "tree-sitter-markdown",
-    "tree-sitter-javascript",
-    "tree-sitter-typescript",
-    "tree-sitter-python",
-    "tree-sitter-go",
-    "tree-sitter-yaml",
-    "tree-sitter-bash",
-    "tree-sitter-css",
-    "tree-sitter-html",
-] }
-# The GPUI that GPUI Kit is built on (same pinned version), only for its test
-# support; see the `ui-tests` feature.
-gpui-pre = { version = "=0.3.9", optional = true, features = ["test-support"] }
-# Already in the app's dependency tree via GPUI; used to patch theme files.
-serde_json = { version = "1", optional = true }
-
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true

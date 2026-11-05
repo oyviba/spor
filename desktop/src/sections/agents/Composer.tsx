@@ -82,7 +82,7 @@ export interface ComposerHandle {
   focus: () => void;
 }
 
-/** "Comments on the changes:" as the GPUI app sends them. */
+/** "Comments on the changes:", as the agent is sent them. */
 export function withComments(text: string, comments: LineComment[]): string {
   if (comments.length === 0) return text.trim();
   const notes = comments

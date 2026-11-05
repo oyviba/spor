@@ -92,7 +92,7 @@ pub struct Permissions {
 }
 
 impl Permissions {
-    /// Edits only, or edits and commands: the GPUI app's checkbox.
+    /// Edits only, or edits and commands (a yes/no switch).
     pub fn commands(allowed: bool) -> Self {
         Self {
             mode: if allowed {

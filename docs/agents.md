@@ -220,8 +220,8 @@ Each phase is useful on its own.
   less detail. Codex and others could get adapters later.
 - **Headless or a terminal.** Phase 2 is headless (structured output and
   logs). Some people want to watch the agent's own terminal UI. That needs
-  a terminal emulator in GPUI (Zed embeds one built on
-  `alacritty_terminal`), which is a project of its own.
+  a terminal emulator in the app (xterm.js in the web view, over a pty in
+  the backend), which is a project of its own.
 - **Squash or merge by default** when landing. Squash keeps main readable
   and puts the trailer in one place. Merge keeps the agent's individual
   commits.

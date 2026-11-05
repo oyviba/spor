@@ -1,6 +1,6 @@
 //! Agent tasks: a prompt with its own branch and folder (`spor::tasks`),
-//! and the agents that work on it (`spor::agent`). The rules for picking the
-//! agent and wrapping follow-ups match the GPUI app's `src/gui/agents.rs`.
+//! and the agents that work on it (`spor::agent`), including the rules for
+//! picking the agent and wrapping follow-ups.
 
 use crate::undo::Undo;
 use crate::{first_line, App};

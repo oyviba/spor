@@ -2,20 +2,19 @@
 //! commit or a branch from the graph.
 //!
 //! The lanes come from `spor::graph::assign_lanes`. What to draw in each row
-//! is worked out here, mirroring the GPUI painter (`src/gui/graph.rs`), so
-//! the web side only maps segments to SVG paths and never sees the lane
-//! bookkeeping. Rows are compact: colors are indices into one palette.
+//! is worked out here, so the web side only maps segments to SVG paths and
+//! never sees the lane bookkeeping. Rows are compact: colors are indices into one palette.
 
 use crate::undo::Undo;
 use crate::{first_line, App};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use spor::color::color_for;
-use spor::git::{Outcome, Repo, ResetMode};
+use spor::git::{Outcome, RebaseStep, Repo, ResetMode};
 use spor::graph::{assign_lanes, GraphRow};
 use std::collections::{HashMap, HashSet};
 use tauri::State;
 
-/// More lanes than this are folded into the last one, as in the GPUI app.
+/// More lanes than this are folded into the last one.
 const MAX_LANES: usize = 12;
 
 /// How one lane is drawn in one row. The UI knows the shapes:
@@ -198,7 +197,21 @@ fn shapes(row: &GraphRow, lane: usize, add: &mut impl FnMut(Shape, bool)) {
 
 #[tauri::command(async)]
 pub(crate) fn search_commits(app: State<App>, query: String) -> Result<Vec<String>, String> {
-    app.repo()?.search_commits(query.trim(), 500)
+    let repo = app.repo()?;
+    let query = query.trim();
+    // `path:src/main.rs` — the commits that touched a file (following renames).
+    if let Some(path) = query.strip_prefix("path:") {
+        let path = path.trim();
+        if path.is_empty() {
+            return Ok(Vec::new());
+        }
+        return Ok(repo
+            .file_log(path, 2000)?
+            .into_iter()
+            .map(|c| c.hash)
+            .collect());
+    }
+    repo.search_commits(query, 500)
 }
 
 #[derive(Serialize)]
@@ -255,7 +268,7 @@ pub(crate) fn branches(app: State<App>) -> Result<Vec<BranchInfo>, String> {
 }
 
 /// What a switch says when uncommitted changes are in the way. The UI
-/// offers to stash them and try again (the GPUI app's "Stash and Switch").
+/// offers to stash them and try again ("Stash and switch").
 const BLOCKED: &str = "BLOCKED: ";
 
 /// Switch with `switch`, stashing uncommitted changes first when `stash`.
@@ -412,4 +425,406 @@ pub(crate) fn merge_branch(app: State<App>, branch: String) -> Result<String, St
     moving(&app, &repo, format!("Merge {branch} into {into}"), || {
         repo.merge(&branch)
     })
+}
+
+#[tauri::command(async)]
+pub(crate) fn rename_branch(app: State<App>, old: String, new: String) -> Result<String, String> {
+    let repo = app.repo()?;
+    let new = new.trim().to_string();
+    if !repo.valid_branch_name(&new) {
+        return Err(format!("“{new}” isn't a valid branch name"));
+    }
+    repo.rename_branch(&old, &new).map_err(|e| first_line(&e))?;
+    app.undo.push(
+        format!("Rename {old} to {new}"),
+        Undo::Renamed {
+            old: old.clone(),
+            new: new.clone(),
+        },
+    );
+    Ok(format!("Renamed {old} to {new}"))
+}
+
+/// Delete a branch on its remote: `origin/feat/x` removes `feat/x` from
+/// `origin`. Can't be undone from here, so the UI asks first.
+#[tauri::command(async)]
+pub(crate) fn delete_remote_branch(app: State<App>, name: String) -> Result<String, String> {
+    let repo = app.repo()?;
+    let remotes = repo.remotes();
+    let (remote, branch) = remotes
+        .iter()
+        .find_map(|r| {
+            name.strip_prefix(&format!("{r}/"))
+                .map(|b| (r.clone(), b.to_string()))
+        })
+        .ok_or_else(|| format!("{name} isn't a remote branch"))?;
+    spor::askpass::git_network(repo.root(), &["push", &remote, "--delete", &branch])?;
+    Ok(format!("Deleted {branch} from {remote}"))
+}
+
+/// Rebase the checked-out branch onto `onto` (a branch or a commit).
+#[tauri::command(async)]
+pub(crate) fn rebase_onto(app: State<App>, onto: String) -> Result<String, String> {
+    let repo = app.repo()?;
+    let branch = repo.tracking()?.branch.unwrap_or_else(|| "HEAD".into());
+    let label = format!("Rebase {branch} onto {}", short_ref(&onto));
+    moving(&app, &repo, label, || repo.rebase(&onto))
+}
+
+/// Move the checked-out branch to `hash`. `soft` keeps the changes staged,
+/// `mixed` in the files, `hard` throws them away (the UI asks first).
+#[tauri::command(async)]
+pub(crate) fn reset_to(app: State<App>, hash: String, mode: String) -> Result<String, String> {
+    let repo = app.repo()?;
+    let (mode, how) = match mode.as_str() {
+        "soft" => (ResetMode::Soft, "keeping the changes staged"),
+        "mixed" => (ResetMode::Mixed, "keeping the changes in the files"),
+        "hard" => (ResetMode::Hard, "discarding the changes"),
+        other => return Err(format!("Unknown reset mode {other}")),
+    };
+    let branch = repo.tracking()?.branch;
+    let before = repo.head_sha()?;
+    repo.reset(&hash, mode).map_err(|e| first_line(&e))?;
+    let after = repo.head_sha()?;
+    let short = short_ref(&hash);
+    if before != after {
+        // Back to where it was: the commits return; with soft and mixed
+        // the changes they'd held are still in the index or the files.
+        app.undo.push(
+            format!("Reset to {short}"),
+            Undo::Moved {
+                branch: branch.clone(),
+                before,
+                after,
+                mode: if mode == ResetMode::Hard {
+                    ResetMode::Keep
+                } else {
+                    ResetMode::Soft
+                },
+            },
+        );
+    }
+    Ok(format!(
+        "Reset {} to {short}, {how}",
+        branch.as_deref().unwrap_or("HEAD")
+    ))
+}
+
+/// Look at a commit without a branch (a detached HEAD).
+#[tauri::command(async)]
+pub(crate) fn checkout_commit(
+    app: State<App>,
+    hash: String,
+    stash: bool,
+) -> Result<String, String> {
+    let repo = app.repo()?;
+    let short = short_ref(&hash);
+    switching(&app, &repo, &short, stash, None, || {
+        repo.checkout_detached(&hash)
+    })
+}
+
+#[derive(Serialize)]
+pub(crate) struct TagInfo {
+    name: String,
+    /// The commit it's on.
+    hash: String,
+}
+
+#[tauri::command(async)]
+pub(crate) fn tags(app: State<App>) -> Result<Vec<TagInfo>, String> {
+    let repo = app.repo()?;
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo.root())
+        .args([
+            "for-each-ref",
+            "--sort=-creatordate",
+            "--format=%(refname:short)%09%(*objectname)%09%(objectname)",
+            "refs/tags",
+        ])
+        .output()
+        .map_err(|e| format!("Couldn't run git: {e}"))?;
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.split('\t');
+            let name = it.next()?.to_string();
+            let peeled = it.next().unwrap_or("");
+            let own = it.next().unwrap_or("");
+            let hash = if peeled.is_empty() { own } else { peeled };
+            Some(TagInfo {
+                name,
+                hash: hash.to_string(),
+            })
+        })
+        .collect())
+}
+
+#[tauri::command(async)]
+pub(crate) fn create_tag(
+    app: State<App>,
+    name: String,
+    hash: String,
+    message: Option<String>,
+) -> Result<String, String> {
+    let repo = app.repo()?;
+    let name = name.trim().to_string();
+    if name.is_empty() || name.contains(char::is_whitespace) {
+        return Err(format!("“{name}” isn't a valid tag name"));
+    }
+    repo.create_tag(&name, &hash, message.as_deref())
+        .map_err(|e| first_line(&e))?;
+    app.undo.push(
+        format!("Tag {name}"),
+        Undo::TagCreated { name: name.clone() },
+    );
+    Ok(format!("Tagged {} as {name}", short_ref(&hash)))
+}
+
+#[tauri::command(async)]
+pub(crate) fn delete_tag(app: State<App>, name: String) -> Result<String, String> {
+    let repo = app.repo()?;
+    let target = repo.tag_target(&name).map_err(|e| first_line(&e))?;
+    repo.delete_tag(&name).map_err(|e| first_line(&e))?;
+    app.undo.push(
+        format!("Delete tag {name}"),
+        Undo::TagDeleted {
+            name: name.clone(),
+            target,
+        },
+    );
+    Ok(format!("Deleted tag {name}"))
+}
+
+/// Push a tag to the default remote, or delete it there.
+#[tauri::command(async)]
+pub(crate) fn push_tag(app: State<App>, name: String, delete: bool) -> Result<String, String> {
+    let repo = app.repo()?;
+    let remote = repo
+        .remotes()
+        .into_iter()
+        .next()
+        .ok_or("This repository has no remote")?;
+    let refspec = format!("refs/tags/{name}");
+    if delete {
+        spor::askpass::git_network(repo.root(), &["push", &remote, "--delete", &refspec])?;
+        Ok(format!("Deleted tag {name} from {remote}"))
+    } else {
+        spor::askpass::git_network(repo.root(), &["push", &remote, &refspec])?;
+        Ok(format!("Pushed tag {name} to {remote}"))
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct WorktreeInfo {
+    path: String,
+    branch: Option<String>,
+    head: String,
+    main: bool,
+    /// The one this window has open.
+    current: bool,
+    prunable: bool,
+    /// An agent task's folder: removed by landing or discarding the task.
+    agent: bool,
+}
+
+#[tauri::command(async)]
+pub(crate) fn worktrees(app: State<App>) -> Result<Vec<WorktreeInfo>, String> {
+    let repo = app.repo()?;
+    let here = std::fs::canonicalize(repo.root()).unwrap_or_else(|_| repo.root().to_path_buf());
+    Ok(repo
+        .worktrees()?
+        .into_iter()
+        .map(|w| {
+            let canon = std::fs::canonicalize(&w.path).unwrap_or_else(|_| w.path.clone());
+            WorktreeInfo {
+                current: canon == here,
+                agent: w.branch.as_deref().is_some_and(|b| b.starts_with("agent/")),
+                path: w.path.display().to_string(),
+                branch: w.branch,
+                head: w.head,
+                main: w.is_main,
+                prunable: w.prunable,
+            }
+        })
+        .collect())
+}
+
+/// Remove a linked worktree. git refuses one with uncommitted changes.
+#[tauri::command(async)]
+pub(crate) fn remove_worktree(app: State<App>, path: String) -> Result<String, String> {
+    let repo = app.repo()?;
+    repo.remove_worktree(std::path::Path::new(&path), false)
+        .map_err(|e| first_line(&e))?;
+    Ok(format!("Removed the worktree at {path}"))
+}
+
+#[derive(Serialize)]
+pub(crate) struct PlanCommit {
+    hash: String,
+    short: String,
+    subject: String,
+    /// The whole message, to start a reword from.
+    message: String,
+    author: String,
+    time: i64,
+}
+
+/// The commits an interactive rebase from `base` would rewrite, oldest
+/// first. Refuses history with merges, which a linear plan would flatten.
+#[tauri::command(async)]
+pub(crate) fn rewrite_plan(app: State<App>, base: String) -> Result<Vec<PlanCommit>, String> {
+    let repo = app.repo()?;
+    if repo.tracking()?.branch.is_none() {
+        return Err("Switch to a branch first".into());
+    }
+    if !repo.is_ancestor(&base, "HEAD") {
+        return Err(format!(
+            "{} isn't on the checked-out branch",
+            short_ref(&base)
+        ));
+    }
+    if repo.has_merges_since(&base) {
+        return Err("There are merges after that commit — rewriting would flatten them".into());
+    }
+    repo.commits_since(&base)?
+        .into_iter()
+        .map(|c| {
+            let message = repo
+                .commit_details(&c.hash)
+                .map(|d| d.message)
+                .unwrap_or_else(|_| c.subject.clone());
+            Ok(PlanCommit {
+                hash: c.hash,
+                short: c.short,
+                subject: c.subject,
+                message,
+                author: c.author,
+                time: c.timestamp,
+            })
+        })
+        .collect()
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PlanStep {
+    hash: String,
+    /// pick, reword, squash, fixup or drop.
+    action: String,
+    message: Option<String>,
+}
+
+/// Rewrite the commits after `base` following `plan`, oldest first.
+#[tauri::command(async)]
+pub(crate) fn rewrite(
+    app: State<App>,
+    base: String,
+    plan: Vec<PlanStep>,
+) -> Result<String, String> {
+    let repo = app.repo()?;
+    let mut kept = 0;
+    let steps = plan
+        .into_iter()
+        .map(|s| {
+            if s.action != "drop" {
+                kept += 1;
+            }
+            Ok(match s.action.as_str() {
+                "pick" => RebaseStep::Pick(s.hash),
+                "reword" => RebaseStep::Reword(
+                    s.hash,
+                    s.message
+                        .filter(|m| !m.trim().is_empty())
+                        .ok_or("A reworded commit needs a message")?,
+                ),
+                "squash" => RebaseStep::Squash(s.hash),
+                "fixup" => RebaseStep::Fixup(s.hash),
+                "drop" => RebaseStep::Drop(s.hash),
+                other => return Err(format!("Unknown step {other}")),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if let Some(RebaseStep::Squash(_) | RebaseStep::Fixup(_)) =
+        steps.iter().find(|s| !matches!(s, RebaseStep::Drop(_)))
+    {
+        return Err(
+            "The first commit can't be squashed — there's nothing before it to fold into".into(),
+        );
+    }
+    let label = format!("Rewrite history after {}", short_ref(&base));
+    moving(&app, &repo, label, || {
+        repo.rebase_interactive(&base, &steps)
+    })?;
+    Ok(format!(
+        "Rewrote history: {kept} {} after {}",
+        if kept == 1 { "commit" } else { "commits" },
+        short_ref(&base)
+    ))
+}
+
+/// Open pull requests by branch, for the badges on the graph's labels.
+/// Empty where `gh` isn't there or the remote isn't GitHub.
+#[derive(Serialize)]
+pub(crate) struct PrBadge {
+    branch: String,
+    number: u64,
+    draft: bool,
+    /// none, approved, changesrequested.
+    review: String,
+    /// none, pending, passing, failing.
+    checks: String,
+}
+
+#[tauri::command(async)]
+pub(crate) fn pr_badges(app: State<App>) -> Result<Vec<PrBadge>, String> {
+    let repo = app.repo()?;
+    Ok(spor::remote::fetch_prs_in(repo.root())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| PrBadge {
+            branch: p.head_branch,
+            number: p.number,
+            draft: p.draft,
+            review: crate::name_of(&p.review),
+            checks: crate::name_of(&p.checks),
+        })
+        .collect())
+}
+
+/// The checked-out branch's pull request page, or the host's page to open
+/// one. Needs the branch published.
+#[tauri::command(async)]
+pub(crate) fn pull_request_url(app: State<App>) -> Result<String, String> {
+    let repo = app.repo()?;
+    let tracking = repo.tracking()?;
+    let head = tracking.branch.ok_or("Switch to a branch first")?;
+    let info =
+        spor::remote::detect_in(repo.root()).ok_or("Couldn't tell where origin is hosted")?;
+    let base = repo.default_base_branch().unwrap_or_else(|| "main".into());
+    if base == head {
+        return Err(format!(
+            "You're on {base} — switch to a feature branch first"
+        ));
+    }
+    if tracking.upstream.is_none() {
+        return Err("Publish this branch first (Push)".into());
+    }
+    let existing = spor::remote::fetch_prs_in(repo.root())
+        .unwrap_or_default()
+        .into_iter()
+        .find(|p| p.head_branch == head);
+    Ok(match existing {
+        Some(pr) => format!("{}/pull/{}", info.web_url, pr.number),
+        None => spor::remote::compare_url(&info, &base, &head),
+    })
+}
+
+/// A hash shortened, a ref name left alone.
+fn short_ref(r: &str) -> String {
+    if r.len() >= 12 && r.chars().all(|c| c.is_ascii_hexdigit()) {
+        r[..7].to_string()
+    } else {
+        r.to_string()
+    }
 }

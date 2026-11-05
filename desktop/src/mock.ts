@@ -721,6 +721,65 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       return args.action === "cancel" ? "Cancelling the run" : "Re-running";
     case "job_log":
       return f.jobLogs[args.id as number] ?? [];
+    case "askpass_pending":
+      return null;
+    case "askpass_answer":
+    case "auto_fetch":
+      return null;
+    case "legacy_repos":
+      return [];
+    case "tags":
+      return f.tags ?? [];
+    case "worktrees":
+      return [{ path: f.repo.root, branch: f.repo.branch, head: "", main: true, current: true, prunable: false, agent: false }];
+    case "pr_badges":
+      return (f.pulls?.open ?? []).map((p: { number: number; head: string; review: string; checks: string; state: string }) => ({
+        branch: p.head,
+        number: p.number,
+        draft: p.state === "draft",
+        review: p.review,
+        checks: p.checks,
+      }));
+    case "pull_request_url":
+      return `https://github.com/you/${f.repo.name}/compare`;
+    case "rename_branch":
+      return done(`Rename ${args.old} to ${args.new}`, `Renamed ${args.old} to ${args.new}`);
+    case "delete_remote_branch":
+      return `Deleted ${args.name} from the remote`;
+    case "rebase_onto":
+      return done(`Rebase onto ${String(args.onto).slice(0, 7)}`);
+    case "reset_to":
+      return done(`Reset to ${String(args.hash).slice(0, 7)}`, `Reset to ${String(args.hash).slice(0, 7)} (${args.mode})`);
+    case "checkout_commit":
+      return done(`Switch to ${String(args.hash).slice(0, 7)}`, `Switched to ${String(args.hash).slice(0, 7)}`);
+    case "create_tag":
+      f.tags = [{ name: args.name, hash: args.hash }, ...(f.tags ?? [])];
+      return done(`Tag ${args.name}`, `Tagged ${String(args.hash).slice(0, 7)} as ${args.name}`);
+    case "delete_tag":
+      f.tags = (f.tags ?? []).filter((t: { name: string }) => t.name !== args.name);
+      return done(`Delete tag ${args.name}`, `Deleted tag ${args.name}`);
+    case "push_tag":
+      return args.delete ? `Deleted tag ${args.name} from origin` : `Pushed tag ${args.name} to origin`;
+    case "remove_worktree":
+      return `Removed the worktree at ${args.path}`;
+    case "rewrite_plan": {
+      const rows = f.graph.rows as { hash: string; short: string; subject: string; author: string; time: number }[];
+      const i = rows.findIndex((r) => r.hash === args.base);
+      if (i <= 0) return [];
+      return rows
+        .slice(0, i)
+        .reverse()
+        .map((r) => ({ hash: r.hash, short: r.short, subject: r.subject, message: r.subject, author: r.author, time: r.time }));
+    }
+    case "rewrite":
+      return done(`Rewrite history after ${String(args.base).slice(0, 7)}`, "Rewrote history");
+    case "stash_apply":
+      return "Applied the stash — it's still in the list";
+    case "stash_drop":
+      f.stashes = (f.stashes as { index: number }[]).filter((x) => x.index !== args.index);
+      return done("Drop stash", "Dropped the stash");
+    case "skip_operation":
+      return "Skipped that commit";
     default:
       return undefined;
   }

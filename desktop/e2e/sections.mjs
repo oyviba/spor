@@ -18,9 +18,28 @@ const ghState = () => JSON.parse(readFileSync(process.env.FAKE_GH_STATE, "utf8")
 const git = gitIn(repo);
 const w = await open(app, out);
 
-const section = async (n, ready) => {
-  await w.js(`document.querySelectorAll(".rail-item")[arguments[0]].click()`, n);
+// Sections by their rail label, so adding one doesn't shift the rest.
+const section = async (label, ready) => {
+  await w.js(`document.querySelector(\`.rail-item[aria-label="\${arguments[0]}"]\`).click()`, label);
   await w.waitFor(ready);
+};
+// Right-click the first element matching `css` whose text has `text`.
+const rightClick = (css, text) =>
+  w.js(
+    `const el = [...document.querySelectorAll(arguments[0])].find(e => e.textContent.includes(arguments[1]));
+     const r = el.getBoundingClientRect();
+     el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 10 }));`,
+    css,
+    text,
+  );
+const menuPick = async (text) => {
+  await w.waitFor(".menu.floating");
+  await w.clickText(".menu.floating button", text);
+};
+const answer = async (text) => {
+  await w.waitFor(".dialog input");
+  await w.fill(".dialog input", text);
+  await w.js(`document.querySelector(".dialog").requestSubmit()`);
 };
 const undoKey = () => w.js(`document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }))`);
 // Dismiss toasts the way a person would (removing them from the DOM would
@@ -72,7 +91,7 @@ try {
 
   console.log("History");
   await toastGone();
-  await section(1, ".graph-row");
+  await section("History", ".graph-row");
   const total = Number(git("rev-list", "--all", "--count"));
   const shown = await w.until(`const t = document.querySelector(".task-title .small-text")?.textContent; return t && t.match(/[\\d,]+/)[0]`, "the commit count");
   check(Number(shown.replace(/,/g, "")) === total, `shows all ${total} commits`);
@@ -108,17 +127,48 @@ try {
   await undoKey();
   await sleep(1200);
   check(git("rev-parse", "--abbrev-ref", "HEAD") === "main" && !git("branch", "--list", "try/farewell"), "⌘Z twice: back on main, branch gone");
-  await section(0, ".stash-row");
+  await section("Changes", ".stash-row");
   await w.clickText(".stash-row .link", "Pop");
   await w.until(`return document.querySelectorAll(".file-row").length === 3`, "the stash popped");
   check(git("stash", "list") === "" && git("status", "--porcelain").includes("NOTES.md"), "Pop brings the stashed work back");
+
+  console.log("Branches and tags");
+  await toastGone();
+  await section("History", ".graph-row");
+  await rightClick(".branch-row", "feat/farewell");
+  await menuPick("Rename");
+  await answer("feat/goodbye");
+  await w.until(`return [...document.querySelectorAll(".branch-name")].some(b => b.textContent.includes("feat/goodbye"))`, "the rename");
+  check(git("branch", "--list", "feat/goodbye") !== "" && git("branch", "--list", "feat/farewell") === "", "Rename renames the branch");
+  await toastGone();
+  await undoKey();
+  await w.until(`return [...document.querySelectorAll(".branch-name")].some(b => b.textContent.includes("feat/farewell"))`, "the rename undone");
+  check(git("branch", "--list", "feat/farewell") !== "", "⌘Z renames it back");
+  const tip = git("rev-parse", "HEAD");
+  await w.js(
+    `const row = document.querySelector(\`.graph-row[data-hash="\${arguments[0]}"]\`); const r = row.getBoundingClientRect();
+     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 40, clientY: r.top + 10 }));`,
+    tip,
+  );
+  await menuPick("Tag here");
+  await answer("v0.1.0");
+  await w.until(`return document.querySelector(".toast")?.innerText.includes("v0.1.0")`, "the tag");
+  check(git("rev-parse", "v0.1.0^{commit}") === tip, "Tag here tags the commit");
+  await w.until(`return [...document.querySelectorAll(".graph-row .ref.tag")].some(r => r.textContent.includes("v0.1.0"))`, "the tag label");
+  check(true, "…and the graph shows it");
+  await w.shot("history-3-tagged");
+  await toastGone();
+  await undoKey();
+  await sleep(1200);
+  check(git("tag", "--list", "v0.1.0") === "", "⌘Z deletes the tag again");
+  await section("Changes", ".inspector");
 
   console.log("A merge that conflicts");
   await toastGone();
   await w.clickText(".inspector .link", "Stash changes");
   await w.until(`return document.querySelectorAll(".stash-row").length === 1`, "the stash");
   check(git("status", "--porcelain") === "", "stash clears the working tree");
-  await section(1, ".graph-row");
+  await section("History", ".graph-row");
   await w.js(`[...document.querySelectorAll(".branch-row")].find(r => r.textContent.includes("fix/readme-install")).querySelector("[title^='Merge']").click()`);
   await w.waitFor(".op-banner.bad");
   check((await w.text(".op-banner")).includes("Merge stopped on conflicts in 1 file"), "the banner says the merge stopped");
@@ -153,7 +203,7 @@ try {
 
   console.log("Pull requests");
   await toastGone();
-  await section(2, ".task-row");
+  await section("Pull requests", ".task-row");
   check((await w.count(".task-row")) === 3, "lists the three open pull requests");
   await w.clickText(".task-row", "#12");
   await w.waitFor(".timeline");
@@ -174,7 +224,7 @@ try {
   await w.waitFor(".log-section.failed");
   check((await w.text(".job-tab.active")).includes("test"), "Open in Actions lands on the failed job");
   check((await w.text(".log-section.failed")).includes("AssertionError"), "with the failing step open");
-  await section(2, ".task-row");
+  await section("Pull requests", ".task-row");
   await w.clickText(".task-row", "#11");
   await w.until(`return document.querySelector(".task-header")?.innerText.includes("#11")`, "#11");
   await w.click(".inspector .split .primary");
@@ -186,7 +236,7 @@ try {
 
   console.log("Actions");
   await toastGone();
-  await section(3, ".task-row");
+  await section("Actions", ".task-row");
   await w.clickText(".task-row", "CI #88");
   await w.waitFor(".log-section.failed");
   await w.shot("actions-1-failed");
@@ -200,7 +250,7 @@ try {
   check(meta.includes("CI failed") && meta.includes("AssertionError"), "the agent gets the failing log");
   await w.shot("actions-2-sent");
   // Back to the run: a re-run makes it live again, and the card follows.
-  await section(3, ".task-row");
+  await section("Actions", ".task-row");
   await w.clickText(".task-row", "CI #88");
   await w.waitFor(".log-section.failed");
   await w.clickText(".inspector button", "Re-run failed");

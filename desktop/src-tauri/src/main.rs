@@ -7,5 +7,8 @@ fn main() {
     if args.get(1).map(String::as_str) == Some(spor::host::ARG) {
         std::process::exit(spor::host::main(&args[2..]));
     }
+    // Started by git or ssh to ask for a passphrase or password: hand the
+    // prompt to the running app and print its answer (see spor::askpass).
+    spor::askpass::run_helper_if_invoked();
     spor_desktop_lib::run()
 }

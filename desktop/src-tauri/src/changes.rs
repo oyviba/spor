@@ -7,7 +7,6 @@ use crate::{first_line, name_of, App};
 use serde::{Deserialize, Serialize};
 use spor::git::{ConflictSide, DiffKind, LineAction, Outcome, ResetMode};
 use spor::patch::{LinePos, Side};
-use std::process::Command;
 use tauri::State;
 
 #[derive(Serialize)]
@@ -181,8 +180,9 @@ pub(crate) fn last_message(app: State<App>) -> Result<String, String> {
     app.repo()?.head_message()
 }
 
-/// Fetch, pull (rebasing) or push. Git never prompts: a remote that needs a
-/// password it can't get from a helper fails with git's own message.
+/// Fetch, pull (rebasing) or push. A passphrase or password git or ssh asks
+/// for comes up in the app (the askpass bridge); where it can't, git fails
+/// with its own message instead of hanging.
 #[tauri::command(async)]
 pub(crate) fn sync(app: State<App>, action: String) -> Result<String, String> {
     let repo = app.repo()?;
@@ -192,39 +192,55 @@ pub(crate) fn sync(app: State<App>, action: String) -> Result<String, String> {
         "push" => repo.push_args()?,
         other => return Err(format!("Unknown sync action {other}")),
     };
-    let branch = repo.tracking()?.branch;
+    let tracking = repo.tracking()?;
+    let branch = tracking.branch.clone();
     let before = repo.head_sha().ok();
-    let out = Command::new("git")
-        .current_dir(repo.root())
-        .args(&args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("Couldn't run git: {e}"))?;
-    if !out.status.success() {
-        return Err(first_line(&String::from_utf8_lossy(&out.stderr)));
-    }
-    if action == "pull" {
-        if let (Some(before), Ok(after)) = (before, repo.head_sha()) {
-            if before != after {
-                app.undo.push(
-                    "Pull",
-                    Undo::Moved {
-                        branch,
-                        before,
-                        after,
-                        mode: ResetMode::Keep,
-                    },
-                );
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    spor::askpass::git_network(repo.root(), &args)?;
+    match action.as_str() {
+        "pull" => {
+            if let (Some(before), Ok(after)) = (before, repo.head_sha()) {
+                if before != after {
+                    app.undo.push(
+                        "Pull",
+                        Undo::Moved {
+                            branch,
+                            before,
+                            after,
+                            mode: ResetMode::Keep,
+                        },
+                    );
+                }
             }
+            Ok(match tracking.behind {
+                0 => "Pulled".into(),
+                1 => "Pulled 1 commit".into(),
+                n => format!("Pulled {n} commits"),
+            })
         }
+        "push" => {
+            app.undo.forget_history();
+            Ok(match (&tracking.upstream, tracking.ahead) {
+                (None, _) => format!("Published {}", branch.as_deref().unwrap_or("the branch")),
+                (_, 1) => "Pushed 1 commit".into(),
+                (_, 0) => "Pushed".into(),
+                (_, n) => format!("Pushed {n} commits"),
+            })
+        }
+        _ => Ok("Fetched".into()),
     }
-    Ok(match action.as_str() {
-        "fetch" => "Fetched".into(),
-        "pull" => "Pulled".into(),
-        _ => "Pushed".into(),
-    })
+}
+
+/// The background fetch: never asks for anything, and says nothing when it
+/// can't (no network, no stored credentials). The window's state poll sees
+/// what it brought in.
+#[tauri::command(async)]
+pub(crate) fn auto_fetch(app: State<App>) -> Result<(), String> {
+    let repo = app.repo()?;
+    if repo.remotes().is_empty() {
+        return Ok(());
+    }
+    spor::askpass::git_network_quiet(repo.root(), &["fetch", "--all", "--prune"]).map(|_| ())
 }
 
 #[derive(Serialize)]
@@ -279,6 +295,27 @@ pub(crate) fn stash_pop(app: State<App>, index: usize) -> Result<String, String>
     Ok("Applied and dropped the stash".into())
 }
 
+/// Apply a stash and keep it.
+#[tauri::command(async)]
+pub(crate) fn stash_apply(app: State<App>, index: usize) -> Result<String, String> {
+    app.repo()?
+        .stash_apply_at(index)
+        .map_err(|e| first_line(&e))?;
+    Ok("Applied the stash — it's still in the list".into())
+}
+
+/// Drop a stash (⌘Z stores it again).
+#[tauri::command(async)]
+pub(crate) fn stash_drop(app: State<App>, index: usize) -> Result<String, String> {
+    let stash = app
+        .repo()?
+        .stash_drop_at(index)
+        .map_err(|e| first_line(&e))?;
+    let label = format!("Drop stash “{}”", stash.message);
+    app.undo.push(label, Undo::StashDropped(stash));
+    Ok("Dropped the stash".into())
+}
+
 /// Settle one conflicted file: take our side, theirs, or mark it resolved
 /// as it is in the working tree (after editing it).
 #[tauri::command(async)]
@@ -302,6 +339,18 @@ pub(crate) fn continue_operation(app: State<App>) -> Result<String, String> {
         Outcome::Done => Ok("Done".into()),
         Outcome::Conflicts(files) => Err(format!(
             "The next commit conflicts too, in {}",
+            files.join(", ")
+        )),
+    }
+}
+
+/// Leave out the commit a rebase, cherry-pick or revert stopped on.
+#[tauri::command(async)]
+pub(crate) fn skip_operation(app: State<App>) -> Result<String, String> {
+    match app.repo()?.skip_commit().map_err(|e| first_line(&e))? {
+        Outcome::Done => Ok("Skipped that commit".into()),
+        Outcome::Conflicts(files) => Err(format!(
+            "Skipped — the next commit conflicts too, in {}",
             files.join(", ")
         )),
     }

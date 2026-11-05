@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
-import type { RepoInfo, RepoState } from "./types";
+import type { BranchInfo, Credential, RepoInfo, RepoState } from "./types";
 import { usePoll, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
+import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuSpec } from "./shared/Overlay";
 import { AgentsSection } from "./sections/agents/AgentsSection";
 import { HistorySection } from "./sections/history/HistorySection";
 import { ChangesSection } from "./sections/changes/ChangesSection";
@@ -39,8 +40,25 @@ function viewing(taskId: string): boolean {
   }
 }
 
+/** How often the open repository is fetched in the background. */
+const AUTO_FETCH_MS = 5 * 60 * 1000;
+const RECENT_MAX = 12;
+
 export function App() {
-  const [repo, setRepo] = useState<RepoInfo | null | undefined>(undefined);
+  const [repo, setRepoRaw] = useState<RepoInfo | null | undefined>(undefined);
+  const [recent, setRecent] = useStored<string[]>("recent", []);
+  const [imported, setImported] = useStored("recent.imported", false);
+  const [menu, setMenu] = useState<MenuSpec | null>(null);
+  const [dialog, setDialog] = useState<DialogSpec | null>(null);
+  const [credential, setCredential] = useState<Credential | null>(null);
+  const [palette, setPalette] = useState<{ branches: BranchInfo[] } | null>(null);
+  const setRepo = useCallback(
+    (r: RepoInfo | null) => {
+      setRepoRaw(r);
+      if (r) setRecent((old) => [r.root, ...old.filter((x) => x !== r.root)].slice(0, RECENT_MAX));
+    },
+    [], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const [state, setState] = useState<RepoState | null>(null);
   const [section, setSection] = useStored<SectionId>("section", "agents");
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "agents", seq: 0 });
@@ -65,16 +83,71 @@ export function App() {
 
   useEffect(() => {
     api.currentRepo().then(setRepo, () => setRepo(null));
-  }, []);
+    // The old native app's repositories, once, so the list carries over.
+    if (!imported)
+      api
+        .legacyRepos()
+        .then((paths) => {
+          setRecent((old) => [...old, ...paths.filter((p) => !old.includes(p))].slice(0, RECENT_MAX));
+          setImported(true);
+        })
+        .catch(() => undefined);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // git or ssh waiting on a passphrase or password (fetch, pull, push).
+  usePoll(
+    async () => {
+      const ask = await api.askpassPending();
+      setCredential((old) => (old?.id === ask?.id ? old : ask));
+    },
+    700,
+    [],
+    !!repo,
+  );
+
+  // Fetch quietly every few minutes so "behind" is true without asking.
+  useEffect(() => {
+    if (!repo) return;
+    const run = () => api.autoFetch().catch(() => undefined);
+    const first = setTimeout(run, 15_000);
+    const every = setInterval(run, AUTO_FETCH_MS);
+    return () => {
+      clearTimeout(first);
+      clearInterval(every);
+    };
+  }, [repo?.root]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const lastState = useRef<RepoState | null>(null);
   const refresh = useCallback(async () => {
     if (!repo) return;
     try {
-      setState(await api.repoState());
+      const next = await api.repoState();
+      noticeNewCommits(lastState.current, next);
+      lastState.current = next;
+      setState(next);
     } catch {
       // Shown by whatever section fails next; the chrome just goes quiet.
     }
-  }, [repo]);
+  }, [repo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** The upstream gained commits (a fetch, background or not): say so, with Pull. */
+  const noticeNewCommits = (old: RepoState | null, now: RepoState) => {
+    if (!old || !now.branch || old.branch !== now.branch || now.behind <= old.behind) return;
+    const n = now.behind;
+    const commits = `${n} new ${n === 1 ? "commit" : "commits"}`;
+    const upstream = now.upstream ?? "The remote";
+    if (now.ahead > 0)
+      toast(`${upstream} has ${commits} — ${now.branch} has diverged`, "ok", false, {
+        label: "Pull with rebase",
+        run: () => doPull(),
+      });
+    else toast(`${upstream} has ${commits} to pull`, "ok", false, { label: "Pull", run: () => doPull() });
+  };
+  const doPull = () =>
+    api
+      .sync("pull")
+      .then((m) => toast(m, "ok", true), (e) => toast(errorText(e), "error"))
+      .finally(() => refresh());
   usePoll(refresh, 2000, [repo?.root], !!repo);
 
   // Rail counts: files changed, agents working.
@@ -114,6 +187,16 @@ export function App() {
       })
       .catch(fail);
   }, [toast, fail, refresh]);
+
+  const openRepo = (path: string) =>
+    api
+      .openRepo(path)
+      .then((r) => {
+        lastState.current = null;
+        setRepo(r);
+        setState(null);
+      })
+      .catch(fail);
 
   const shell: Shell | null = useMemo(
     () =>
@@ -164,17 +247,18 @@ export function App() {
               setTarget((old) => ({ ...t, seq: old.seq + 1 }));
             },
             target,
-            openRepo: (path) =>
-              api
-                .openRepo(path)
-                .then((r) => {
-                  setRepo(r);
-                  setState(null);
-                })
-                .catch(fail),
+            openRepo,
+            recent,
+            forgetRepo: (path) => setRecent((old) => old.filter((x) => x !== path)),
+            menu: (e, items) => {
+              e.preventDefault?.();
+              setMenu({ x: e.clientX, y: e.clientY, items });
+            },
+            prompt: (spec) => new Promise((resolve) => setDialog({ kind: "prompt", ...spec, resolve })),
+            confirm: (spec) => new Promise((resolve) => setDialog({ kind: "confirm", ...spec, resolve })),
           }
         : null,
-    [repo, state, refresh, toast, fail, undo, target], // eslint-disable-line react-hooks/exhaustive-deps
+    [repo, state, refresh, toast, fail, undo, target, recent], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // ⌘1–⌘6 switch sections; ⌘Z undoes the last change anywhere (not while
@@ -184,7 +268,13 @@ export function App() {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       const typing = (e.target as HTMLElement)?.closest?.("input, textarea, select");
       const s = SECTIONS.find((x) => x.key === e.key);
-      if (s) {
+      if (e.key === "k" && repo) {
+        e.preventDefault();
+        api.branches().then(
+          (branches) => setPalette({ branches }),
+          () => setPalette({ branches: [] }),
+        );
+      } else if (s) {
         e.preventDefault();
         setSection(s.id);
       } else if (e.key === "z" && !e.shiftKey && !typing) {
@@ -196,9 +286,70 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  const commands = (branches: BranchInfo[]): Command[] => {
+    if (!shell) return [];
+    const sync = (what: "fetch" | "pull" | "push") => () => shell.act(() => api.sync(what), { undo: what === "pull" });
+    return [
+      ...SECTIONS.map((x) => ({ id: `go:${x.id}`, label: `Go to ${x.label}`, keys: `⌘${x.key}`, run: () => setSection(x.id) })),
+      { id: "fetch", label: "Fetch", hint: "all remotes", run: sync("fetch") },
+      { id: "pull", label: "Pull", hint: "with rebase", run: sync("pull") },
+      { id: "push", label: state?.upstream ? "Push" : "Publish branch", run: sync("push") },
+      {
+        id: "pr",
+        label: "Open pull request for this branch",
+        run: () => api.pullRequestUrl().then(api.openUrl).catch(fail),
+      },
+      { id: "stash", label: "Stash changes", run: () => shell.act(() => api.stash(null), { undo: false }) },
+      { id: "undo", label: state?.undo ? `Undo: ${state.undo}` : "Undo", keys: "⌘Z", run: undo },
+      ...branches
+        .filter((b) => !b.current && !b.remote)
+        .map((b) => ({
+          id: `co:${b.name}`,
+          label: `Switch to ${b.name}`,
+          hint: "branch",
+          run: () => shell.switchBranch((stash) => api.checkout(b.name, stash)),
+        })),
+      ...recent
+        .filter((r) => r !== repo?.root)
+        .map((r) => ({ id: `repo:${r}`, label: `Open ${r.split("/").pop()}`, hint: r, run: () => openRepo(r) })),
+      ...branches
+        .filter((b) => b.remote)
+        .map((b) => ({
+          id: `co:${b.name}`,
+          label: `Check out ${b.name}`,
+          hint: "remote branch",
+          run: () => shell.switchBranch((stash) => api.checkout(b.name, stash)),
+        })),
+    ];
+  };
+
+  const overlays = (
+    <>
+      {menu && <MenuView spec={menu} onClose={() => setMenu(null)} />}
+      {dialog && <DialogView spec={dialog} onClose={() => setDialog(null)} />}
+      {palette && <Palette commands={commands(palette.branches)} onClose={() => setPalette(null)} />}
+      {credential && (
+        <CredentialDialog
+          ask={credential}
+          onAnswer={(answer) => {
+            setCredential(null);
+            api.askpassAnswer(credential.id, answer).catch(fail);
+          }}
+        />
+      )}
+    </>
+  );
+
   if (repo === undefined) return <div className="boot" />;
   if (repo === null || !shell)
-    return <OpenRepo onOpen={(path) => api.openRepo(path).then(setRepo, fail)} toasts={toasts} />;
+    return (
+      <OpenRepo
+        recent={recent}
+        onOpen={(path) => api.openRepo(path).then(setRepo, fail)}
+        onForget={(path) => setRecent((old) => old.filter((x) => x !== path))}
+        toasts={toasts}
+      />
+    );
 
   return (
     <ShellContext.Provider value={shell}>
@@ -239,6 +390,7 @@ export function App() {
           </div>
         </div>
         <Toasts toasts={toasts} onUndo={undo} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
+        {overlays}
       </div>
     </ShellContext.Provider>
   );
@@ -270,6 +422,15 @@ function OperationBanner({ state }: { state: RepoState }) {
       ) : (
         <button className="primary small" onClick={() => shell.act(api.continueOperation, { undo: false })}>
           Continue {what.toLowerCase()}
+        </button>
+      )}
+      {state.operation !== "merge" && (
+        <button
+          className="ghost small"
+          title="Leave out the commit it stopped on"
+          onClick={() => shell.act(api.skipOperation, { undo: false })}
+        >
+          Skip commit
         </button>
       )}
       <button className="ghost small" onClick={() => shell.act(api.abortOperation, { undo: false })}>
@@ -316,7 +477,17 @@ function Toasts({ toasts, onUndo, onClose }: { toasts: Toast[]; onUndo: () => vo
   );
 }
 
-function OpenRepo({ onOpen, toasts }: { onOpen: (path: string) => void; toasts: Toast[] }) {
+function OpenRepo({
+  recent,
+  onOpen,
+  onForget,
+  toasts,
+}: {
+  recent: string[];
+  onOpen: (path: string) => void;
+  onForget: (path: string) => void;
+  toasts: Toast[];
+}) {
   return (
     <div className="open-repo">
       <form
@@ -333,6 +504,22 @@ function OpenRepo({ onOpen, toasts }: { onOpen: (path: string) => void; toasts: 
         <button className="primary" type="submit">
           Open
         </button>
+        {recent.length > 0 && (
+          <div className="recent-repos">
+            <div className="list-label">Recent</div>
+            {recent.map((r) => (
+              <div key={r} className="recent-row">
+                <button type="button" className="recent-open" onClick={() => onOpen(r)} title={r}>
+                  <span className="repo-name">{r.split("/").pop()}</span>
+                  <span className="muted small-text truncate">{r}</span>
+                </button>
+                <button type="button" className="icon-button tiny" title="Remove from the list" onClick={() => onForget(r)}>
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </form>
       <div className="toasts">
         {toasts.map((t) => (

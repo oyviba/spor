@@ -206,6 +206,50 @@ export interface StashInfo {
   message: string;
 }
 
+export interface TagInfo {
+  name: string;
+  /** The commit it's on. */
+  hash: string;
+}
+
+export interface WorktreeInfo {
+  path: string;
+  branch: string | null;
+  head: string;
+  main: boolean;
+  current: boolean;
+  prunable: boolean;
+  agent: boolean;
+}
+
+/** A commit an interactive rebase would rewrite, oldest first. */
+export interface PlanCommit {
+  hash: string;
+  short: string;
+  subject: string;
+  message: string;
+  author: string;
+  time: number;
+}
+
+export type PlanAction = "pick" | "reword" | "squash" | "fixup" | "drop";
+
+export interface PrBadge {
+  branch: string;
+  number: number;
+  draft: boolean;
+  review: "none" | "approved" | "changesrequested";
+  checks: "none" | "pending" | "passing" | "failing";
+}
+
+/** A passphrase, password or yes/no question from git or ssh. */
+export interface Credential {
+  id: number;
+  prompt: string;
+  secret: boolean;
+  confirm: boolean;
+}
+
 // ---- GitHub ----
 
 export interface Pull {
