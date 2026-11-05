@@ -1429,7 +1429,8 @@ fn parse_refs(s: &str) -> (Vec<String>, Option<String>) {
     let refs = s
         .split(',')
         .map(|r| r.trim())
-        .filter(|r| !r.is_empty())
+        // `origin/HEAD` only says which branch is origin's default.
+        .filter(|r| !r.is_empty() && !r.ends_with("/HEAD"))
         .map(|r| {
             if let Some(rest) = r.strip_prefix("HEAD -> ") {
                 head_ref = Some(rest.to_string());
@@ -1621,7 +1622,7 @@ mod tests {
 
     #[test]
     fn parse_refs_head_and_tags() {
-        let (refs, head) = parse_refs("HEAD -> main, origin/main, tag: v1.0");
+        let (refs, head) = parse_refs("HEAD -> main, origin/main, origin/HEAD, tag: v1.0");
         assert_eq!(refs, vec!["main", "origin/main", "tag:v1.0"]);
         assert_eq!(head.as_deref(), Some("main"));
     }

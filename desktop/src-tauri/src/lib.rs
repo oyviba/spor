@@ -351,6 +351,10 @@ pub(crate) fn name_of(value: &impl std::fmt::Debug) -> String {
 }
 
 pub fn run() {
+    // Started from the Dock or Finder, macOS gives the app a bare PATH that
+    // hides gh, claude and Homebrew's git; take the login shell's instead.
+    // First, before any threads.
+    spor::env::fix_path();
     // Claude Code runs under this same executable as its host, so agents
     // can ask before acting and be steered (spor::host, #20).
     if let Ok(me) = std::env::current_exe() {

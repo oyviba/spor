@@ -7,6 +7,7 @@ pub mod askpass;
 pub mod checkpoint;
 pub mod color;
 pub mod conflict;
+pub mod env;
 pub mod git;
 pub mod github;
 pub mod graph;
