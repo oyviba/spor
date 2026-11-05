@@ -195,8 +195,9 @@ export function AgentsSection() {
 
   const github = (id: string) => ({
     pull: pulls[id],
-    onShowIssue: (n: number) => shell.go({ section: "issues", number: n }),
-    onShowPull: (n: number) => shell.go({ section: "pulls", number: n }),
+    // The work item's own issue and PR: show them, not the item again.
+    onShowIssue: (n: number) => shell.go({ section: "issues", number: n }, { browse: true }),
+    onShowPull: (n: number) => shell.go({ section: "pulls", number: n }, { browse: true }),
     onPublish: (draft: boolean, commitUncommitted: boolean) =>
       shell
         .act(() => api.publishTask(id, draft, commitUncommitted), {

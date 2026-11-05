@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary } from "./types";
 import { usePoll, useRepoChanges, useStored } from "./shared/hooks";
@@ -10,8 +10,9 @@ import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
 import { AppearancePage } from "./shared/ThemeEditor";
 import { useApplyTheme } from "./shared/theme";
-import { display, effective, isMac, lookup, shortcutOf } from "./shared/keys";
+import { display, effective, isMac, keepChanges, lookup, shortcutOf } from "./shared/keys";
 import { getSettings, setSettings, useSettings } from "./shared/settings";
+import { resolveTarget } from "./shared/targets";
 import {
   WORKSPACE_COLORS,
   activeWorkspace,
@@ -51,14 +52,19 @@ interface Toast {
   action?: ToastAction;
 }
 
-const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string }[] = [
-  { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "Mod+0" },
-  { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "Mod+1" },
-  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+2" },
-  { id: "issues", label: "Issues", icon: <IssueIcon size={17} />, key: "Mod+3" },
-  { id: "pulls", label: "Pull requests", icon: <PullRequest size={17} />, key: "Mod+4" },
-  { id: "actions", label: "Actions", icon: <Play size={17} />, key: "Mod+5" },
-  { id: "agents", label: "Agents", icon: <Bot size={17} />, key: "Mod+6" },
+/**
+ * The rail (#83), in the order of the questions you come with: what needs
+ * me, what's in flight, my checkout, the graph. Then, after a divider, the
+ * browsers: GitHub's lists, for what belongs to no work item yet.
+ */
+const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string; browser?: boolean }[] = [
+  { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "Mod+1" },
+  { id: "agents", label: "Work", icon: <Bot size={17} />, key: "Mod+2" },
+  { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "Mod+3" },
+  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+4" },
+  { id: "issues", label: "Issues", icon: <IssueIcon size={15} />, key: "Mod+5", browser: true },
+  { id: "pulls", label: "Pull requests", icon: <PullRequest size={15} />, key: "Mod+6", browser: true },
+  { id: "actions", label: "Actions", icon: <Play size={15} />, key: "Mod+7", browser: true },
 ];
 
 /** Is the task open on screen (Agents, its page)? Then it needs no toast. */
@@ -106,6 +112,10 @@ function repoCommands(shell: Shell): AppCommand[] {
   ];
 }
 
+/** The rail's layout, so the move to it (#83) happens once. */
+const RAIL_KEY = "spor.rail";
+const RAIL = "2";
+
 /** How often the open repository is fetched in the background. */
 const AUTO_FETCH_MS = 5 * 60 * 1000;
 
@@ -131,10 +141,9 @@ export function App() {
     [], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const [state, setState] = useState<RepoState | null>(null);
-  const [section, setSection] = useStored<SectionId>("section", "agents");
+  const [section, setSection] = useStored<SectionId>("section", "inbox");
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "agents", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [changed, setChanged] = useState(0);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   // Tasks known to be waiting, so a new question toasts once.
   const asking = useRef<Set<string> | null>(null);
@@ -249,17 +258,6 @@ export function App() {
       .finally(() => refresh());
   useRepoChanges(refresh, ["refs", "index"], [repo?.root], !!repo);
 
-  // The rail's count of files changed.
-  useRepoChanges(
-    async () => {
-      const files = await api.status();
-      setChanged(new Set(files.map((f) => f.path)).size);
-    },
-    ["index", "worktree"],
-    [repo?.root],
-    !!repo,
-  );
-
   // Agent tasks, loaded here once for the rail, Agents and Issues: a task's
   // commits are refs, the rest is in `.git/spor/tasks`.
   const reloadTasks = useCallback(async () => {
@@ -280,7 +278,6 @@ export function App() {
     asking.current = new Set(waiting.map((t) => t.id));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useRepoChanges(reloadTasks, ["tasks", "refs"], [repo?.root], !!repo);
-  const working = tasks.filter((t) => t.run?.state === "running").length;
 
   // What needs you in every repository of every workspace: the Inbox, and its badge.
   const everyRepo = [...new Set(workspaces.list.flatMap((w) => w.repos))];
@@ -316,8 +313,16 @@ export function App() {
     if (item.repo !== repo?.root && !(await openRepo(item.repo))) return;
     const owner = workspaces.list.find((w) => w.repos.includes(item.repo));
     if (owner && owner.id !== workspaces.active) switchTo(owner.id);
-    setSection(item.target.section);
-    setTarget((old) => ({ ...item.target, seq: old.seq + 1 }));
+    // Its work item if it has one, from the tasks of the repository it's in.
+    const to =
+      item.repo === repo?.root
+        ? resolveTarget(item.target, tasks)
+        : await api.listTasks().then(
+            (t) => resolveTarget(item.target, t),
+            () => item.target,
+          );
+    setSection(to.section);
+    setTarget((old) => ({ ...to, seq: old.seq + 1 }));
   };
 
   const shell: Shell | null = useMemo(
@@ -366,9 +371,10 @@ export function App() {
                 await refresh();
               }
             },
-            go: (t) => {
-              setSection(t.section);
-              setTarget((old) => ({ ...t, seq: old.seq + 1 }));
+            go: (t, opts) => {
+              const to = opts?.browse ? t : resolveTarget(t, tasks);
+              setSection(to.section);
+              setTarget((old) => ({ ...to, seq: old.seq + 1 }));
             },
             target,
             openRepo,
@@ -521,10 +527,37 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // The rail's order and shortcuts moved (#83). Once: keep the shortcuts the
+  // user chose working, and say where the defaults went.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(RAIL_KEY) === RAIL) return;
+      localStorage.setItem(RAIL_KEY, RAIL);
+    } catch {
+      return;
+    }
+    // Nothing to move for someone opening spor for the first time.
+    if (firstRun) return;
+    const kept = keepChanges(appCommands, getSettings().keymap);
+    if (JSON.stringify(kept) !== JSON.stringify(getSettings().keymap)) setSettings({ keymap: kept });
+    const keys = keyLabel("shortcuts");
+    const moved = `The rail is now Inbox, Work, Changes and History, then the browsers. Its shortcuts moved${keys ? ` (${keys} lists them)` : ""}.`;
+    toast(moved, "ok", false, { label: "Show shortcuts", run: () => setSettingsPage("shortcuts") });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const commands = (branches: BranchInfo[]): Command[] => {
     if (!shell) return [];
     return [
       ...appCommands.filter((c) => c.id !== "palette").map((c) => ({ id: c.id, label: c.label, hint: c.hint, keys: keyLabel(c.id), run: c.run })),
+      // Work items open their page in Work.
+      ...tasks
+        .filter((t) => !t.landed)
+        .map((t) => ({
+          id: `work:${t.id}`,
+          label: `Open ${t.title}`,
+          hint: t.pull != null ? `work item · #${t.pull}` : t.issue != null ? `work item · issue #${t.issue}` : "work item",
+          run: () => shell.go({ section: "agents", taskId: t.id }),
+        })),
       ...branches
         .filter((b) => !b.current && !b.remote)
         .map((b) => ({
@@ -657,22 +690,23 @@ export function App() {
       <div className="app">
         <nav className="rail" aria-label="Sections">
           {workspaceRail}
-          {SECTIONS.map((s) => {
-            const count =
-              s.id === "inbox" ? inbox.items.length : s.id === "changes" ? changed : s.id === "agents" ? working : 0;
-            const tone = s.id === "inbox" ? " asking" : s.id === "agents" ? " live" : "";
+          {SECTIONS.map((s, i) => {
+            // One number on the rail: how many things need you.
+            const count = s.id === "inbox" ? inbox.items.length : 0;
             return (
-              <button
-                key={s.id}
-                className={`rail-item${section === s.id ? " active" : ""}`}
-                onClick={() => setSection(s.id)}
-                title={keyLabel(`go:${s.id}`) ? `${s.label} (${keyLabel(`go:${s.id}`)})` : s.label}
-                aria-label={s.label}
-                aria-current={section === s.id ? "page" : undefined}
-              >
-                {s.icon}
-                {count > 0 && <span className={`rail-badge num${tone}`}>{count}</span>}
-              </button>
+              <Fragment key={s.id}>
+                {s.browser && !SECTIONS[i - 1]?.browser && <span className="rail-divider" />}
+                <button
+                  className={`rail-item${s.browser ? " browser" : ""}${section === s.id ? " active" : ""}`}
+                  onClick={() => setSection(s.id)}
+                  title={keyLabel(`go:${s.id}`) ? `${s.label} (${keyLabel(`go:${s.id}`)})` : s.label}
+                  aria-label={s.label}
+                  aria-current={section === s.id ? "page" : undefined}
+                >
+                  {s.icon}
+                  {count > 0 && <span className="rail-badge num asking">{count}</span>}
+                </button>
+              </Fragment>
             );
           })}
           <span className="flex-1" />

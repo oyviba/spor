@@ -120,3 +120,15 @@ export function resetOne(commands: Bindable[], keymap: Keymap, id: string): { ke
   const def = commands.find((c) => c.id === id)?.keys ?? null;
   return bind(commands, keymap, id, def);
 }
+
+/**
+ * After the defaults move (#83): a default that now lands on a shortcut the
+ * user gave another command is removed, so the user's change keeps working.
+ * Every other change is kept as it was.
+ */
+export function keepChanges(commands: Bindable[], keymap: Keymap): Keymap {
+  const chosen = new Set(Object.values(keymap).filter((k): k is string => !!k));
+  const next: Keymap = { ...keymap };
+  for (const c of commands) if (!(c.id in keymap) && c.keys && chosen.has(c.keys)) next[c.id] = null;
+  return next;
+}

@@ -281,7 +281,7 @@ function Checks({ pr }: { pr: PullDetail }) {
           {c.run_id ? (
             <button
               className="link small-text"
-              onClick={() => shell.go({ section: "actions", runId: c.run_id!, jobId: c.job_id ?? undefined })}
+              onClick={() => shell.go({ section: "actions", runId: c.run_id!, jobId: c.job_id ?? undefined }, { browse: true })}
             >
               <Play size={11} /> Open in Actions
             </button>

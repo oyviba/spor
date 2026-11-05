@@ -14,8 +14,8 @@ export type Target =
   | { section: "changes"; path?: string }
   | { section: "history"; hash?: string; branch?: string; blame?: { path: string; rev: string | null } }
   | { section: "issues"; number?: number }
-  | { section: "pulls"; number?: number }
-  | { section: "actions"; runId?: number; jobId?: number }
+  | { section: "pulls"; number?: number; /** Its head, to find its work item. */ branch?: string }
+  | { section: "actions"; runId?: number; jobId?: number; /** The run's branch, to find its work item. */ branch?: string }
   | { section: "agents"; taskId?: string };
 
 export interface ToastAction {
@@ -52,7 +52,12 @@ export interface Shell {
    */
   switchBranch: (run: (stash: boolean) => Promise<string>) => Promise<boolean>;
   undo: () => void;
-  go: (target: Target) => void;
+  /**
+   * Go somewhere. A pull request, issue or run that belongs to a work item
+   * opens the item in Work instead (#83), unless `browse` asks for the
+   * browser section itself ("Open in Actions", a work item's own PR).
+   */
+  go: (target: Target, opts?: { browse?: boolean }) => void;
   /** The last target sent to a section, with a counter so a repeat still lands. */
   target: Target & { seq: number };
   openRepo: (path: string) => void;
