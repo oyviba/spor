@@ -42,6 +42,11 @@ What one app makes possible:
   askpass helper (`spor::askpass`): a passphrase, password or new-host
   question comes up as a dialog. The background fetch (every five minutes)
   never asks; it just fails quietly without stored credentials.
+- **Live, without polling.** The backend watches the repository
+  (`src-tauri/src/watch.rs`) and tells the window what changed: refs, the
+  index, the working tree (what `.gitignore` doesn't exclude, at most once
+  a second) or agent tasks. Each section reloads on the changes it shows,
+  and every 30 s anyway in case an event went missing.
 - **⌘K palette and recent repositories.** Commands, sections, branches and
   recent repositories by typing; the repository name at the top of every
   sidebar switches between recent ones. The first launch imports the
@@ -72,7 +77,8 @@ finishes while you watch.
 
 ## Tests
 
-- `pnpm test`: the transcript folding and summaries.
+- `pnpm test`: the transcript folding and summaries, and how reloads coalesce.
+- `cargo test` in `src-tauri`: the watcher, on scratch repositories.
 - `e2e/run.mjs` (agent tasks), `e2e/setup.mjs` (setup scripts) and
   `e2e/sections.mjs` (Changes, History, renaming and tagging, a conflicting
   merge, stashes, pull requests and Actions) drive the real app through WebDriver and check the
@@ -100,6 +106,7 @@ finishes while you watch.
 ```
 src-tauri/src/
   lib.rs        setup, repository state for the chrome, undo, open_url, the askpass bridge
+  watch.rs      watching the repository: refs-, index-, worktree- and tasks-changed events
   undo.rs       the undo stack
   history.rs    graph (lanes → segments), commits, branches, tags, worktrees, switch, merge,
                 cherry-pick, revert, rebase, reset, rewrite, PR badges
@@ -125,7 +132,8 @@ the graph's column options (#58), side-by-side diffs (#59), dragging a
 branch onto another to merge it (#60), resolving conflicts one region at a
 time (#61), and a signed, notarized Mac app (#62).
 
-Polling, not events: the window polls the repository's state every 2 s
-(cheap: refs and the index's mtime) and each section reloads when that
-changes. A file watcher would be better (#38). The rules for starting an
-agent live in `src-tauri/src/agents.rs`; they belong in the core (#39).
+The rules for starting an agent live in `src-tauri/src/agents.rs`; they
+belong in the core (#39). On Linux the watcher uses inotify, which needs a
+watch per folder: a working tree with more folders than
+`fs.inotify.max_user_watches` isn't watched, and the window reloads only
+every 30 s.

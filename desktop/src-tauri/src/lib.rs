@@ -8,13 +8,14 @@ mod changes;
 mod github;
 mod history;
 mod undo;
+mod watch;
 
 use serde::Serialize;
 use spor::git::Repo;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Default)]
 pub(crate) struct App {
@@ -23,6 +24,8 @@ pub(crate) struct App {
     /// Credential prompts from git and ssh waiting for the user, by id.
     /// Dropping one answers Cancel, so they're kept until answered.
     asks: Mutex<(u64, std::collections::BTreeMap<u64, spor::askpass::Request>)>,
+    /// The open repository's watcher, sending the UI its changes.
+    watch: Mutex<Option<watch::Watch>>,
 }
 
 impl App {
@@ -74,19 +77,35 @@ fn current_repo(app: State<App>) -> Option<RepoInfo> {
 }
 
 #[tauri::command(async)]
-fn open_repo(app: State<App>, path: String) -> Result<RepoInfo, String> {
+fn open_repo(handle: AppHandle, app: State<App>, path: String) -> Result<RepoInfo, String> {
     let path = expand_home(path.trim());
     let repo = Repo::discover(&path).map_err(|e| first_line(&e))?;
     let info = repo_info(&repo);
+    watch_repo(&handle, &repo);
     *app.repo.lock().unwrap() = Some(repo);
     app.undo.clear();
     Ok(info)
 }
 
+/// Send the UI an event when `repo` changes (see `watch`), in place of the
+/// last repository's watcher. Without one the UI's slow poll still works.
+fn watch_repo(handle: &AppHandle, repo: &Repo) {
+    let app = handle.state::<App>();
+    let mut current = app.watch.lock().unwrap();
+    *current = None;
+    let to = handle.clone();
+    match watch::start(repo, move |change| {
+        let _ = to.emit(change.event(), ());
+    }) {
+        Ok(w) => *current = Some(w),
+        Err(e) => eprintln!("spor: {e}"),
+    }
+}
+
 /// What the window chrome shows about the repository, and fingerprints the
 /// sections compare to know when to reload: `refs` changes when any branch,
 /// tag or HEAD moves; `index` when anything is staged, committed or checked
-/// out. Cheap enough to poll every couple of seconds.
+/// out. Reloaded when the watcher says refs or the index changed.
 #[derive(Serialize)]
 struct RepoState {
     branch: Option<String>,
@@ -279,6 +298,13 @@ pub fn run() {
     }
     tauri::Builder::default()
         .manage(app)
+        .setup(|tauri| {
+            let handle = tauri.handle();
+            if let Some(repo) = handle.state::<App>().repo.lock().unwrap().clone() {
+                watch_repo(handle, &repo);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             current_repo,
             open_repo,

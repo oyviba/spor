@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState } from "./types";
-import { usePoll, useStored } from "./shared/hooks";
+import { usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuSpec } from "./shared/Overlay";
@@ -148,10 +148,10 @@ export function App() {
       .sync("pull")
       .then((m) => toast(m, "ok", true), (e) => toast(errorText(e), "error"))
       .finally(() => refresh());
-  usePoll(refresh, 2000, [repo?.root], !!repo);
+  useRepoChanges(refresh, ["refs", "index"], [repo?.root], !!repo);
 
   // Rail counts: files changed, agents working.
-  usePoll(
+  useRepoChanges(
     async () => {
       const [files, tasks] = await Promise.all([api.status(), api.listTasks()]);
       const waiting = tasks.filter((t) => t.asks > 0);
@@ -173,8 +173,8 @@ export function App() {
       }
       asking.current = new Set(waiting.map((t) => t.id));
     },
-    2000,
-    [repo?.root, state?.index],
+    ["index", "worktree", "tasks"],
+    [repo?.root],
     !!repo,
   );
 

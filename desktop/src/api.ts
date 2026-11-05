@@ -44,6 +44,36 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   return invokeImpl<T>(cmd, args);
 }
 
+/** What the backend's watcher says changed (`src-tauri/src/watch.rs`):
+ * refs (HEAD, branches, tags), the index, the working tree, or agent tasks. */
+export type RepoChange = "refs" | "index" | "worktree" | "tasks";
+
+type Listen = (event: string, fn: () => void) => Promise<() => void>;
+let listenImpl: Listen | null = null;
+
+/** Call `fn` whenever the repository changes in one of the `changes` ways.
+ * Returns the function that stops listening. */
+export function onRepoChange(changes: RepoChange[], fn: () => void): () => void {
+  let stopped = false;
+  const stops: (() => void)[] = [];
+  (async () => {
+    if (!listenImpl) {
+      listenImpl = inTauri
+        ? (await import("@tauri-apps/api/event")).listen
+        : (await import("./mock")).listen;
+    }
+    for (const change of changes) {
+      const stop = await listenImpl(`${change}-changed`, fn);
+      if (stopped) stop();
+      else stops.push(stop);
+    }
+  })();
+  return () => {
+    stopped = true;
+    stops.forEach((stop) => stop());
+  };
+}
+
 export const api = {
   currentRepo: () => call<RepoInfo | null>("current_repo"),
   openRepo: (path: string) => call<RepoInfo>("open_repo", { path }),

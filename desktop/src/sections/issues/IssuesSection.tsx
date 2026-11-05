@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Issue, IssueDetail, TaskSummary } from "../../types";
 import { useShell } from "../../shared/app";
-import { usePoll, useStored } from "../../shared/hooks";
+import { usePoll, useRepoChanges, useStored } from "../../shared/hooks";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { Markdown } from "../../shared/Markdown";
 import { StatusPill, type Status } from "../../shared/StatusPill";
@@ -51,7 +51,7 @@ export function IssuesSection() {
     60_000,
     [filter],
   );
-  usePoll(async () => setTasks(await api.listTasks()), 5000, [shell.repo.root]);
+  useRepoChanges(async () => setTasks(await api.listTasks()), ["tasks", "refs"], [shell.repo.root]);
   useEffect(() => {
     if (shell.target.section === "issues" && shell.target.number) setSelected(shell.target.number);
   }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps

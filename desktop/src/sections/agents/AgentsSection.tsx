@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { LineComment, RunPatch, TaskDetail, TaskPull, TaskSummary } from "../../types";
 import { activityAt } from "./status";
-import { usePoll, useStored } from "../../shared/hooks";
+import { usePoll, useRepoChanges, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { Sidebar } from "./Sidebar";
 import { NewTask } from "./NewTask";
@@ -43,7 +43,8 @@ export function AgentsSection() {
   const refreshTasks = useCallback(async () => {
     setTasks(await api.listTasks());
   }, []);
-  usePoll(refreshTasks, 1500, [repo.root]);
+  // A task's commits are refs; the rest is in `.git/spor/tasks`.
+  useRepoChanges(refreshTasks, ["tasks", "refs"], [repo.root]);
 
   // Open tasks' pull requests (one `gh` call), and a note when one merges.
   const [pulls, setPulls] = useState<Record<string, TaskPull>>({});
@@ -69,21 +70,19 @@ export function AgentsSection() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   usePoll(refreshPulls, 30_000, [repo.root, openTasks], openTasks > 0);
 
-  const selected = tasks.find((t) => t.id === selectedId);
-  const running = selected?.run?.state === "running";
   const refreshDetail = useCallback(async () => {
     if (!selectedId) return;
     try {
       const d = await api.taskDetail(selectedId);
       setDetail((old) => (old?.task.id !== d.task.id || JSON.stringify(old) !== JSON.stringify(d) ? d : old));
-      // The open task polls faster than the list; keep its row in step.
+      // Keep its row in step with the detail.
       setTasks((ts) => ts.map((t) => (t.id === d.task.id ? d.task : t)));
     } catch (e) {
       // The task was landed or discarded elsewhere.
       if (String(e).startsWith("No task")) setView({ kind: "new" });
     }
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
-  usePoll(refreshDetail, running ? 1000 : 3000, [selectedId], !!selectedId);
+  useRepoChanges(refreshDetail, ["tasks", "refs"], [selectedId], !!selectedId);
   useEffect(() => {
     setDetail(null);
     setTab("conversation");
