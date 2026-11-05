@@ -5,6 +5,8 @@ import type {
   Credential,
   FileEntry,
   Graph,
+  InboxGithub,
+  InboxTask,
   Issue,
   IssueDetail,
   LogLine,
@@ -57,6 +59,10 @@ export const api = {
   askpassAnswer: (id: number, answer: string | null) => call<void>("askpass_answer", { id, answer }),
   /** Repositories the old native (GPUI) app had in its workspaces, to carry over. */
   legacyRepos: () => call<string[]>("legacy_repos"),
+  /** The open tasks of every repository in `roots` (no network). */
+  inboxTasks: (roots: string[]) => call<InboxTask[]>("inbox_tasks", { roots }),
+  /** Review requests and failing runs on your branches, across `roots`. */
+  inboxGithub: (roots: string[]) => call<InboxGithub>("inbox_github", { roots }),
 
   // History
   graph: (limit: number) => call<Graph>("graph", { limit }),

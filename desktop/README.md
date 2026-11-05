@@ -4,7 +4,8 @@ Spor's app: a web UI on Tauri over the Rust core in the repository root
 (`spor::git`, `spor::graph`, `spor::github`, `spor::tasks`, `spor::agent`,
 `spor::askpass`). It has six sections, each built from the same four pieces:
 a list in the sidebar, a page, a details card on the right, and a bar or
-composer at the bottom.
+composer at the bottom. Above them, the Inbox (⌘0) gathers what needs you
+from all of them.
 
 | Section | ⌘ | Sidebar | Page | Details card | Bottom |
 |---|---|---|---|---|---|
@@ -16,6 +17,16 @@ composer at the bottom.
 | **Agents** | 6 | Tasks, with Working / Settled shelves | Conversation · Changes | Folder, branch, conflicts, its issue and PR, open a PR, land, discard | Composer |
 
 What one app makes possible:
+
+- **One inbox** (#42). Across every recent repository: agents waiting on
+  an answer, finished agent runs you haven't looked at, failed runs on your
+  branches (agent branches included) and pull requests waiting for your
+  review. Each row opens in the right section of the right repository, and
+  goes once it's dealt with; nothing is stored. Agent tasks are read from
+  each repository's `.git/spor/tasks` every few seconds; GitHub is one
+  `gh search prs` per host and one `gh run list` per repository, every two
+  minutes and whenever the Inbox is opened. The Inbox's rail badge counts
+  what needs you.
 
 - **One undo stack.** Every change (stage, discard, commit, amend, pull,
   branch, switch, merge, cherry-pick, revert, land) records how to take it
@@ -72,10 +83,10 @@ finishes while you watch.
 
 ## Tests
 
-- `pnpm test`: the transcript folding and summaries.
+- `pnpm test`: the transcript folding and summaries, and the Inbox's rows.
 - `e2e/run.mjs` (agent tasks), `e2e/setup.mjs` (setup scripts) and
   `e2e/sections.mjs` (Changes, History, renaming and tagging, a conflicting
-  merge, stashes, pull requests and Actions) drive the real app through WebDriver and check the
+  merge, stashes, pull requests, the Inbox and Actions) drive the real app through WebDriver and check the
   repository with git at every step. CI runs all three on Linux under Xvfb.
 
   They need no real agent or GitHub: `e2e/bin` has stand-ins. `claude` is a
@@ -106,11 +117,12 @@ src-tauri/src/
   changes.rs    status, diffs, staging lines, discard, commit, sync, stashes, conflicts
   github.rs     issues, pull requests and Actions, through spor's gh wrappers
   agents.rs     agent tasks, and their pull requests
+  inbox.rs      what needs you across every recent repository
 src/
-  App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–6, ⌘Z, ⌘K,
+  App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘0–6, ⌘Z, ⌘K,
                 background fetch, credential prompts, recent repositories
   shared/       DiffView, details card, menus and dialogs, palette, status pills, CI status, icons, hooks
-  sections/     changes/ history/ issues/ pulls/ actions/ agents/
+  sections/     inbox/ changes/ history/ issues/ pulls/ actions/ agents/
 ```
 
 `src-tauri` is its own Cargo workspace, so the root crate stays a

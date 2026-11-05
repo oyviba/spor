@@ -57,7 +57,7 @@ try {
   console.log("Changes");
   await w.waitFor(".file-row");
   check((await w.count(".file-row")) === 3, "lists the staged, edited and untracked files");
-  await w.until(`return document.querySelector(".rail-badge")?.textContent === "3"`, "the rail's count");
+  await w.until(`return document.querySelector('.rail-item[aria-label="Changes"] .rail-badge')?.textContent === "3"`, "the rail's count");
   check(true, "the rail counts 3 changed files");
   await w.clickText(".file-row-main", "greet.py");
   await w.until(`return document.querySelector("h2")?.textContent === "greet.py" && document.querySelectorAll(".diff tr.add").length === 4`, "greet.py's diff");
@@ -233,6 +233,18 @@ try {
   await w.until(`return document.querySelector(".task-header")?.innerText.includes("Merged")`, "the merge");
   check(ghState().merged.includes(11), "Squash and merge merges through gh");
   await w.shot("pulls-3-merged");
+
+  console.log("Inbox");
+  await toastGone();
+  await section("Inbox", ".task-row");
+  await w.until(`return document.querySelectorAll(".task-list .task-row").length === 2`, "the Inbox's rows", 10000);
+  const inbox = await w.text(".task-list");
+  check(inbox.includes("CI failed on agent/let-greet-take-optional"), "the Inbox lists the failed run on the agent's branch");
+  check(inbox.includes("#12") && !inbox.includes("#11"), "…and #12's review request, but not the merged #11");
+  await w.shot("inbox-1");
+  await w.clickText(".task-row", "CI failed");
+  await w.waitFor(".log-section.failed");
+  check(true, "clicking the run opens it in Actions, at the failed step");
 
   console.log("Actions");
   await toastGone();

@@ -3,7 +3,7 @@ import { api, errorText } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState } from "./types";
 import { usePoll, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
-import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
+import { Alert, Bot, Branch, FileIcon, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuSpec } from "./shared/Overlay";
 import { AgentsSection } from "./sections/agents/AgentsSection";
 import { HistorySection } from "./sections/history/HistorySection";
@@ -11,6 +11,8 @@ import { ChangesSection } from "./sections/changes/ChangesSection";
 import { IssuesSection } from "./sections/issues/IssuesSection";
 import { PullsSection } from "./sections/pulls/PullsSection";
 import { ActionsSection } from "./sections/actions/ActionsSection";
+import { InboxSection, useInbox } from "./sections/inbox/InboxSection";
+import type { InboxItem } from "./sections/inbox/inbox";
 
 interface Toast {
   id: number;
@@ -21,6 +23,7 @@ interface Toast {
 }
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string }[] = [
+  { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "0" },
   { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "1" },
   { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "2" },
   { id: "issues", label: "Issues", icon: <IssueIcon size={17} />, key: "3" },
@@ -63,11 +66,7 @@ export function App() {
   const [section, setSection] = useStored<SectionId>("section", "agents");
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "agents", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [badges, setBadges] = useState<{ changes: number; working: number; asking: number }>({
-    changes: 0,
-    working: 0,
-    asking: 0,
-  });
+  const [badges, setBadges] = useState<{ changes: number; working: number }>({ changes: 0, working: 0 });
   // Tasks known to be waiting, so a new question toasts once.
   const asking = useRef<Set<string> | null>(null);
 
@@ -158,7 +157,6 @@ export function App() {
       setBadges({
         changes: new Set(files.map((f) => f.path)).size,
         working: tasks.filter((t) => t.run?.state === "running").length,
-        asking: waiting.length,
       });
       if (asking.current) {
         for (const t of waiting)
@@ -178,6 +176,9 @@ export function App() {
     !!repo,
   );
 
+  // What needs you in every recent repository: the Inbox, and its badge.
+  const inbox = useInbox(recent, !!repo);
+
   const undo = useCallback(() => {
     api
       .undo()
@@ -188,15 +189,27 @@ export function App() {
       .catch(fail);
   }, [toast, fail, refresh]);
 
+  /** Resolves to whether it opened. */
   const openRepo = (path: string) =>
-    api
-      .openRepo(path)
-      .then((r) => {
+    api.openRepo(path).then(
+      (r) => {
         lastState.current = null;
         setRepo(r);
         setState(null);
-      })
-      .catch(fail);
+        return true;
+      },
+      (e) => {
+        fail(e);
+        return false;
+      },
+    );
+
+  /** An Inbox row: its repository (switching if need be), then its section. */
+  const openItem = async (item: InboxItem) => {
+    if (item.repo !== repo?.root && !(await openRepo(item.repo))) return;
+    setSection(item.target.section);
+    setTarget((old) => ({ ...item.target, seq: old.seq + 1 }));
+  };
 
   const shell: Shell | null = useMemo(
     () =>
@@ -261,7 +274,7 @@ export function App() {
     [repo, state, refresh, toast, fail, undo, target, recent], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  // ⌘1–⌘6 switch sections; ⌘Z undoes the last change anywhere (not while
+  // ⌘0–⌘6 switch sections; ⌘Z undoes the last change anywhere (not while
   // typing, where it undoes the typing).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -357,12 +370,14 @@ export function App() {
         <nav className="rail" aria-label="Sections">
           {SECTIONS.map((s) => {
             const count =
-              s.id === "changes"
-                ? badges.changes
-                : s.id === "agents"
-                  ? badges.asking || badges.working
-                  : 0;
-            const tone = s.id === "agents" ? (badges.asking ? " asking" : " live") : "";
+              s.id === "inbox"
+                ? inbox.items.length
+                : s.id === "changes"
+                  ? badges.changes
+                  : s.id === "agents"
+                    ? badges.working
+                    : 0;
+            const tone = s.id === "inbox" ? " asking" : s.id === "agents" ? " live" : "";
             return (
               <button
                 key={s.id}
@@ -381,6 +396,7 @@ export function App() {
         <div className="section">
           {state?.operation && <OperationBanner state={state} />}
           <div className="section-body">
+            {section === "inbox" && <InboxSection inbox={inbox} onOpen={openItem} />}
             {section === "agents" && <AgentsSection />}
             {section === "history" && <HistorySection />}
             {section === "changes" && <ChangesSection />}
