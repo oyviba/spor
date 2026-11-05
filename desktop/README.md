@@ -28,7 +28,9 @@ What one app makes possible:
 - **From issue to merged PR** (#47, #24). *Start agent task* on an issue
   gives the agent the issue and its comments, on `agent/<number>-<slug>`.
   *Open pull request* (or a draft) on the task pushes its branch and opens
-  a PR whose description says `Closes #n`; landing locally puts `Closes #n`
+  a PR whose title and description Claude Code writes from the branch and
+  the agent's session (read-only; the prompt's if it can't), and which says
+  `Closes #n`; landing locally puts `Closes #n`
   in the commit instead. The task then shows its PR's state, offers *Push*
   when the agent has commits the PR doesn't, and *Send review to agent*
   (on the task, or on the PR page) sends reviews and line comments made

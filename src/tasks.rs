@@ -68,12 +68,19 @@ impl Task {
         parts.join("\n\n")
     }
 
-    /// The description of the pull request it's published as.
-    pub fn pull_request_body(&self) -> String {
+    /// The description of the pull request it's published as: `Closes #n`
+    /// for an issue, then `description` (one written for the work), else
+    /// the rest of the prompt (an issue's text is left out: the issue has
+    /// it).
+    pub fn pull_request_body(&self, description: Option<&str>) -> String {
         let mut parts = Vec::new();
-        match self.issue {
-            Some(n) => parts.push(format!("Closes #{n}")),
-            None => {
+        if let Some(n) = self.issue {
+            parts.push(format!("Closes #{n}"));
+        }
+        match (description.map(str::trim), self.issue) {
+            (Some(d), _) if !d.is_empty() => parts.push(d.to_string()),
+            (_, Some(_)) => {}
+            _ => {
                 let rest = self
                     .prompt
                     .trim()
@@ -490,14 +497,17 @@ impl Tasks {
 
     /// Push the task's branch to `remote` and open a pull request for it
     /// on GitHub, into its base. With `commit_uncommitted`, uncommitted
-    /// work in its folder is committed first; otherwise it's refused. The
-    /// task remembers the PR. Returns its number and URL.
+    /// work in its folder is committed first; otherwise it's refused. With
+    /// `describe`, Claude Code writes the PR's title and description from
+    /// the work (and the agent's session); if it can't, the PR gets the
+    /// prompt's. The task remembers the PR. Returns its number and URL.
     pub fn publish(
         &self,
         task: &Task,
         remote: &str,
         draft: bool,
         commit_uncommitted: bool,
+        describe: bool,
     ) -> Result<(u64, String), String> {
         if task.state != TaskState::Open {
             return Err(format!("{} has already landed", task.id));
@@ -522,12 +532,19 @@ impl Tasks {
             return Err(format!("{} has no commits to publish", task.id));
         }
         self.push(task, remote)?;
+        let described = describe
+            .then(|| crate::agent::describe_pull(self, task).ok())
+            .flatten();
+        let (title, description) = match &described {
+            Some((t, d)) => (t.clone(), Some(d.as_str())),
+            None => (task.title(), None),
+        };
         let (number, url) = crate::github::create_pull(
             &task.worktree,
             &task.branch,
             &task.base,
-            &task.title(),
-            &task.pull_request_body(),
+            &title,
+            &task.pull_request_body(description),
             draft,
         )?;
         self.save(&Task {

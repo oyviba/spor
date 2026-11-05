@@ -252,7 +252,7 @@ fn issue_tasks_are_named_after_the_issue_and_close_it_when_landed() {
     assert_eq!(task.branch, "agent/7-login-fails-safari");
     assert_eq!(task.issue, Some(7));
     assert_eq!(f.tasks.get(&task.id).unwrap().issue, Some(7));
-    assert!(task.pull_request_body().starts_with("Closes #7"));
+    assert!(task.pull_request_body(None).starts_with("Closes #7"));
 
     work(&task.worktree, "app.txt", "fixed\n", Some("Fix it"));
     f.tasks.land(&task, LandMode::Squash, false).unwrap();
@@ -277,16 +277,25 @@ fn publish_pushes_the_branch_before_opening_a_pull_request() {
     );
     let task = f.tasks.create("Add a thing", "main").unwrap();
 
-    let err = f.tasks.publish(&task, "origin", false, false).unwrap_err();
+    let err = f
+        .tasks
+        .publish(&task, "origin", false, false, false)
+        .unwrap_err();
     assert!(err.contains("no commits"), "{err}");
 
     work(&task.worktree, "new.txt", "new\n", None);
-    let err = f.tasks.publish(&task, "origin", false, false).unwrap_err();
+    let err = f
+        .tasks
+        .publish(&task, "origin", false, false, false)
+        .unwrap_err();
     assert!(err.contains("uncommitted"), "{err}");
 
     // The push works; opening the PR can't (the remote isn't GitHub), and
     // then the task has no PR.
-    let err = f.tasks.publish(&task, "origin", true, true).unwrap_err();
+    let err = f
+        .tasks
+        .publish(&task, "origin", true, true, false)
+        .unwrap_err();
     assert!(err.contains("GitHub"), "{err}");
     git(
         &remote,
