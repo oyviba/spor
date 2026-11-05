@@ -2422,9 +2422,11 @@ button.blame-commit:hover .truncate {
   width: 48px;
   min-width: 0;
 }
+.diff.split col.col-ln {
+  width: 48px;
+}
 .diff.split td.code {
   position: relative;
-  width: calc(50% - 48px);
 }
 .diff.split td.add {
   background: var(--add-bg);

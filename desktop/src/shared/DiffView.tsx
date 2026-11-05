@@ -171,6 +171,14 @@ function FileDiff({ file, ...p }: Props & { file: DiffFile }) {
       {sel && p.selectionBar}
       {!collapsed && (
         <table className={`diff${staging ? " selectable" : ""}${split ? " split" : ""}`}>
+          {split && (
+            <colgroup>
+              <col className="col-ln" />
+              <col />
+              <col className="col-ln" />
+              <col />
+            </colgroup>
+          )}
           <tbody>
             {split
               ? pairUp(lines).map((row, r) => {
