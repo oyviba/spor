@@ -1,5 +1,6 @@
-// Settings (⌘,): a dialog with one page per topic. Later topics add a page
-// to PAGES.
+// Settings (⌘,): a dialog with one page per topic. (The settings themselves
+// live in settings.ts; this file has a different name so the two stay
+// apart on a case-insensitive file system.) Later topics add a page to PAGES.
 
 import { useState } from "react";
 import { setSettings, useSettings } from "./settings";

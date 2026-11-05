@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { DEFAULT_GRAPH, setSettings, useSettings, type GraphOptions as Options } from "../../shared/settings";
 import { Gear } from "../../shared/Icons";
-import { Choice } from "../../shared/Settings";
+import { Choice } from "../../shared/SettingsDialog";
 
 const ROWS = [
   { id: "24", label: "Compact" },

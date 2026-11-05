@@ -4,7 +4,7 @@ import type { BranchInfo, Credential, RepoInfo, RepoState } from "./types";
 import { usePoll, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
-import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/Settings";
+import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
 import { AppearancePage } from "./shared/ThemeEditor";

@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { setSettings, useSettings, type ModeTheme } from "./settings";
 import { DEFAULT_THEME, PRESETS, TOKENS, colorsOf, setPreviewMode, useMode, type Mode } from "./theme";
-import { Choice } from "./Settings";
+import { Choice } from "./SettingsDialog";
 
 const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 
