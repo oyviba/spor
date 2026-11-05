@@ -3,6 +3,7 @@ import { api } from "../../api";
 import type { FileEntry, StashInfo } from "../../types";
 import { useShell } from "../../shared/app";
 import { useRepoChanges } from "../../shared/hooks";
+import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView, selectionRange, type LineSelection } from "../../shared/DiffView";
 import { parsePatch } from "../../shared/diff";
@@ -82,7 +83,7 @@ export function ChangesSection() {
     if (!pick || !selection || !patch) return;
     const range = selectionRange(patch, selection);
     if (!range) return;
-    shell
+    return shell
       .act(() => api.stageLines(pick.path, pick.staged, discard, range.from, range.to).then(() => undefined))
       .then(after);
   };
@@ -133,16 +134,16 @@ export function ChangesSection() {
           {group(
             "Staged",
             staged,
-            <button className="link small-text" onClick={() => shell.act(() => api.unstage(staged.map((f) => f.path)).then(() => undefined)).then(after)}>
+            <Button className="link small-text" onClick={() => shell.act(() => api.unstage(staged.map((f) => f.path)).then(() => undefined)).then(after)}>
               Unstage all
-            </button>,
+            </Button>,
           )}
           {group(
             "Changes",
             unstaged,
-            <button className="link small-text" onClick={() => shell.act(() => api.stage(unstaged.map((f) => f.path)).then(() => undefined)).then(after)}>
+            <Button className="link small-text" onClick={() => shell.act(() => api.stage(unstaged.map((f) => f.path)).then(() => undefined)).then(after)}>
               Stage all
-            </button>,
+            </Button>,
           )}
         </div>
       </aside>
@@ -195,19 +196,19 @@ export function ChangesSection() {
                         <Alert size={14} />
                         <span>Both sides changed this file.</span>
                         <span className="flex-1" />
-                        <button className="ghost small" onClick={() => shell.act(() => api.resolve(pick.path, "ours").then(() => undefined), { undo: false }).then(after)}>
+                        <Button className="ghost small" onClick={() => shell.act(() => api.resolve(pick.path, "ours").then(() => undefined), { undo: false }).then(after)}>
                           Take ours
-                        </button>
-                        <button className="ghost small" onClick={() => shell.act(() => api.resolve(pick.path, "theirs").then(() => undefined), { undo: false }).then(after)}>
+                        </Button>
+                        <Button className="ghost small" onClick={() => shell.act(() => api.resolve(pick.path, "theirs").then(() => undefined), { undo: false }).then(after)}>
                           Take theirs
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           className="primary small"
                           title="After editing the file to keep what you want"
                           onClick={() => shell.act(() => api.resolve(pick.path, "resolved").then(() => undefined), { undo: false }).then(after)}
                         >
                           <Check size={12} /> Mark resolved
-                        </button>
+                        </Button>
                       </div>
                     )}
                     {entry.status === "conflicted" ? (
@@ -235,17 +236,17 @@ export function ChangesSection() {
                             <span className="muted small-text">shift-click to extend</span>
                             <span className="flex-1" />
                             {pick.staged ? (
-                              <button className="primary small" onClick={() => stageSelection(false)}>
+                              <Button className="primary small" onClick={() => stageSelection(false)}>
                                 <Minus size={11} /> Unstage lines
-                              </button>
+                              </Button>
                             ) : (
                               <>
-                                <button className="ghost small" onClick={() => stageSelection(true)}>
+                                <Button className="ghost small" onClick={() => stageSelection(true)}>
                                   <Undo size={11} /> Discard lines
-                                </button>
-                                <button className="primary small" onClick={() => stageSelection(false)}>
+                                </Button>
+                                <Button className="primary small" onClick={() => stageSelection(false)}>
                                   <Plus size={11} /> Stage lines
-                                </button>
+                                </Button>
                               </>
                             )}
                           </div>
@@ -276,8 +277,8 @@ function FileRow({
   file: FileEntry;
   selected: boolean;
   onPick: () => void;
-  onToggle: () => void;
-  onDiscard?: () => void;
+  onToggle: () => Promise<unknown>;
+  onDiscard?: () => Promise<unknown>;
 }) {
   const slash = file.path.lastIndexOf("/");
   const name = file.path.slice(slash + 1);
@@ -291,13 +292,13 @@ function FileRow({
       </button>
       <span className="row-actions">
         {onDiscard && (
-          <button className="icon-button tiny" title="Discard changes (⌘Z undoes)" onClick={onDiscard}>
+          <Button className="icon-button tiny" title="Discard changes (⌘Z undoes)" onClick={onDiscard}>
             <Undo size={11} />
-          </button>
+          </Button>
         )}
-        <button className="icon-button tiny" title={file.staged ? "Unstage" : file.status === "conflicted" ? "Mark resolved" : "Stage"} onClick={onToggle}>
+        <Button className="icon-button tiny" title={file.staged ? "Unstage" : file.status === "conflicted" ? "Mark resolved" : "Stage"} onClick={onToggle}>
           {file.staged ? <Minus size={11} /> : <Plus size={11} />}
-        </button>
+        </Button>
       </span>
     </div>
   );
@@ -309,11 +310,18 @@ function SyncCard({ stashes, onChanged, canStash }: { stashes: StashInfo[]; onCh
   const [busy, setBusy] = useState<string | null>(null);
   const run = (what: "fetch" | "pull" | "push") => {
     setBusy(what);
-    shell.act(() => api.sync(what), { undo: what === "pull" }).finally(() => {
+    const pending = { fetch: "Fetching…", pull: "Pulling…", push: state?.upstream ? "Pushing…" : "Publishing…" }[what];
+    return shell.act(() => api.sync(what), { undo: what === "pull", pending }).finally(() => {
       setBusy(null);
       onChanged();
     });
   };
+  // One sync at a time: the others wait (dimmed) while one runs.
+  const syncButton = (what: "fetch" | "pull" | "push") => ({
+    busy: busy === what,
+    disabled: busy != null && busy !== what,
+    onClick: () => run(what),
+  });
   return (
     <DetailsCard>
       <div className="inspector-section">
@@ -333,25 +341,30 @@ function SyncCard({ stashes, onChanged, canStash }: { stashes: StashInfo[]; onCh
         )}
       </div>
       <div className="inspector-actions">
-        <button className="ghost" disabled={!!busy} onClick={() => run("fetch")}>
-          <Refresh size={12} className={busy === "fetch" ? "spin" : ""} /> Fetch
-        </button>
-        <button className={state && state.behind > 0 ? "primary" : "ghost"} disabled={!!busy || !state?.upstream} onClick={() => run("pull")}>
+        <Button className="ghost" {...syncButton("fetch")} title="Fetch from all remotes">
+          <Refresh size={12} /> Fetch
+        </Button>
+        <Button
+          className={state && state.behind > 0 ? "primary" : "ghost"}
+          {...syncButton("pull")}
+          disabled={(busy != null && busy !== "pull") || !state?.upstream}
+          title={state?.upstream ? `Pull from ${state.upstream}, with rebase` : "Publish the branch first"}
+        >
           <ArrowDown size={12} /> Pull{state && state.behind > 0 ? ` ${state.behind}` : ""}
-        </button>
-        <button className={state && state.ahead > 0 ? "primary" : "ghost"} disabled={!!busy} onClick={() => run("push")} title={state?.upstream ? "Push" : "Publish the branch to origin"}>
+        </Button>
+        <Button className={state && state.ahead > 0 ? "primary" : "ghost"} {...syncButton("push")} title={state?.upstream ? `Push to ${state.upstream}` : "Publish the branch to origin"}>
           <ArrowUp size={12} /> {state?.upstream ? `Push${state.ahead > 0 ? ` ${state.ahead}` : ""}` : "Publish"}
-        </button>
+        </Button>
       </div>
       {state?.branch && state.upstream && state.branch !== shell.repo.default_base && (
         <div className="inspector-actions">
-          <button
+          <Button
             className="ghost"
             title="This branch's pull request, or the page to open one"
             onClick={() => api.pullRequestUrl().then(api.openUrl).catch(shell.fail)}
           >
             <PullRequest size={12} /> Pull request on GitHub
-          </button>
+          </Button>
         </div>
       )}
       <div className="inspector-section">
@@ -359,11 +372,11 @@ function SyncCard({ stashes, onChanged, canStash }: { stashes: StashInfo[]; onCh
           <Archive size={13} />
           <span>Stashes</span>
           <span className="flex-1" />
-          <button
+          <Button
             className="link small-text"
             disabled={!canStash}
-            title="Right-click to give it a message"
-            onClick={() => shell.act(() => api.stash(null), { undo: false }).then(onChanged)}
+            title={canStash ? "Right-click to give it a message" : "Nothing to stash"}
+            onClick={() => shell.act(() => api.stash(null), { undo: false, pending: "Stashing…" }).then(onChanged)}
             onContextMenu={(e) =>
               shell.menu(e, [
                 {
@@ -378,7 +391,7 @@ function SyncCard({ stashes, onChanged, canStash }: { stashes: StashInfo[]; onCh
             }
           >
             Stash changes
-          </button>
+          </Button>
         </div>
         {stashes.map((s) => (
           <div
@@ -395,15 +408,15 @@ function SyncCard({ stashes, onChanged, canStash }: { stashes: StashInfo[]; onCh
             <span className="truncate muted" title={`${s.message} — right-click for more`}>
               {s.message}
             </span>
-            <button className="link small-text" onClick={() => shell.act(() => api.stashPop(s.index), { undo: false }).then(onChanged)}>
+            <Button className="link small-text" title="Apply it and drop it from the list" onClick={() => shell.act(() => api.stashPop(s.index), { undo: false }).then(onChanged)}>
               Pop
-            </button>
-            <button className="link small-text" title="Apply it and keep it in the list" onClick={() => shell.act(() => api.stashApply(s.index), { undo: false }).then(onChanged)}>
+            </Button>
+            <Button className="link small-text" title="Apply it and keep it in the list" onClick={() => shell.act(() => api.stashApply(s.index), { undo: false }).then(onChanged)}>
               Apply
-            </button>
-            <button className="link small-text" title="Drop it (⌘Z undoes)" onClick={() => shell.act(() => api.stashDrop(s.index)).then(onChanged)}>
+            </Button>
+            <Button className="link small-text" title="Drop it (⌘Z undoes)" onClick={() => shell.act(() => api.stashDrop(s.index)).then(onChanged)}>
               Drop
-            </button>
+            </Button>
           </div>
         ))}
       </div>
@@ -417,7 +430,8 @@ function CommitBox({ staged, conflicts, onCommitted }: { staged: number; conflic
   const [amend, setAmend] = useState(false);
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
-  const can = message.trim().length > 0 && (staged > 0 || amend) && !conflicts && !busy;
+  const ready = message.trim().length > 0 && (staged > 0 || amend) && !conflicts;
+  const can = ready && !busy;
   const submit = async () => {
     if (!can) return;
     setBusy(true);
@@ -460,9 +474,9 @@ function CommitBox({ staged, conflicts, onCommitted }: { staged: number; conflic
             </button>
             <span className="flex-1" />
             <span className="hint-keys">⌘↩ commit</span>
-            <button className="primary" disabled={!can} onClick={submit}>
+            <Button className="primary" disabled={!ready} busy={busy} onClick={submit}>
               {amend ? "Amend" : `Commit${staged > 0 ? ` ${staged} ${staged === 1 ? "file" : "files"}` : ""}`}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

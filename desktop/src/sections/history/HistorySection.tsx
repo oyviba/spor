@@ -3,6 +3,7 @@ import { api } from "../../api";
 import type { BranchInfo, CommitDetail, Graph as GraphData, PrBadge, TagInfo, WorktreeInfo } from "../../types";
 import { useShell } from "../../shared/app";
 import { useNow, useStored } from "../../shared/hooks";
+import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
 import { parsePatch } from "../../shared/diff";
@@ -36,6 +37,7 @@ export function HistorySection() {
   const [hits, setHits] = useState<Set<string> | null>(null);
   const [shelves, setShelves] = useStored("history.shelves", { agent: true, remote: false, tags: false, worktrees: false });
   const [loadMs, setLoadMs] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const graphRef = useRef<GraphHandle>(null);
   const now = useNow(60_000);
 
@@ -48,7 +50,8 @@ export function HistorySection() {
         setBranches(b);
         setLoadMs(Math.round(performance.now() - t0));
       })
-      .catch(fail);
+      .catch(fail)
+      .finally(() => setLoadingMore(false));
     api.tags().then(setTags, () => setTags([]));
     api.worktrees().then(setWorktrees, () => setWorktrees([]));
   }, [state?.refs, limit]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -136,8 +139,8 @@ export function HistorySection() {
     if (!b.current) {
       items.push(
         { label: b.remote ? `Check out ${b.name} as a local branch` : `Check out ${b.name}`, run: () => shell.switchBranch((stash) => api.checkout(b.name, stash)) },
-        { label: `Merge ${b.name} into ${into}`, run: () => shell.act(() => api.mergeBranch(b.name)), separator: true },
-        { label: `Rebase ${into} onto ${b.name}`, run: () => shell.act(() => api.rebaseOnto(b.name)), disabled: !current },
+        { label: `Merge ${b.name} into ${into}`, run: () => shell.act(() => api.mergeBranch(b.name), { pending: `Merging ${b.name}…` }), separator: true },
+        { label: `Rebase ${into} onto ${b.name}`, run: () => shell.act(() => api.rebaseOnto(b.name), { pending: `Rebasing onto ${b.name}…` }), disabled: !current },
       );
     }
     if (!b.remote) {
@@ -162,7 +165,7 @@ export function HistorySection() {
             action: "Delete from remote",
             danger: true,
           });
-          if (ok) shell.act(() => api.deleteRemoteBranch(b.name), { undo: false });
+          if (ok) shell.act(() => api.deleteRemoteBranch(b.name), { undo: false, pending: `Deleting ${b.name}…` });
         },
       });
     }
@@ -175,11 +178,11 @@ export function HistorySection() {
     const items: MenuItem[] = [
       {
         label: `Merge ${source} into ${target}`,
-        run: () => shell.act(() => api.mergeInto(source, target)),
+        run: () => shell.act(() => api.mergeInto(source, target), { pending: `Merging ${source} into ${target}…` }),
       },
     ];
     if (source === current)
-      items.push({ label: `Rebase ${source} onto ${target}`, run: () => shell.act(() => api.rebaseOnto(target)) });
+      items.push({ label: `Rebase ${source} onto ${target}`, run: () => shell.act(() => api.rebaseOnto(target), { pending: `Rebasing onto ${target}…` }) });
     items.push({
       label: `Open pull request: ${source} → ${target}`,
       separator: true,
@@ -227,28 +230,28 @@ export function HistorySection() {
       </button>
       {!b.current && (
         <span className="row-actions">
-          <button
+          <Button
             className="icon-button tiny"
             title={`Check out ${b.name}`}
             onClick={() => shell.switchBranch((stash) => api.checkout(b.name, stash))}
           >
             <Undo size={11} style={{ transform: "scaleX(-1)" }} />
-          </button>
-          <button
+          </Button>
+          <Button
             className="icon-button tiny"
             title={`Merge ${b.name} into ${current ?? "HEAD"}`}
-            onClick={() => shell.act(() => api.mergeBranch(b.name))}
+            onClick={() => shell.act(() => api.mergeBranch(b.name), { pending: `Merging ${b.name}…` })}
           >
             <Merge size={11} />
-          </button>
+          </Button>
           {!b.remote && (
-            <button
+            <Button
               className="icon-button tiny"
               title={`Delete ${b.name} (⌘Z undoes)`}
               onClick={() => shell.act(() => api.deleteBranch(b.name))}
             >
               <Trash size={11} />
-            </button>
+            </Button>
           )}
         </span>
       )}
@@ -305,9 +308,9 @@ export function HistorySection() {
                   <span className="truncate">{t.name}</span>
                 </button>
                 <span className="row-actions">
-                  <button className="icon-button tiny" title={`Delete ${t.name} (⌘Z undoes)`} onClick={() => shell.act(() => api.deleteTag(t.name))}>
+                  <Button className="icon-button tiny" title={`Delete ${t.name} (⌘Z undoes)`} onClick={() => shell.act(() => api.deleteTag(t.name))}>
                     <Trash size={11} />
-                  </button>
+                  </Button>
                 </span>
               </div>
             ))}
@@ -332,7 +335,7 @@ export function HistorySection() {
                       danger: true,
                       separator: true,
                       disabled: w.main || w.current || w.agent,
-                      run: () => shell.act(() => api.removeWorktree(w.path), { undo: false }),
+                      run: () => shell.act(() => api.removeWorktree(w.path), { undo: false, pending: "Removing the worktree…" }),
                     },
                   ])
                 }
@@ -413,9 +416,16 @@ export function HistorySection() {
                   onDropBranch={(source, target, e) => dropMenu(source, target, e)}
                 />
                 {graph.more && (
-                  <button className="link load-more" onClick={() => setLimit((l) => l + PAGE)}>
+                  <Button
+                    className="link load-more"
+                    busy={loadingMore}
+                    onClick={() => {
+                      setLoadingMore(true);
+                      setLimit((l) => l + PAGE);
+                    }}
+                  >
                     Load {PAGE.toLocaleString()} more commits
-                  </button>
+                  </Button>
                 )}
               </div>
             ) : tab === "blame" && blameOf ? (
@@ -592,17 +602,25 @@ function CommitCard({
             <button className="ghost" onClick={() => setNaming(true)}>
               <Branch size={12} /> Branch here
             </button>
-            <button className="ghost" onClick={() => shell.act(() => api.cherryPick(commit.hash))} title={`Apply ${short} on ${current ?? "HEAD"}`}>
+            <Button
+              className="ghost"
+              onClick={() => shell.act(() => api.cherryPick(commit.hash), { pending: `Cherry-picking ${short}…` })}
+              title={`Apply ${short} on ${current ?? "HEAD"}`}
+            >
               Cherry-pick
-            </button>
-            <button
+            </Button>
+            <Button
               className={confirmRevert ? "danger" : "ghost"}
-              onClick={() => (confirmRevert ? shell.act(() => api.revert(commit.hash)) : setConfirmRevert(true))}
+              onClick={() =>
+                confirmRevert
+                  ? shell.act(() => api.revert(commit.hash), { pending: `Reverting ${short}…` }).then(() => setConfirmRevert(false))
+                  : setConfirmRevert(true)
+              }
               onBlur={() => setConfirmRevert(false)}
               title={`A new commit on ${current ?? "HEAD"} that undoes ${short}`}
             >
               {confirmRevert ? "Revert?" : "Revert"}
-            </button>
+            </Button>
             <button
               className="ghost"
               title="Tag, check out, rebase, reset, rewrite…"
@@ -635,7 +653,7 @@ function commitActions(shell: Shell, hash: string, current: string | null, rewri
       });
       if (!ok) return;
     }
-    shell.act(() => api.resetTo(hash, mode));
+    shell.act(() => api.resetTo(hash, mode), { pending: `Resetting to ${short}…` });
   };
   return [
     { label: "Copy hash", run: () => navigator.clipboard.writeText(hash).then(() => shell.toast("Hash copied")) },
@@ -660,9 +678,9 @@ function commitActions(shell: Shell, hash: string, current: string | null, rewri
       },
     },
     { label: "Check out this commit (detached)", run: () => shell.switchBranch((stash) => api.checkoutCommit(hash, stash)) },
-    { label: `Cherry-pick onto ${on}`, separator: true, run: () => shell.act(() => api.cherryPick(hash)) },
-    { label: `Revert on ${on}`, run: () => shell.act(() => api.revert(hash)) },
-    { label: `Rebase ${on} onto ${short}`, run: () => shell.act(() => api.rebaseOnto(hash)), disabled: !current },
+    { label: `Cherry-pick onto ${on}`, separator: true, run: () => shell.act(() => api.cherryPick(hash), { pending: `Cherry-picking ${short}…` }) },
+    { label: `Revert on ${on}`, run: () => shell.act(() => api.revert(hash), { pending: `Reverting ${short}…` }) },
+    { label: `Rebase ${on} onto ${short}`, run: () => shell.act(() => api.rebaseOnto(hash), { pending: `Rebasing onto ${short}…` }), disabled: !current },
     { label: `Rewrite ${on} after here…`, run: () => rewrite(hash), disabled: !current },
     { label: `Reset ${on} here — keep changes staged (soft)`, separator: true, run: reset("soft"), disabled: !current },
     { label: `Reset ${on} here — keep changes in files (mixed)`, run: reset("mixed"), disabled: !current },
@@ -674,7 +692,7 @@ function tagMenu(shell: Shell, t: TagInfo, show: (hash: string) => void): MenuIt
   return [
     { label: `Show ${t.name}`, run: () => show(t.hash) },
     { label: "Copy name", run: () => navigator.clipboard.writeText(t.name).then(() => shell.toast("Copied")) },
-    { label: "Push to remote", separator: true, run: () => shell.act(() => api.pushTag(t.name), { undo: false }) },
+    { label: "Push to remote", separator: true, run: () => shell.act(() => api.pushTag(t.name), { undo: false, pending: `Pushing ${t.name}…` }) },
     { label: `Delete ${t.name}`, danger: true, separator: true, run: () => shell.act(() => api.deleteTag(t.name)) },
     {
       label: "Delete from remote too…",
@@ -687,7 +705,7 @@ function tagMenu(shell: Shell, t: TagInfo, show: (hash: string) => void): MenuIt
           danger: true,
         });
         if (ok) {
-          await shell.act(() => api.pushTag(t.name, true), { undo: false });
+          await shell.act(() => api.pushTag(t.name, true), { undo: false, pending: `Deleting ${t.name} from the remote…` });
           shell.act(() => api.deleteTag(t.name));
         }
       },

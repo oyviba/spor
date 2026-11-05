@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Issue, IssueDetail, TaskSummary } from "../../types";
 import { useShell } from "../../shared/app";
 import { usePoll, useStored } from "../../shared/hooks";
-import { DetailsCard, EmptyState, PageHeader, SidebarHeader } from "../../shared/Layout";
+import { Button } from "../../shared/Button";
+import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { Markdown } from "../../shared/Markdown";
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
@@ -37,12 +38,19 @@ export function IssuesSection() {
   const [selected, setSelected] = useStored<number | null>("issues.selected", null);
   const [detail, setDetail] = useState<IssueDetail | null>(null);
 
+  // The filter shown: an answer for one picked before it is dropped.
+  const wanted = useRef(filter);
+  wanted.current = filter;
   usePoll(
     async () => {
+      const asked = filter;
       try {
-        setIssues(await api.issues(filter));
+        const list = await api.issues(asked);
+        if (wanted.current !== asked) return;
+        setIssues(list);
         setError(null);
       } catch (e) {
+        if (wanted.current !== asked) return;
         setError(errorText(e));
         setIssues([]);
       }
@@ -77,7 +85,15 @@ export function IssuesSection() {
         <SidebarHeader />
         <div className="segmented">
           {FILTERS.map((f) => (
-            <button key={f.id} aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>
+            <button
+              key={f.id}
+              aria-pressed={filter === f.id}
+              onClick={() => {
+                if (f.id === filter) return;
+                setIssues(null);
+                setFilter(f.id);
+              }}
+            >
               {f.label}
             </button>
           ))}
@@ -85,7 +101,9 @@ export function IssuesSection() {
         <div className="task-list">
           {error ? (
             <div className="sidebar-empty">{error}</div>
-          ) : issues == null ? null : issues.length === 0 ? (
+          ) : issues == null ? (
+            <ListLoading what="issues" />
+          ) : issues.length === 0 ? (
             <div className="sidebar-empty">
               {filter === "assigned" ? "Nothing assigned to you." : "No issues here."}
             </div>
@@ -193,7 +211,12 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
   const shell = useShell();
   const i = detail.issue;
   const act = (action: "close" | "reopen") =>
-    shell.act(() => api.issueAction(i.number, action), { undo: false }).then((ok) => ok && onChanged());
+    shell
+      .act(() => api.issueAction(i.number, action), {
+        undo: false,
+        pending: action === "close" ? `Closing #${i.number}…` : `Reopening #${i.number}…`,
+      })
+      .then((ok) => ok && onChanged());
   return (
     <DetailsCard>
       <div className="inspector-section">
@@ -227,12 +250,12 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
         )}
       </div>
       <div className="inspector-actions">
-        <button className="ghost" onClick={() => act(i.open ? "close" : "reopen")}>
+        <Button className="ghost" onClick={() => act(i.open ? "close" : "reopen")}>
           {i.open ? "Close issue" : "Reopen"}
-        </button>
-        <button className="icon-button" title="Open on GitHub" onClick={() => api.openUrl(i.url).catch(shell.fail)}>
+        </Button>
+        <Button className="icon-button" title="Open on GitHub" onClick={() => api.openUrl(i.url).catch(shell.fail)}>
           <External size={13} />
-        </button>
+        </Button>
       </div>
     </DetailsCard>
   );
@@ -315,9 +338,9 @@ function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: 
               <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
             )}
             <span className="flex-1" />
-            <button className="primary" disabled={busy || !prompt.trim()} onClick={start}>
+            <Button className="primary" disabled={!prompt.trim()} busy={busy} onClick={start}>
               <ArrowUp size={12} /> {verb}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

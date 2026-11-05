@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../api";
 import type { PlanAction, PlanCommit } from "../../types";
 import { useShell } from "../../shared/app";
+import { Button } from "../../shared/Button";
 import { ArrowDown, ArrowUp } from "../../shared/Icons";
 
 interface Step {
@@ -78,11 +79,13 @@ export function Rewrite({ base, onDone, onCancel }: { base: string; onDone: () =
 
   const run = async () => {
     setBusy(true);
-    const ok = await shell.act(() =>
-      api.rewrite(
-        base,
-        steps.map((s) => ({ hash: s.commit.hash, action: s.action, message: s.action === "reword" ? s.message : null })),
-      ),
+    const ok = await shell.act(
+      () =>
+        api.rewrite(
+          base,
+          steps.map((s) => ({ hash: s.commit.hash, action: s.action, message: s.action === "reword" ? s.message : null })),
+        ),
+      { pending: "Rewriting history…" },
     );
     setBusy(false);
     if (ok) onDone();
@@ -137,12 +140,12 @@ export function Rewrite({ base, onDone, onCancel }: { base: string; onDone: () =
       <div className="rewrite-actions">
         {problem && <span className="bad-text small-text">{problem}</span>}
         <span className="flex-1" />
-        <button className="ghost" onClick={onCancel}>
+        <button className="ghost" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
-        <button className="primary" disabled={!!problem || busy || unchanged} onClick={run}>
+        <Button className="primary" disabled={!!problem || unchanged} busy={busy} onClick={run}>
           Rewrite history
-        </button>
+        </Button>
       </div>
     </div>
   );

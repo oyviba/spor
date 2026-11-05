@@ -169,6 +169,16 @@ export function DetailsCard({ children }: { children: React.ReactNode }) {
   return <aside className="inspector">{children}</aside>;
 }
 
+/** A list on its way (from GitHub, say): shown after a beat, so a quick
+ * load doesn't flash it. */
+export function ListLoading({ what }: { what: string }) {
+  return (
+    <div className="sidebar-empty loading" role="status">
+      <span className="spinner" aria-hidden /> Loading {what}…
+    </div>
+  );
+}
+
 export function EmptyState({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
     <div className="empty-state">
