@@ -110,7 +110,7 @@ export function InboxSection({ inbox, onOpen }: { inbox: Inbox; onOpen: (item: I
         >
           <p>
             Agents waiting on an answer, finished agent work you haven't looked at, failed runs on your branches and
-            pull requests waiting for your review, in every recent repository. Click one to open it.
+            pull requests waiting for your review, in every repository of every workspace. Click one to open it.
           </p>
           {errors.map((e) => (
             <p key={e} className="muted small-text">

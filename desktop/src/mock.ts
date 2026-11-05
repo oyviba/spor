@@ -758,8 +758,10 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
     case "askpass_answer":
     case "auto_fetch":
       return null;
-    case "legacy_repos":
-      return [];
+    case "legacy_workspaces":
+      return null;
+    case "repo_heads":
+      return (args.paths as string[]).map((path) => ({ path, exists: true, branch: "main", ahead: 0, behind: path.endsWith("postplan") ? 0 : 2, changes: 1 }));
     case "tags":
       return f.tags ?? [];
     case "worktrees":
@@ -810,6 +812,25 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
     case "stash_drop":
       f.stashes = (f.stashes as { index: number }[]).filter((x) => x.index !== args.index);
       return done("Drop stash", "Dropped the stash");
+    case "blame": {
+      const rows = f.graph.rows as { hash: string; subject: string; author: string; time: number }[];
+      return Array.from({ length: 24 }, (_, i) => {
+        const r = rows[Math.floor(i / 5) % rows.length];
+        return { hash: r.hash, author: r.author, time: r.time, summary: r.subject, line: i + 1, text: `line ${i + 1} of ${args.path}` };
+      });
+    }
+    case "conflict_regions":
+      return [
+        { kind: "text", text: "# postplan\n\nSchedule posts.\n" },
+        { kind: "conflict", ours: "Install with pip.\n", ours_label: "HEAD", theirs: "Install with uv.\n", theirs_label: "fix/readme-install", base: null },
+        { kind: "text", text: "\n## Usage\n" },
+      ];
+    case "resolve_regions":
+      return `Resolved ${args.path}`;
+    case "merge_into":
+      return done(`Merge ${args.source} into ${args.target}`);
+    case "pull_request_between":
+      return `https://github.com/you/${f.repo.name}/compare/${args.target}...${args.source}?expand=1`;
     case "skip_operation":
       return "Skipped that commit";
     default:

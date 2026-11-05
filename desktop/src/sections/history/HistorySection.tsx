@@ -9,8 +9,10 @@ import { parsePatch } from "../../shared/diff";
 import { Bot, Branch, Chevron, Commit, Copy, Folder, Merge, Search, Tag, Trash, Undo } from "../../shared/Icons";
 import type { MenuItem } from "../../shared/Overlay";
 import type { Shell } from "../../shared/app";
-import { Graph, type GraphHandle } from "./Graph";
+import { BRANCH_DRAG, Graph, type GraphHandle } from "./Graph";
 import { Rewrite } from "./Rewrite";
+import { Blame } from "./Blame";
+import { GraphOptionsButton } from "./GraphOptions";
 
 const PAGE = 2000;
 
@@ -23,7 +25,8 @@ export function HistorySection() {
   const [limit, setLimit] = useState(PAGE);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [tab, setTab] = useState<"graph" | "commit" | "rewrite">("graph");
+  const [tab, setTab] = useState<"graph" | "commit" | "rewrite" | "blame">("graph");
+  const [blameOf, setBlameOf] = useState<{ path: string; rev: string | null } | null>(null);
   const [rewriteBase, setRewriteBase] = useState<string | null>(null);
   const [tags, setTags] = useState<TagInfo[]>([]);
   const [worktrees, setWorktrees] = useState<WorktreeInfo[]>([]);
@@ -58,10 +61,16 @@ export function HistorySection() {
     );
   }, [state?.refs]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sent here from elsewhere: a branch (an agent task's) or a commit.
+  // Sent here from elsewhere: a branch (an agent task's), a commit, or a
+  // file to blame.
   useEffect(() => {
     const t = shell.target;
     if (t.section !== "history" || !graph) return;
+    if (t.blame) {
+      setBlameOf(t.blame);
+      setTab("blame");
+      return;
+    }
     const hash =
       t.hash ?? (t.branch ? graph.rows.find((r) => r.refs.some((x) => x === t.branch))?.hash : undefined);
     if (hash) {
@@ -161,8 +170,51 @@ export function HistorySection() {
     return items;
   };
 
+  /** A branch dropped on another: merge it there, rebase, or a PR between them. */
+  const dropMenu = (source: string, target: string, e: { clientX: number; clientY: number }) => {
+    const items: MenuItem[] = [
+      {
+        label: `Merge ${source} into ${target}`,
+        run: () => shell.act(() => api.mergeInto(source, target)),
+      },
+    ];
+    if (source === current)
+      items.push({ label: `Rebase ${source} onto ${target}`, run: () => shell.act(() => api.rebaseOnto(target)) });
+    items.push({
+      label: `Open pull request: ${source} → ${target}`,
+      separator: true,
+      run: () => api.pullRequestBetween(source, target).then(api.openUrl).catch(fail),
+    });
+    shell.menu(e, items);
+  };
+  const [dropOn, setDropOn] = useState<string | null>(null);
+
   const branchRow = (b: BranchInfo) => (
-    <div key={b.name} className={`branch-row${b.current ? " current" : ""}`} onContextMenu={(e) => shell.menu(e, branchMenu(b))}>
+    <div
+      key={b.name}
+      className={`branch-row${b.current ? " current" : ""}${dropOn === b.name ? " drop-target" : ""}`}
+      onContextMenu={(e) => shell.menu(e, branchMenu(b))}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(BRANCH_DRAG, b.name);
+        e.dataTransfer.setData("text/plain", b.name);
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes(BRANCH_DRAG)) return;
+        e.preventDefault();
+        setDropOn(b.name);
+      }}
+      onDragLeave={() => setDropOn((d) => (d === b.name ? null : d))}
+      onDrop={(e) => {
+        setDropOn(null);
+        const source = e.dataTransfer.getData(BRANCH_DRAG);
+        if (source && source !== b.name) {
+          e.preventDefault();
+          dropMenu(source, b.name, e);
+        }
+      }}
+    >
       <button
         className="branch-name"
         onClick={() => showBranch(b.name)}
@@ -313,6 +365,7 @@ export function HistorySection() {
               </>
             }
           >
+            {tab === "graph" && <GraphOptionsButton />}
             <Tabs
               value={tab}
               onChange={setTab}
@@ -329,6 +382,9 @@ export function HistorySection() {
                   ),
                 },
                 ...(rewriteBase ? [{ id: "rewrite" as const, label: "Rewrite" }] : []),
+                ...(blameOf
+                  ? [{ id: "blame" as const, label: <span className="truncate tab-file">Blame {blameOf.path.split("/").pop()}</span> }]
+                  : []),
               ]}
             />
           </PageHeader>
@@ -354,12 +410,25 @@ export function HistorySection() {
                   nowMs={now}
                   prs={prs}
                   onContext={(hash, e) => shell.menu(e, commitMenu(hash))}
+                  onDropBranch={(source, target, e) => dropMenu(source, target, e)}
                 />
                 {graph.more && (
                   <button className="link load-more" onClick={() => setLimit((l) => l + PAGE)}>
                     Load {PAGE.toLocaleString()} more commits
                   </button>
                 )}
+              </div>
+            ) : tab === "blame" && blameOf ? (
+              <div className="changes">
+                <Blame
+                  path={blameOf.path}
+                  rev={blameOf.rev}
+                  onShowCommit={showCommit}
+                  onFileHistory={(path) => {
+                    setQuery(`path:${path}`);
+                    setTab("graph");
+                  }}
+                />
               </div>
             ) : tab === "rewrite" && rewriteBase ? (
               <div className="changes">
@@ -379,14 +448,21 @@ export function HistorySection() {
               <div className="changes">
                 <div className="changes-column">
                   {commit ? (
-                    <DiffView patch={commit.patch} empty="This commit changes no files." />
+                    <DiffView
+                      patch={commit.patch}
+                      empty="This commit changes no files."
+                      onBlame={(path) => {
+                        setBlameOf({ path, rev: commit.hash });
+                        setTab("blame");
+                      }}
+                    />
                   ) : (
                     <p className="hint">Select a commit.</p>
                   )}
                 </div>
               </div>
             )}
-            {commit && tab !== "rewrite" && (
+            {commit && tab !== "rewrite" && tab !== "blame" && (
               <CommitCard
                 commit={commit}
                 current={current}

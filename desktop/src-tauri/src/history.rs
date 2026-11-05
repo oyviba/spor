@@ -828,3 +828,99 @@ fn short_ref(r: &str) -> String {
         r.to_string()
     }
 }
+
+#[derive(Serialize)]
+pub(crate) struct BlameRow {
+    /// Empty for a line that isn't committed yet.
+    hash: String,
+    author: String,
+    time: i64,
+    summary: String,
+    line: usize,
+    text: String,
+}
+
+/// Who last changed each line of `path`, as of `rev` (the working tree when
+/// `None`, uncommitted lines included).
+#[tauri::command(async)]
+pub(crate) fn blame(
+    app: State<App>,
+    path: String,
+    rev: Option<String>,
+) -> Result<Vec<BlameRow>, String> {
+    let repo = app.repo()?;
+    Ok(repo
+        .blame_at(&path, rev.as_deref())
+        .map_err(|e| first_line(&e))?
+        .into_iter()
+        .map(|l| {
+            let committed = !l.hash.chars().all(|c| c == '0');
+            BlameRow {
+                hash: if committed { l.hash } else { String::new() },
+                author: if committed { l.author } else { "You".into() },
+                time: l.time,
+                summary: if committed {
+                    l.summary
+                } else {
+                    "Not committed yet".into()
+                },
+                line: l.line,
+                text: l.text,
+            }
+        })
+        .collect())
+}
+
+/// Merge `source` into `target`, checking `target` out first when it isn't
+/// already (which needs a clean working tree). ⌘Z takes back the merge; a
+/// second ⌘Z switches back.
+#[tauri::command(async)]
+pub(crate) fn merge_into(
+    app: State<App>,
+    source: String,
+    target: String,
+) -> Result<String, String> {
+    let repo = app.repo()?;
+    let from = repo.tracking()?.branch;
+    if from.as_deref() != Some(target.as_str()) {
+        if !repo.status()?.is_empty() {
+            return Err(format!(
+                "Commit or stash your changes before merging into {target}"
+            ));
+        }
+        repo.checkout_branch(&target).map_err(|e| first_line(&e))?;
+        if let Some(from) = from {
+            app.undo
+                .push(format!("Switch to {target}"), Undo::Checkout { from });
+        }
+    }
+    moving(&app, &repo, format!("Merge {source} into {target}"), || {
+        repo.merge(&source)
+    })
+}
+
+/// The host's page for a pull request from `source` into `target` (remote
+/// prefixes dropped: `origin/feat/x` is `feat/x`).
+#[tauri::command(async)]
+pub(crate) fn pull_request_between(
+    app: State<App>,
+    source: String,
+    target: String,
+) -> Result<String, String> {
+    let repo = app.repo()?;
+    let info =
+        spor::remote::detect_in(repo.root()).ok_or("Couldn't tell where origin is hosted")?;
+    let remotes = repo.remotes();
+    let local = |name: &str| -> String {
+        remotes
+            .iter()
+            .find_map(|r| name.strip_prefix(&format!("{r}/")))
+            .unwrap_or(name)
+            .to_string()
+    };
+    let (head, base) = (local(&source), local(&target));
+    if head == base {
+        return Err("That's the same branch".into());
+    }
+    Ok(spor::remote::compare_url(&info, &base, &head))
+}

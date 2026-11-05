@@ -380,3 +380,28 @@ export interface InboxGithub {
   /** What couldn't be asked, one line each. */
   errors: string[];
 }
+
+/** One line of `git blame`. `hash` is empty for an uncommitted line. */
+export interface BlameRow {
+  hash: string;
+  author: string;
+  time: number;
+  summary: string;
+  line: number;
+  text: string;
+}
+
+/** A conflicted file, split into text and conflict regions. */
+export type ConflictPart =
+  | { kind: "text"; text: string }
+  | { kind: "conflict"; ours: string; ours_label: string; theirs: string; theirs_label: string; base: string | null };
+
+/** A repository in the workspace's list. */
+export interface RepoHead {
+  path: string;
+  exists: boolean;
+  branch: string | null;
+  ahead: number;
+  behind: number;
+  changes: number;
+}

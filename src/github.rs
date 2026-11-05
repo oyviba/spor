@@ -33,10 +33,10 @@ impl Repo {
 pub fn repo(dir: &Path) -> Result<Repo, String> {
     let info = remote::detect_in(dir).ok_or("This repository has no origin remote")?;
     if info.host != Host::GitHub {
-        return Err("Pull requests and Actions work with GitHub repositories".into());
+        return Err("This needs a repository on GitHub — origin is somewhere else".into());
     }
     remote::cli_tool(&info.host).ok_or(
-        "Install the GitHub CLI (gh) and run `gh auth login` to see pull requests and Actions",
+        "Spor couldn't find the GitHub CLI (gh). Install it and sign in with `gh auth login`",
     )?;
     let host = info
         .web_url
