@@ -12,6 +12,7 @@ import type { Shell } from "../../shared/app";
 import { BRANCH_DRAG, Graph, type GraphHandle } from "./Graph";
 import { Rewrite } from "./Rewrite";
 import { Blame } from "./Blame";
+import { GraphOptionsButton } from "./GraphOptions";
 
 const PAGE = 2000;
 
@@ -364,6 +365,7 @@ export function HistorySection() {
               </>
             }
           >
+            {tab === "graph" && <GraphOptionsButton />}
             <Tabs
               value={tab}
               onChange={setTab}

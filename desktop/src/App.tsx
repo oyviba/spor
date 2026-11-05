@@ -5,6 +5,7 @@ import { usePoll, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/Settings";
+import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { getSettings, setSettings } from "./shared/settings";
 import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuSpec } from "./shared/Overlay";
 import { AgentsSection } from "./sections/agents/AgentsSection";
@@ -335,7 +336,10 @@ export function App() {
     ];
   };
 
-  const settingsPages: SettingsPage[] = [{ id: "diffs", label: "Diffs", render: () => <DiffSettings /> }];
+  const settingsPages: SettingsPage[] = [
+    { id: "diffs", label: "Diffs", render: () => <DiffSettings /> },
+    { id: "history", label: "History graph", render: () => <GraphOptionsPanel /> },
+  ];
 
   const overlays = (
     <>
