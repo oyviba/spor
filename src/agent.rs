@@ -461,6 +461,25 @@ impl AskKind {
                     })
                     .collect(),
             ),
+            // spor's own `ask` tool (#106): one question, options optional.
+            crate::mcp::ASK_TOOL => AskKind::Questions(vec![Question {
+                question: input.get("question").str().unwrap_or_default().to_string(),
+                header: String::new(),
+                options: input
+                    .get("options")
+                    .array()
+                    .iter()
+                    .map(|o| Choice {
+                        label: o
+                            .str()
+                            .or(o.get("label").str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        description: o.get("description").str().unwrap_or_default().to_string(),
+                    })
+                    .collect(),
+                multi: false,
+            }]),
             "ExitPlanMode" => {
                 AskKind::Plan(input.get("plan").str().unwrap_or_default().to_string())
             }
@@ -499,6 +518,11 @@ pub fn answered_input(input: &Json, answers: &[Vec<String>]) -> String {
         }
     }
     out.insert("answers".into(), Json::Object(map));
+    // `ask` has one question, and carries its answer in `answer`.
+    if input.get("question").str().is_some() {
+        let picked = answers.first().map(|a| a.join(", ")).unwrap_or_default();
+        out.insert("answer".into(), Json::String(picked));
+    }
     Json::Object(out).to_json()
 }
 
@@ -710,6 +734,56 @@ impl Runs {
         self.start_with(task, kind, prompt, resume, permissions, &Model::default())
     }
 
+    /// The arguments that give Claude Code spor's MCP server (#106): a
+    /// config file in the run directory that starts the app's executable
+    /// as the server, and the tools it may use without asking. `ask` isn't
+    /// among them: it is a question for the person.
+    fn mcp_args(&self, program: &Path, task: &Task, index: usize, log: &Path) -> Vec<String> {
+        let file = self.file(index, "mcp.json");
+        let args = [
+            crate::mcp::ARG.to_string(),
+            self.repo_root.display().to_string(),
+            task.id.clone(),
+            log.display().to_string(),
+        ];
+        let config = format!(
+            r#"{{"mcpServers":{{"spor":{{"command":{},"args":[{}]}}}}}}"#,
+            host::quote(&program.to_string_lossy()),
+            args.iter()
+                .map(|a| host::quote(a))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        if std::fs::write(&file, config).is_err() {
+            return Vec::new();
+        }
+        vec![
+            "--mcp-config".into(),
+            file.display().to_string(),
+            "--allowedTools".into(),
+            crate::mcp::READ_ONLY_TOOLS.join(","),
+        ]
+    }
+
+    /// What the running agent last reported with `report_progress` (#106):
+    /// the step, how many there are, and its note.
+    pub fn reported(&self) -> Option<(usize, usize, String)> {
+        let run = self.latest()?;
+        let log = std::fs::read_to_string(self.file(run.index, "log")).ok()?;
+        log.lines()
+            .rev()
+            .filter(|l| l.contains("spor_progress"))
+            .filter_map(Json::parse)
+            .find(|e| e.get("type").str() == Some("spor_progress"))
+            .map(|e| {
+                (
+                    e.get("step").num().unwrap_or(0.0) as usize,
+                    e.get("of").num().unwrap_or(0.0) as usize,
+                    e.get("note").str().unwrap_or_default().to_string(),
+                )
+            })
+    }
+
     /// `start`, with Claude Code on `model`.
     pub fn start_with(
         &self,
@@ -759,6 +833,11 @@ echo $code > "$SPOR_EXIT""#;
             ]
             .into_iter()
             .chain(hosted_args(&args).into_iter().map(Into::into))
+            .chain(
+                self.mcp_args(host_program, task, index, &log)
+                    .into_iter()
+                    .map(Into::into),
+            )
             .collect(),
             None => ["sh", "-c", script, "spor-agent", &program]
                 .into_iter()
