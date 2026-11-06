@@ -8,6 +8,7 @@ const task = (id: string, created: number, over: Partial<TaskSummary> = {}): Tas
   title: id,
   prompt: id,
   base: "main",
+  from: null,
   branch: `agent/${id}`,
   worktree: `/w/${id}`,
   created,

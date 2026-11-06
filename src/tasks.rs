@@ -26,8 +26,12 @@ pub struct Task {
     /// Short and readable, from the prompt: `fix-login-redirect`.
     pub id: String,
     pub prompt: String,
-    /// The branch it started from and lands on.
+    /// The branch it lands on (and its pull request goes into).
     pub base: String,
+    /// Where it started when that isn't `base` itself: `origin/main`, so a
+    /// task starts from what the remote has, not a local copy that may be
+    /// behind. Its work is what it has on top of this.
+    pub from: Option<String>,
     pub branch: String,
     pub worktree: PathBuf,
     /// Unix time it was created.
@@ -43,6 +47,11 @@ impl Task {
     /// The task's working tree as a repository.
     pub fn repo(&self) -> Repo {
         Repo::new(&self.worktree)
+    }
+
+    /// The ref its work is measured from: `from`, or else `base`.
+    pub fn start(&self) -> &str {
+        self.from.as_deref().unwrap_or(&self.base)
     }
 
     /// The prompt's first line, for lists and commit subjects.
@@ -204,6 +213,8 @@ impl Tasks {
     }
 
     /// Start a task: a branch from `base` checked out in a folder of its own.
+    /// `base` may be a remote-tracking branch (`origin/main`): the task
+    /// starts there and lands on the local branch of that name.
     pub fn create(&self, prompt: &str, base: &str) -> Result<Task, String> {
         self.create_with(prompt, base, &slug(prompt), None)
     }
@@ -235,6 +246,10 @@ impl Tasks {
             return Err("Describe the task first".into());
         }
         let base_sha = self.repo.resolve(base)?;
+        let (base, from) = match self.repo.remote_branch(base) {
+            Some(local) => (local, Some(base.to_string())),
+            None => (base.to_string(), None),
+        };
         let id = self.unique_id(id);
         let branch = format!("agent/{id}");
         let worktree = self.worktree_dir()?.join(&id);
@@ -246,7 +261,8 @@ impl Tasks {
         let task = Task {
             id,
             prompt: prompt.to_string(),
-            base: base.to_string(),
+            base,
+            from,
             branch,
             worktree,
             created: now(),
@@ -354,8 +370,8 @@ impl Tasks {
             };
         }
         let start = wt
-            .merge_base(&task.base, "HEAD")
-            .unwrap_or_else(|_| task.base.clone());
+            .merge_base(task.start(), "HEAD")
+            .unwrap_or_else(|_| task.start().to_string());
         let (files, additions, deletions) = wt.numstat_since(&start);
         let status = wt.status().unwrap_or_default();
         let mut uncommitted: Vec<&str> = status.iter().map(|e| e.path.as_str()).collect();
@@ -383,7 +399,7 @@ impl Tasks {
             files: files + untracked.len(),
             additions: additions + untracked_lines,
             deletions,
-            base_moved: wt.count_commits(&format!("HEAD..{}", task.base)) > 0,
+            base_moved: wt.count_commits(&format!("HEAD..{}", task.start())) > 0,
             last_commit: wt.commit_time("HEAD"),
             missing: false,
             unpushed: wt.count_commits("@{upstream}..HEAD"),
@@ -442,7 +458,7 @@ impl Tasks {
     /// and new files included.
     pub fn patch(&self, task: &Task) -> Result<String, String> {
         let wt = task.repo();
-        let start = wt.merge_base(&task.base, "HEAD")?;
+        let start = wt.merge_base(task.start(), "HEAD")?;
         wt.patch_since(&start)
     }
 
@@ -485,7 +501,10 @@ impl Tasks {
 
     /// Put the task's work on its base, which must be checked out here.
     /// The task's branch is rebased onto the base first if the base has
-    /// moved, so landing itself never conflicts; with `commit_uncommitted`
+    /// moved, so landing itself never conflicts. A task started from the
+    /// remote's copy of the base (`from`) needs the base to have what it
+    /// started from, or the squash would carry the remote's commits too:
+    /// pull first. With `commit_uncommitted`
     /// uncommitted work in its folder is committed first, otherwise it's
     /// refused. Afterwards the folder and branch are removed.
     pub fn land(
@@ -522,7 +541,20 @@ impl Tasks {
         {
             return Err(format!("{} has nothing to land", task.id));
         }
-        if stats.base_moved {
+        if let Some(from) = &task.from {
+            let fork = self.repo.merge_base(from, &task.branch)?;
+            let missing = self.repo.count_commits(&format!("{}..{fork}", task.base));
+            if missing > 0 {
+                return Err(format!(
+                    "{} is {missing} {} behind {from}, where {} started — pull {} first, then land",
+                    task.base,
+                    if missing == 1 { "commit" } else { "commits" },
+                    task.id,
+                    task.base
+                ));
+            }
+        }
+        if wt.count_commits(&format!("HEAD..{}", task.base)) > 0 {
             match wt.rebase(&task.base)? {
                 Outcome::Done => {}
                 Outcome::Conflicts(files) => {
@@ -598,7 +630,7 @@ impl Tasks {
         }
         if self
             .repo
-            .count_commits(&format!("{}..{}", task.base, task.branch))
+            .count_commits(&format!("{}..{}", task.start(), task.branch))
             == 0
         {
             return Err(format!("{} has no commits to publish", task.id));
@@ -798,6 +830,7 @@ fn render_task(t: &Task) -> String {
     fields
         .iter()
         .map(|(k, v)| format!("{k}\t{}\n", escape(v)))
+        .chain(t.from.iter().map(|f| format!("from\t{}\n", escape(f))))
         .chain(
             optional
                 .iter()
@@ -822,6 +855,7 @@ fn parse_task(text: &str) -> Option<Task> {
         id: get("id")?,
         prompt: get("prompt")?,
         base: get("base")?,
+        from: get("from"),
         branch: get("branch")?,
         worktree: PathBuf::from(get("worktree")?),
         created: get("created")?.parse().unwrap_or(0),
@@ -900,6 +934,7 @@ mod tests {
             id: "x".into(),
             prompt: "Line one\n\twith a tab \\ and a backslash".into(),
             base: "main".into(),
+            from: Some("origin/main".into()),
             branch: "agent/x".into(),
             worktree: PathBuf::from("/tmp/r.spor/x"),
             created: 42,
@@ -921,6 +956,7 @@ mod tests {
             id: "x".into(),
             prompt: "Don't break it".into(),
             base: "main".into(),
+            from: None,
             branch: "agent/x".into(),
             worktree: PathBuf::from("/tmp/my repo.spor/x"),
             created: 0,

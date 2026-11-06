@@ -6,6 +6,9 @@ export interface RepoInfo {
   branch: string | null;
   branches: string[];
   default_base: string | null;
+  /** Where new tasks start unless another branch is picked: `origin/main`
+   * when origin has the default branch, else the local one. */
+  default_start: string | null;
   claude: boolean;
 }
 
@@ -43,7 +46,10 @@ export interface TaskSummary {
   id: string;
   title: string;
   prompt: string;
+  /** The branch it lands on and its pull request goes into. */
   base: string;
+  /** Where it started when that isn't `base`: `origin/main`. */
+  from: string | null;
   branch: string;
   worktree: string;
   created: number;

@@ -47,6 +47,9 @@ struct RepoInfo {
     branch: Option<String>,
     branches: Vec<String>,
     default_base: Option<String>,
+    /// Where new tasks start unless another branch is picked: origin's
+    /// copy of the default branch (`origin/main`) when there is one.
+    default_start: Option<String>,
     claude: bool,
 }
 
@@ -69,6 +72,7 @@ fn repo_info(repo: &Repo) -> RepoInfo {
         branch: repo.tracking().ok().and_then(|t| t.branch),
         branches,
         default_base: repo.default_base_branch(),
+        default_start: repo.default_start(),
         claude: spor::agent::available("claude"),
     }
 }

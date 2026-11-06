@@ -433,3 +433,73 @@ fn undoes_ignores_base_work_the_task_moved() {
     git(&task.worktree, &["commit", "--quiet", "-m", "move"]);
     assert!(f.tasks.undoes(&task).is_empty());
 }
+
+#[test]
+fn tasks_start_from_origin_and_land_once_the_base_is_pulled() {
+    let f = fixture();
+    let root = f.repo.root().to_path_buf();
+    let remote = f.dir.join("remote.git");
+    git(
+        &f.dir,
+        &[
+            "init",
+            "--quiet",
+            "--bare",
+            "--initial-branch=main",
+            remote.to_str().unwrap(),
+        ],
+    );
+    git(
+        &root,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&root, &["push", "--quiet", "-u", "origin", "main"]);
+    // Someone else pushes to main; this checkout has fetched but not pulled.
+    let other = f.dir.join("other");
+    git(
+        &f.dir,
+        &[
+            "clone",
+            "--quiet",
+            remote.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    git(&other, &["config", "user.name", "Other"]);
+    git(&other, &["config", "user.email", "other@example.com"]);
+    work(&other, "theirs.txt", "theirs\n", Some("Their change"));
+    git(&other, &["push", "--quiet", "origin", "main"]);
+    git(&root, &["fetch", "--quiet", "origin"]);
+    assert_eq!(f.repo.default_start().as_deref(), Some("origin/main"));
+
+    let task = f.tasks.create("Add a thing", "origin/main").unwrap();
+    assert_eq!(task.base, "main");
+    assert_eq!(task.from.as_deref(), Some("origin/main"));
+    assert_eq!(
+        f.tasks.get(&task.id).unwrap().from.as_deref(),
+        Some("origin/main")
+    );
+    assert!(
+        task.worktree.join("theirs.txt").exists(),
+        "starts from origin's main"
+    );
+    // Its work is only its own commits, not origin's.
+    work(&task.worktree, "mine.txt", "mine\n", Some("My change"));
+    let stats = f.tasks.stats(&task);
+    assert_eq!((stats.commits, stats.base_moved), (1, false));
+
+    // Landing on a main that's behind would carry origin's commit too.
+    let err = f.tasks.land(&task, LandMode::Squash, false).unwrap_err();
+    assert!(err.contains("pull main first"), "{err}");
+    git(&root, &["merge", "--quiet", "--ff-only", "origin/main"]);
+    f.tasks.land(&task, LandMode::Squash, false).unwrap();
+    assert_eq!(subjects(&root), ["Add a thing", "Their change", "start"]);
+}
+
+#[test]
+fn a_local_base_is_taken_as_is() {
+    let f = fixture();
+    assert_eq!(f.repo.default_start().as_deref(), Some("main"), "no origin");
+    let task = f.tasks.create("Add a thing", "main").unwrap();
+    assert_eq!((task.base.as_str(), task.from), ("main", None));
+}

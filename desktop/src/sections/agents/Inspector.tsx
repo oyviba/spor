@@ -208,13 +208,13 @@ export function Inspector({ detail, ...p }: Props) {
         <button className="inspector-row action" onClick={p.onShowBranch} title="Show it in History">
           <Branch size={13} />
           <span className="truncate">
-            <code>{t.branch}</code> <span className="muted">from {t.base}</span>
+            <code>{t.branch}</code> <span className="muted">from {t.from ?? t.base}</span>
           </span>
         </button>
         {s.base_moved && !done && (
           <div className="inspector-row warn">
             <Alert size={13} />
-            <span>{t.base} has moved on — landing rebases first</span>
+            <span>{t.from ?? t.base} has moved on — landing rebases first</span>
           </div>
         )}
         {detail.conflicts.length > 0 && !done && (

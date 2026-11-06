@@ -12,6 +12,7 @@ import { ago } from "../agents/transcript";
 import { isOpen } from "../agents/status";
 import { ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
 import { ArrowUp, Bot, Branch, External, MessageSquare, Tag, Users } from "../../shared/Icons";
+import { BasePicker, defaultStart } from "../../shared/BasePicker";
 
 type Filter = "assigned" | "yours" | "open" | "closed";
 const FILTERS: { id: Filter; label: string }[] = [
@@ -270,7 +271,7 @@ export function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarte
   const { repo } = shell;
   const [settings, setSettings] = useAgentSettings();
   const [prompt, setPrompt] = useState(detail.prompt);
-  const [base, setBase] = useState(repo.default_base ?? repo.branch ?? repo.branches[0] ?? "main");
+  const [base, setBase] = useState(defaultStart(repo));
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const attachments = useAttachments(shell.fail);
@@ -325,14 +326,7 @@ export function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarte
             </button>
           )}
           <div className="composer-footer">
-            <label className="chip-select-wrap" title="The branch it starts from and its pull request goes into">
-              <Branch size={12} />
-              <select className="chip-select bare" value={base} onChange={(e) => setBase(e.target.value)}>
-                {repo.branches.map((b) => (
-                  <option key={b}>{b}</option>
-                ))}
-              </select>
-            </label>
+            <BasePicker repo={repo} value={base} onChange={setBase} title="The branch it starts from and its pull request goes into" />
             <select
               className="chip-select"
               value={settings.agent}

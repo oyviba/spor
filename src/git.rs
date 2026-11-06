@@ -805,6 +805,35 @@ impl Repo {
         self.main_branch()
     }
 
+    /// Where new work starts by default: origin's copy of the default
+    /// branch (`origin/main`), which a fetch keeps current, rather than a
+    /// local one that may be behind. The local branch if origin has none.
+    pub fn default_start(&self) -> Option<String> {
+        let base = self.default_base_branch()?;
+        let remote = format!("origin/{base}");
+        let exists = self.succeeds(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/{remote}"),
+        ]);
+        Some(if exists { remote } else { base })
+    }
+
+    /// For a remote-tracking branch (`origin/main`), its name on the remote
+    /// (`main`); None for anything else.
+    pub fn remote_branch(&self, name: &str) -> Option<String> {
+        let (remote, branch) = name.split_once('/')?;
+        let tracked = self.succeeds(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/{name}"),
+        ]);
+        (tracked && !branch.is_empty() && self.remotes().iter().any(|r| r == remote))
+            .then(|| branch.to_string())
+    }
+
     /// List all branches, local and remote-tracking, excluding `origin/HEAD` stubs.
     pub fn list_branches(&self) -> Result<Vec<Branch>, String> {
         let out = self.run_ok(&[

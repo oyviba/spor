@@ -6,6 +6,7 @@ import { ShellContext, useShell, type SectionId, type Shell, type Target, type T
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
 import { RepoPanel } from "./shared/Layout";
+import { BranchBar } from "./shared/BranchBar";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
@@ -736,6 +737,7 @@ export function App() {
         </nav>
         {reposShown && <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed} />}
         <div className="section">
+          {state && <BranchBar state={state} />}
           {state?.operation && <OperationBanner state={state} />}
           <div className="section-body">
             <Sections key={repo.root} section={section} inbox={<InboxSection inbox={inbox} onOpen={openItem} />} />

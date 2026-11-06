@@ -48,6 +48,7 @@ fn task(id: &str) -> Task {
         id: id.into(),
         prompt: format!("Do {id}\n\nDetails."),
         base: "main".into(),
+        from: None,
         branch: format!("agent/{id}"),
         worktree: PathBuf::from(format!("/r.spor/{id}")),
         created: 100,
