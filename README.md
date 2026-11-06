@@ -44,8 +44,10 @@ is a list in the sidebar, a page, and a details card:
   give a coding agent its own branch and folder so several can work at once
   without touching your checkout. A task is a prompt: spor creates
   `agent/<name>` from a base, checks it out in `<repo>.spor/<name>` beside
-  the repository, and starts Claude Code (or any command) there. Watch the
-  conversation, answer its questions, steer it while it works, review its
+  the repository, and starts Claude Code (or any command) there. Paste,
+  drop or attach images (screenshots, mockups) into any prompt — a new
+  task, an issue's, or a follow-up; they're kept in `.git/spor/attachments/`
+  and the agent is told where to find them. Watch the conversation, answer its questions, steer it while it works, review its
   changes with line comments, send feedback, undo a run, then **Land** it
   (one squashed commit, or a merge commit), open a pull request for it, or
   discard it. A work item's issue, pull request and CI runs all open here,
@@ -100,9 +102,10 @@ Across the app:
 - **Credentials.** The app has no terminal, so a passphrase, password or
   new-host question from git or ssh opens a dialog (an askpass bridge)
 - **Workspaces** — named, colored groups of repositories on the rail, like
-  Slack's (⌘⌥1–9), each reopening the repository last open in it. The
-  repository name at the top of the sidebar lists the workspace's
-  repositories with their branch and what there is to pull. The old native
+  Slack's (⌘⌥1–9), each reopening the repository last open in it. Beside
+  the rail, a column lists the workspace's repositories with the open one
+  marked, their branch, changed files and what there is to pull (⌘⇧E hides
+  it). The old native
   app's workspaces are imported on the first run
 - **⌘K** — a palette for every command, section, work item, branch and repository
 - **Settings** (⌘,) — System, Light or Dark, themes (Spor, Nord, Dracula,
@@ -132,6 +135,9 @@ output:
 - `src/agent.rs`, `src/host.rs`, `src/checkpoint.rs` — running agents in
   task folders, the host that lets the app talk to a running Claude Code,
   and per-run checkpoints
+- `src/work.rs` — work items: a pure join of tasks, branches, pull
+  requests, runs and issues into one item per branch, with its stage and
+  who it's waiting on
 - `src/json.rs` — a small JSON reader for agents' event streams
 
 The app is `desktop/`: `src-tauri/` turns the core into commands (one

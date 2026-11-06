@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useChanged } from "../../shared/hooks";
 import type { TaskDetail, TaskPull } from "../../types";
 import { duration } from "./transcript";
 import { pullStatus } from "../pulls/PullsSection";
@@ -28,7 +29,11 @@ export interface GithubActions {
   onPublish: (draft: boolean, commitUncommitted: boolean) => unknown;
   onPush: () => unknown;
   onSendReview: () => unknown;
+  /** Send its PR's failed Actions jobs to the agent. */
+  onSendFailure: () => unknown;
   onSettle: (commit: string) => unknown;
+  /** Its PR was closed unmerged: close it and remove its folder and branch. */
+  onClose: () => unknown;
 }
 
 interface Props extends GithubActions {
@@ -60,7 +65,7 @@ export function Inspector({ detail, ...p }: Props) {
     setWorking(what);
     return Promise.resolve(run()).finally(() => setWorking(null));
   };
-  useEffect(() => {
+  useChanged(() => {
     setConfirmDiscard(false);
     setLandMenu(false);
     setPrMenu(false);
@@ -68,6 +73,9 @@ export function Inspector({ detail, ...p }: Props) {
   const pr = p.pull?.pull;
   const prOpen = pr && (pr.state === "open" || pr.state === "draft");
   const merged = pr?.state === "merged";
+  const closed = pr?.state === "closed";
+  // Merged or closed on GitHub: what's left is to clean up.
+  const done = merged || closed;
 
   const hasWork = s.commits > 0 || s.uncommitted > 0;
   const landBlocked = running
@@ -131,14 +139,18 @@ export function Inspector({ detail, ...p }: Props) {
     </div>
   );
 
-  if (t.landed) {
+  if (t.landed || t.closed) {
     return (
       <aside className="inspector">
         <div className="inspector-row">
           <Merge size={13} />
-          <span>
-            Landed on <b>{t.base}</b> as <code>{t.landed.slice(0, 7)}</code>
-          </span>
+          {t.landed ? (
+            <span>
+              Landed on <b>{t.base}</b> as <code>{t.landed.slice(0, 7)}</code>
+            </span>
+          ) : (
+            <span>Closed — its pull request wasn't merged</span>
+          )}
         </div>
         {github}
       </aside>
@@ -164,19 +176,19 @@ export function Inspector({ detail, ...p }: Props) {
             <code>{t.branch}</code> <span className="muted">from {t.base}</span>
           </span>
         </button>
-        {s.base_moved && !merged && (
+        {s.base_moved && !done && (
           <div className="inspector-row warn">
             <Alert size={13} />
             <span>{t.base} has moved on — landing rebases first</span>
           </div>
         )}
-        {detail.conflicts.length > 0 && !merged && (
+        {detail.conflicts.length > 0 && !done && (
           <div className="inspector-row bad">
             <Alert size={13} />
             <span>
               Conflicts with {t.base} in {detail.conflicts.join(", ")}
               <button className="link" onClick={p.onAskRebase} disabled={running}>
-                Ask agent to rebase
+                {t.pull != null ? `Ask agent to merge ${t.base} in` : "Ask agent to rebase"}
               </button>
             </span>
           </div>
@@ -221,8 +233,30 @@ export function Inspector({ detail, ...p }: Props) {
           </Button>
         </div>
       )}
+      {closed && (
+        <div className="inspector-actions">
+          <div className="inspector-note">Its pull request was closed without merging.</div>
+          <Button
+            className="ghost"
+            disabled={running}
+            title="Mark it closed and remove its folder and branch (⌘Z undoes)"
+            onClick={p.onClose}
+          >
+            <Trash size={12} /> Close task
+          </Button>
+        </div>
+      )}
       {prOpen && (
         <div className="inspector-actions">
+          {pr?.checks === "failing" && (
+            <Button
+              className="ghost"
+              onClick={p.onSendFailure}
+              title="Send the failed jobs' failing steps and the end of their logs"
+            >
+              <Alert size={12} /> Send failing checks to agent
+            </Button>
+          )}
           <Button
             className="ghost"
             onClick={p.onSendReview}
@@ -232,7 +266,7 @@ export function Inspector({ detail, ...p }: Props) {
           </Button>
         </div>
       )}
-      {!merged && (
+      {!done && (
       <div className="inspector-actions">
         {s.uncommitted > 0 && !running && (
           <label className="check">
@@ -320,7 +354,7 @@ export function Inspector({ detail, ...p }: Props) {
         </Button>
       </div>
       )}
-      {!merged && landBlocked && hasWork && !running && <div className="inspector-note">{landBlocked}</div>}
+      {!done && landBlocked && hasWork && !running && <div className="inspector-note">{landBlocked}</div>}
     </aside>
   );
 }

@@ -16,6 +16,9 @@ pub enum TaskState {
     Open,
     /// Merged into its base as this commit; its branch and worktree are gone.
     Landed(String),
+    /// Its pull request was closed without merging; its branch and worktree
+    /// are gone.
+    Closed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,7 +177,7 @@ impl Tasks {
         })
     }
 
-    /// Open tasks first (newest first), then landed ones.
+    /// Open tasks first (newest first), then landed and closed ones.
     pub fn list(&self) -> Vec<Task> {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return Vec::new();
@@ -186,9 +189,9 @@ impl Tasks {
             .filter_map(|text| parse_task(&text))
             .collect();
         tasks.sort_by(|a, b| {
-            let landed = |t: &Task| matches!(t.state, TaskState::Landed(_));
-            landed(a)
-                .cmp(&landed(b))
+            let settled = |t: &Task| t.state != TaskState::Open;
+            settled(a)
+                .cmp(&settled(b))
                 .then(b.created.cmp(&a.created))
                 .then(a.id.cmp(&b.id))
         });
@@ -314,6 +317,29 @@ impl Tasks {
     /// Where a task's agent runs keep their logs (see `agent`).
     pub fn run_dir(&self, id: &str) -> PathBuf {
         self.dir.join(format!("{id}.d"))
+    }
+
+    /// Where images attached to prompts are kept: `.git/spor/attachments/`,
+    /// beside the tasks, so they stay out of every folder and commit.
+    pub fn attachments_dir(&self) -> PathBuf {
+        self.dir.with_file_name("attachments")
+    }
+
+    /// Keep an image attached to a prompt, for an agent to look at. It's
+    /// named by its content, so attaching the same picture twice keeps it
+    /// once. PNG, JPEG, GIF and WebP only: what Claude can read.
+    pub fn attach(&self, data: &[u8]) -> Result<PathBuf, String> {
+        let ext = image_kind(data).ok_or("Only PNG, JPEG, GIF and WebP images can be attached")?;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        data.hash(&mut hasher);
+        let dir = self.attachments_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("{:016x}.{ext}", hasher.finish()));
+        if !path.exists() {
+            std::fs::write(&path, data).map_err(|e| e.to_string())?;
+        }
+        Ok(path)
     }
 
     pub fn stats(&self, task: &Task) -> TaskStats {
@@ -510,7 +536,7 @@ impl Tasks {
         describe: bool,
     ) -> Result<(u64, String), String> {
         if task.state != TaskState::Open {
-            return Err(format!("{} has already landed", task.id));
+            return Err(format!("{} is already settled", task.id));
         }
         let stats = self.stats(task);
         if stats.missing {
@@ -585,8 +611,18 @@ impl Tasks {
     /// more. Refused while its folder has work the PR doesn't. Undoable
     /// with [`Tasks::restore`], like a discard.
     pub fn settle(&self, task: &Task, commit: &str) -> Result<Undoable, String> {
+        self.settle_as(task, TaskState::Landed(commit.to_string()))
+    }
+
+    /// The task's pull request was closed without merging: mark it closed,
+    /// and remove its folder and branch, as [`Tasks::settle`] does.
+    pub fn close(&self, task: &Task) -> Result<Undoable, String> {
+        self.settle_as(task, TaskState::Closed)
+    }
+
+    fn settle_as(&self, task: &Task, state: TaskState) -> Result<Undoable, String> {
         if task.state != TaskState::Open {
-            return Err(format!("{} has already landed", task.id));
+            return Err(format!("{} is already settled", task.id));
         }
         let branch_sha = self.repo.resolve(&task.branch)?;
         if task.worktree.exists() {
@@ -600,7 +636,7 @@ impl Tasks {
         }
         self.repo.delete_branch(&task.branch, true)?;
         self.save(&Task {
-            state: TaskState::Landed(commit.to_string()),
+            state,
             ..task.clone()
         })?;
         Ok(Undoable {
@@ -689,6 +725,7 @@ fn render_task(t: &Task) -> String {
     let state = match &t.state {
         TaskState::Open => "open".to_string(),
         TaskState::Landed(sha) => format!("landed {sha}"),
+        TaskState::Closed => "closed".to_string(),
     };
     let fields = [
         ("id", t.id.clone()),
@@ -717,8 +754,10 @@ fn parse_task(text: &str) -> Option<Task> {
             .find_map(|l| l.strip_prefix(key)?.strip_prefix('\t'))
             .map(unescape)
     };
-    let state = match get("state")?.split_once(' ') {
+    let state = get("state")?;
+    let state = match state.split_once(' ') {
         Some(("landed", sha)) => TaskState::Landed(sha.to_string()),
+        None if state == "closed" => TaskState::Closed,
         _ => TaskState::Open,
     };
     Some(Task {
@@ -758,9 +797,33 @@ fn unescape(s: &str) -> String {
     out
 }
 
+/// An image's extension, from its first bytes.
+fn image_kind(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("jpg")
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attached_images_are_known_by_their_bytes() {
+        assert_eq!(image_kind(b"\x89PNG\r\n\x1a\n...."), Some("png"));
+        assert_eq!(image_kind(&[0xff, 0xd8, 0xff, 0xe0]), Some("jpg"));
+        assert_eq!(image_kind(b"GIF89a.."), Some("gif"));
+        assert_eq!(image_kind(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(image_kind(b"<svg>"), None);
+    }
 
     #[test]
     fn slugs() {
@@ -786,7 +849,12 @@ mod tests {
             issue: Some(7),
             pull: Some(12),
         };
-        assert_eq!(parse_task(&render_task(&task)), Some(task));
+        assert_eq!(parse_task(&render_task(&task)), Some(task.clone()));
+        let closed = Task {
+            state: TaskState::Closed,
+            ..task
+        };
+        assert_eq!(parse_task(&render_task(&closed)), Some(closed));
     }
 
     #[test]

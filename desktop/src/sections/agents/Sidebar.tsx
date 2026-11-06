@@ -1,5 +1,5 @@
 import type { TaskPull, TaskSummary } from "../../types";
-import { statusOf } from "./status";
+import { isOpen, statusOf } from "./status";
 import { ago } from "./transcript";
 import { useNow } from "../../shared/hooks";
 import { StatusPill } from "../../shared/StatusPill";
@@ -25,10 +25,10 @@ export function Sidebar(p: Props) {
   // Active keeps a stable order (newest first): activity never moves a row.
   // Working and settled tasks sit in shelves at the bottom.
   // Waiting on you comes first, above everything (#21).
-  const needsYou = p.tasks.filter((t) => !t.landed && t.asks > 0);
-  const working = p.tasks.filter((t) => !t.landed && t.run?.state === "running" && t.asks === 0);
-  const active = p.tasks.filter((t) => !t.landed && t.run?.state !== "running" && t.asks === 0);
-  const settled = p.tasks.filter((t) => t.landed);
+  const needsYou = p.tasks.filter((t) => isOpen(t) && t.asks > 0);
+  const working = p.tasks.filter((t) => isOpen(t) && t.run?.state === "running" && t.asks === 0);
+  const active = p.tasks.filter((t) => isOpen(t) && t.run?.state !== "running" && t.asks === 0);
+  const settled = p.tasks.filter((t) => !isOpen(t));
 
   const row = (t: TaskSummary) => {
     const status = statusOf(t, p.seen[t.id], now, p.pulls[t.id]?.pull);
@@ -46,9 +46,9 @@ export function Sidebar(p: Props) {
         </div>
         <div className="task-row-line sub">
           <Branch size={11} className="shrink-0" />
-          <span className="truncate">{t.landed ? `landed on ${t.base}` : t.branch}</span>
+          <span className="truncate">{t.landed ? `landed on ${t.base}` : t.closed ? "pull request closed" : t.branch}</span>
           <span className="flex-1" />
-          {!t.landed && t.stats.files > 0 && (
+          {isOpen(t) && t.stats.files > 0 && (
             <span className="diffstat num">
               <span className="add">+{t.stats.additions}</span> <span className="del">−{t.stats.deletions}</span>
             </span>

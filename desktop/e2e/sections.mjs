@@ -20,13 +20,13 @@ const w = await open(app, out);
 
 // Sections by their rail label, so adding one doesn't shift the rest.
 const section = async (label, ready) => {
-  await w.js(`document.querySelector(\`.rail-item[aria-label="\${arguments[0]}"]\`).click()`, label);
+  await w.js(`$(\`.rail-item[aria-label="\${arguments[0]}"]\`).click()`, label);
   await w.waitFor(ready);
 };
 // Right-click the first element matching `css` whose text has `text`.
 const rightClick = (css, text) =>
   w.js(
-    `const el = [...document.querySelectorAll(arguments[0])].find(e => e.textContent.includes(arguments[1]));
+    `const el = [...$$(arguments[0])].find(e => e.textContent.includes(arguments[1]));
      const r = el.getBoundingClientRect();
      el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 10 }));`,
     css,
@@ -39,14 +39,14 @@ const menuPick = async (text) => {
 const answer = async (text) => {
   await w.waitFor(".dialog input");
   await w.fill(".dialog input", text);
-  await w.js(`document.querySelector(".dialog").requestSubmit()`);
+  await w.js(`$(".dialog").requestSubmit()`);
 };
 const undoKey = () => w.js(`document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }))`);
 // Dismiss toasts the way a person would (removing them from the DOM would
 // pull nodes out from under React).
-const toastGone = () => w.js(`document.querySelectorAll(".toast .icon-button").forEach(b => b.click())`);
+const toastGone = () => w.js(`$$(".toast .icon-button").forEach(b => b.click())`);
 const rowClick = (css, i, shift = false) =>
-  w.js(`document.querySelectorAll(arguments[0])[arguments[1]].dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: arguments[2] }))`, css, i, shift);
+  w.js(`$$(arguments[0])[arguments[1]].dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: arguments[2] }))`, css, i, shift);
 
 try {
   await w.js("localStorage.clear(); localStorage.setItem('spor.section', JSON.stringify('changes'))");
@@ -57,34 +57,34 @@ try {
   console.log("Changes");
   await w.waitFor(".file-row");
   check((await w.count(".file-row")) === 3, "lists the staged, edited and untracked files");
-  check(!(await w.js(`return !!document.querySelector('.rail-item[aria-label="Changes"] .rail-badge')`)), "the rail has no count per section");
+  check(!(await w.js(`return !!$('.rail-item[aria-label="Changes"] .rail-badge')`)), "the rail has no count per section");
   await w.clickText(".file-row-main", "greet.py");
-  await w.until(`return document.querySelector("h2")?.textContent === "greet.py" && document.querySelectorAll(".diff tr.add").length === 4`, "greet.py's diff");
+  await w.until(`return $("h2")?.textContent === "greet.py" && $$(".diff tr.add").length === 4`, "greet.py's diff");
   // Pick the two lines of shout(): click one, shift-click the next.
   await rowClick(".diff tr.add", 2);
   await rowClick(".diff tr.add", 3, true);
   check((await w.text(".selection-bar")).includes("2 lines picked"), "picks two lines with click and shift-click");
   await w.shot("changes-1-picked");
   await w.clickText(".selection-bar button", "Stage lines");
-  await w.until(`return document.querySelectorAll(".file-row").length === 4`, "greet.py in both lists");
+  await w.until(`return $$(".file-row").length === 4`, "greet.py in both lists");
   check(git("diff", "--cached", "greet.py").includes("+def shout(name):"), "stages just the picked lines");
   check(!git("diff", "greet.py").includes("+def shout") && git("diff", "greet.py").includes("+\n"), "only the two blank lines stay unstaged");
   await toastGone();
   await undoKey();
-  await w.until(`return document.querySelectorAll(".file-row").length === 3`, "the undo");
+  await w.until(`return $$(".file-row").length === 3`, "the undo");
   check(!git("diff", "--cached", "greet.py").includes("shout"), "⌘Z unstages the lines again");
 
-  await w.js(`[...document.querySelectorAll(".file-row")].find(r => r.textContent.includes("NOTES.md")).querySelector(".row-actions .icon-button:last-child").click()`);
-  await w.until(`return [...document.querySelectorAll(".file-row")].filter(r => r.textContent.includes("NOTES.md")).length === 1 && document.querySelector(".list-label")?.textContent.includes("2")`, "NOTES.md staged");
+  await w.js(`[...$$(".file-row")].find(r => r.textContent.includes("NOTES.md")).querySelector(".row-actions .icon-button:last-child").click()`);
+  await w.until(`return [...$$(".file-row")].filter(r => r.textContent.includes("NOTES.md")).length === 1 && $(".list-label")?.textContent.includes("2")`, "NOTES.md staged");
   check(git("status", "--porcelain", "NOTES.md").startsWith("A "), "stages a whole file from its row");
   await w.fill(".composer-dock textarea", "Add notes and polish the README");
   await w.key(".composer-dock textarea", "Enter", { ctrlKey: true });
-  await w.until(`return document.querySelectorAll(".file-row").length === 1`, "the commit");
+  await w.until(`return $$(".file-row").length === 1`, "the commit");
   check(git("log", "-1", "--format=%s") === "Add notes and polish the README", "commits with ⌘↩");
   check(git("status", "--porcelain").trim() === "M greet.py", "leaves the unstaged edit alone");
   await w.shot("changes-2-committed");
   await w.clickText(".toast .link", "Undo");
-  await w.until(`return document.querySelectorAll(".file-row").length === 3`, "the commit's undo");
+  await w.until(`return $$(".file-row").length === 3`, "the commit's undo");
   check(git("rev-parse", "HEAD") === head, "Undo takes the commit back");
   check(git("status", "--porcelain", "NOTES.md").startsWith("A "), "…keeping its changes staged");
 
@@ -92,43 +92,43 @@ try {
   await toastGone();
   await section("History", ".graph-row");
   const total = Number(git("rev-list", "--all", "--count"));
-  const shown = await w.until(`const t = document.querySelector(".task-title .small-text")?.textContent; return t && t.match(/[\\d,]+/)[0]`, "the commit count");
+  const shown = await w.until(`const t = $(".task-title .small-text")?.textContent; return t && t.match(/[\\d,]+/)[0]`, "the commit count");
   check(Number(shown.replace(/,/g, "")) === total, `shows all ${total} commits`);
   check((await w.text(".graph-row .ref.current")) === "main", "marks the checked-out branch");
   await w.fill(".sidebar-search input", "farewell");
-  await w.until(`return document.querySelectorAll(".graph-row.dimmed").length > 0`, "search");
+  await w.until(`return $$(".graph-row.dimmed").length > 0`, "search");
   const hits = await w.count(".graph-row:not(.dimmed)");
   const expected = git("log", "--all", "--format=%h", "-i", "--grep=farewell").split("\n").filter(Boolean).length;
   check(hits >= expected, `search finds the ${expected} commits that mention farewell`);
   await w.fill(".sidebar-search input", "");
   await w.clickText(".branch-name", "feat/farewell");
-  await w.until(`return document.querySelector(".graph-row.selected")?.dataset.hash === arguments[0]`, "feat/farewell selected", 5000, git("rev-parse", "feat/farewell"));
+  await w.until(`return $(".graph-row.selected")?.dataset.hash === arguments[0]`, "feat/farewell selected", 5000, git("rev-parse", "feat/farewell"));
   check(true, "clicking a branch selects its tip");
   await w.waitFor(".inspector .card-title");
   check((await w.text(".inspector .card-title")) === "Tidy farewell", "the card shows the commit");
   await w.shot("history-1-selected");
   await w.clickText(".inspector button", "Branch here");
   await w.fill(".inline-form input", "try/farewell");
-  await w.js(`document.querySelector(".inline-form").requestSubmit()`);
+  await w.js(`$(".inline-form").requestSubmit()`);
   // The staged README would be overwritten: the app offers to stash.
-  await w.until(`return document.querySelector(".toast.error")?.innerText.includes("Stash and switch")`, "the stash offer");
+  await w.until(`return $(".toast.error")?.innerText.includes("Stash and switch")`, "the stash offer");
   check((await w.text(".toast.error")).includes("would overwrite uncommitted changes"), "a blocked switch says why");
   check(!git("branch", "--list", "try/farewell"), "…and changes nothing");
   await w.shot("history-2-blocked");
   await w.clickText(".toast.error .link", "Stash and switch");
-  await w.until(`return document.querySelector(".repo-branch")?.textContent.includes("try/farewell")`, "the switch");
+  await w.until(`return $(".repo-branch")?.textContent.includes("try/farewell")`, "the switch");
   check(git("rev-parse", "--abbrev-ref", "HEAD") === "try/farewell", "Stash and switch creates the branch and switches");
   check(git("stash", "list").includes("spor-auto-stash"), "…with the changes stashed");
   await toastGone();
   await undoKey();
-  await w.until(`return document.querySelector(".repo-branch")?.textContent.includes("main")`, "switching back");
+  await w.until(`return $(".repo-branch")?.textContent.includes("main")`, "switching back");
   await sleep(300);
   await undoKey();
   await sleep(1200);
   check(git("rev-parse", "--abbrev-ref", "HEAD") === "main" && !git("branch", "--list", "try/farewell"), "⌘Z twice: back on main, branch gone");
   await section("Changes", ".stash-row");
   await w.clickText(".stash-row .link", "Pop");
-  await w.until(`return document.querySelectorAll(".file-row").length === 3`, "the stash popped");
+  await w.until(`return $$(".file-row").length === 3`, "the stash popped");
   check(git("stash", "list") === "" && git("status", "--porcelain").includes("NOTES.md"), "Pop brings the stashed work back");
 
   console.log("Branches and tags");
@@ -137,23 +137,23 @@ try {
   await rightClick(".branch-row", "feat/farewell");
   await menuPick("Rename");
   await answer("feat/goodbye");
-  await w.until(`return [...document.querySelectorAll(".branch-name")].some(b => b.textContent.includes("feat/goodbye"))`, "the rename");
+  await w.until(`return [...$$(".branch-name")].some(b => b.textContent.includes("feat/goodbye"))`, "the rename");
   check(git("branch", "--list", "feat/goodbye") !== "" && git("branch", "--list", "feat/farewell") === "", "Rename renames the branch");
   await toastGone();
   await undoKey();
-  await w.until(`return [...document.querySelectorAll(".branch-name")].some(b => b.textContent.includes("feat/farewell"))`, "the rename undone");
+  await w.until(`return [...$$(".branch-name")].some(b => b.textContent.includes("feat/farewell"))`, "the rename undone");
   check(git("branch", "--list", "feat/farewell") !== "", "⌘Z renames it back");
   const tip = git("rev-parse", "HEAD");
   await w.js(
-    `const row = document.querySelector(\`.graph-row[data-hash="\${arguments[0]}"]\`); const r = row.getBoundingClientRect();
+    `const row = $(\`.graph-row[data-hash="\${arguments[0]}"]\`); const r = row.getBoundingClientRect();
      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 40, clientY: r.top + 10 }));`,
     tip,
   );
   await menuPick("Tag here");
   await answer("v0.1.0");
-  await w.until(`return document.querySelector(".toast")?.innerText.includes("v0.1.0")`, "the tag");
+  await w.until(`return $(".toast")?.innerText.includes("v0.1.0")`, "the tag");
   check(git("rev-parse", "v0.1.0^{commit}") === tip, "Tag here tags the commit");
-  await w.until(`return [...document.querySelectorAll(".graph-row .ref.tag")].some(r => r.textContent.includes("v0.1.0"))`, "the tag label");
+  await w.until(`return [...$$(".graph-row .ref.tag")].some(r => r.textContent.includes("v0.1.0"))`, "the tag label");
   check(true, "…and the graph shows it");
   await w.shot("history-3-tagged");
   await toastGone();
@@ -165,10 +165,10 @@ try {
   console.log("A merge that conflicts");
   await toastGone();
   await w.clickText(".inspector .link", "Stash changes");
-  await w.until(`return document.querySelectorAll(".stash-row").length === 1`, "the stash");
+  await w.until(`return $$(".stash-row").length === 1`, "the stash");
   check(git("status", "--porcelain") === "", "stash clears the working tree");
   await section("History", ".graph-row");
-  await w.js(`[...document.querySelectorAll(".branch-row")].find(r => r.textContent.includes("fix/readme-install")).querySelector("[title^='Merge']").click()`);
+  await w.js(`[...$$(".branch-row")].find(r => r.textContent.includes("fix/readme-install")).querySelector("[title^='Merge']").click()`);
   await w.waitFor(".op-banner.bad");
   check((await w.text(".op-banner")).includes("Merge stopped on conflicts in 1 file"), "the banner says the merge stopped");
   await w.shot("conflict-1-banner");
@@ -177,25 +177,25 @@ try {
   check((await w.text("h2")) === "README.md", "Resolve opens the conflicted file in Changes");
   await w.shot("conflict-2-resolve");
   await w.clickText(".resolve-bar button", "Take theirs");
-  await w.until(`return document.querySelector(".op-banner") && !document.querySelector(".op-banner.bad")`, "the conflict resolved");
+  await w.until(`return $(".op-banner") && !$(".op-banner.bad")`, "the conflict resolved");
   await w.clickText(".op-banner button", "Continue");
-  await w.until(`return !document.querySelector(".op-banner")`, "the merge to finish");
+  await w.until(`return !$(".op-banner")`, "the merge to finish");
   check(git("log", "-1", "--format=%P").split(" ").length === 2, "Continue makes the merge commit");
   check(git("show", "HEAD:README.md").includes("Install with uv."), "with their side of README.md");
   // The stash changed README's line 2, the merge line 3: git calls that a
   // conflict, keeps the stash, and leaves README.md to resolve.
   await w.clickText(".stash-row .link", "Pop");
   const said = await w.until(
-    `return [...document.querySelectorAll(".toast.error")].map(t => t.innerText).find(t => t.includes("The stash conflicts"))`,
+    `return [...$$(".toast.error")].map(t => t.innerText).find(t => t.includes("The stash conflicts"))`,
     "the pop's conflict",
   );
   check(said.includes("README.md") && said.includes("The stash is kept"), "a conflicting pop names the file and keeps the stash");
-  await w.until(`return document.querySelector(".list-label")?.textContent.startsWith("Conflicts")`, "the conflicts list");
+  await w.until(`return $(".list-label")?.textContent.startsWith("Conflicts")`, "the conflicts list");
   await w.clickText(".file-row-main", "README.md");
   await w.waitFor(".resolve-bar");
   await w.shot("conflict-3-stash");
   await w.clickText(".resolve-bar button", "Take theirs");
-  await w.until(`return !document.querySelector(".resolve-bar")`, "README resolved");
+  await w.until(`return !$(".resolve-bar")`, "README resolved");
   check(!git("status", "--porcelain").includes("UU"), "Take theirs resolves it");
   check(git("show", ":README.md").includes("politely"), "…with the stash's side");
   check(git("status", "--porcelain").includes("NOTES.md") && git("stash", "list").includes("WIP"), "the rest of the stash is back, and the stash is still there");
@@ -210,7 +210,7 @@ try {
   check((await w.text(".inspector")).includes("Agent task:"), "links #12 to the agent task on its branch");
   await w.fill(".composer-dock textarea", "Close — just the keyword-only nit left.");
   await w.clickText(".composer-dock button", "Comment");
-  await w.until(`return document.querySelector(".timeline").innerText.includes("keyword-only nit")`, "the comment");
+  await w.until(`return $(".timeline").innerText.includes("keyword-only nit")`, "the comment");
   check(ghState().comments["12"]?.[0]?.body.includes("keyword-only nit"), "Comment posts through gh");
   await w.shot("pulls-1-conversation");
   await w.clickText(".tabs button", "Files");
@@ -225,18 +225,18 @@ try {
   check((await w.text(".log-section.failed")).includes("AssertionError"), "with the failing step open");
   await section("Pull requests", ".task-row");
   await w.clickText(".task-row", "#11");
-  await w.until(`return document.querySelector(".task-header")?.innerText.includes("#11")`, "#11");
+  await w.until(`return $(".task-header")?.innerText.includes("#11")`, "#11");
   await w.click(".inspector .split .primary");
   check((await w.text(".inspector .split")).includes("Squash and merge?"), "merging asks once more");
   await w.click(".inspector .split .danger");
-  await w.until(`return document.querySelector(".task-header")?.innerText.includes("Merged")`, "the merge");
+  await w.until(`return $(".task-header")?.innerText.includes("Merged")`, "the merge");
   check(ghState().merged.includes(11), "Squash and merge merges through gh");
   await w.shot("pulls-3-merged");
 
   console.log("Inbox");
   await toastGone();
   await section("Inbox", ".task-row");
-  await w.until(`return document.querySelectorAll(".task-list .task-row").length === 2`, "the Inbox's rows", 10000);
+  await w.until(`return $$(".task-list .task-row").length === 2`, "the Inbox's rows", 10000);
   const inbox = await w.text(".task-list");
   check(inbox.includes("CI failed on agent/let-greet-take-optional"), "the Inbox lists the failed run on the agent's branch");
   check(inbox.includes("#12") && !inbox.includes("#11"), "…and #12's review request, but not the merged #11");
@@ -257,10 +257,10 @@ try {
   await w.shot("actions-1-failed");
   const tasks = `${repo}/.git/spor/tasks/let-greet-take-optional.d`;
   const runsBefore = readdirSync(tasks).filter((f) => f.endsWith(".meta")).length;
-  await w.until(`return [...document.querySelectorAll(".inspector button")].some(b => b.textContent.includes("Send failure"))`, "the agent button");
+  await w.until(`return [...$$(".inspector button")].some(b => b.textContent.includes("Send failure"))`, "the agent button");
   await w.clickText(".inspector button", "Send failure to agent");
   await w.waitFor(".task-page .bubble");
-  await w.until(`return [...document.querySelectorAll(".bubble")].some(b => b.innerText.includes("CI failed"))`, "the agent page");
+  await w.until(`return [...$$(".bubble")].some(b => b.innerText.includes("CI failed"))`, "the agent page");
   const meta = readFileSync(`${tasks}/run-${runsBefore}.meta`, "utf8");
   check(meta.includes("CI failed") && meta.includes("AssertionError"), "the agent gets the failing log");
   await w.shot("actions-2-sent");
@@ -269,10 +269,10 @@ try {
   await w.clickText(".task-row", "CI #88");
   await w.waitFor(".log-section.failed");
   await w.clickText(".inspector button", "Re-run failed");
-  await w.until(`return document.querySelector(".toast")?.innerText.includes("Re-running")`, "the re-run");
+  await w.until(`return $(".toast")?.innerText.includes("Re-running")`, "the re-run");
   check(ghState().reruns.includes(501), "Re-run failed goes through gh");
   await toastGone();
-  await w.until(`return [...document.querySelectorAll(".inspector button")].some(b => b.textContent.includes("Cancel"))`, "the live run", 30000);
+  await w.until(`return [...$$(".inspector button")].some(b => b.textContent.includes("Cancel"))`, "the live run", 30000);
   check(true, "a re-run run is live: Cancel replaces Re-run");
   console.log("All good");
 } finally {

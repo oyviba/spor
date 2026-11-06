@@ -33,14 +33,14 @@ import type {
 } from "./types";
 import type { Place } from "./shared/DiffView";
 
-type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+type Invoke = <T>(cmd: string, args?: Record<string, unknown> | Uint8Array) => Promise<T>;
 
 /** True inside the Tauri window; false in a plain browser (`pnpm dev`). */
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 let invokeImpl: Invoke | null = null;
 
-async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+async function call<T>(cmd: string, args?: Record<string, unknown> | Uint8Array): Promise<T> {
   if (!invokeImpl) {
     invokeImpl = inTauri
       ? (await import("@tauri-apps/api/core")).invoke
@@ -176,6 +176,8 @@ export const api = {
   runDetail: (id: number) => call<RunDetail>("run_detail", { id }),
   runAction: (id: number, action: "rerun" | "rerun_failed" | "cancel") => call<string>("run_action", { id, action }),
   jobLog: (id: number) => call<LogLine[]>("job_log", { id }),
+  /** A failed job (its failing step, the end of its log) as a follow-up for an agent. */
+  jobFeedback: (run: number, job: number) => call<string>("job_feedback", { run, job }),
   issues: (filter: "assigned" | "yours" | "open" | "closed") => call<Issue[]>("issues", { filter }),
   issueDetail: (number: number) => call<IssueDetail>("issue_detail", { number }),
   issueAction: (number: number, action: "comment" | "close" | "reopen", body?: string) =>
@@ -199,6 +201,10 @@ export const api = {
   taskPulls: () => call<TaskPull[]>("task_pulls"),
   /** New review on the task's PR, written as a follow-up for its agent. */
   reviewFeedback: (id: string) => call<string>("review_feedback", { id }),
+  /** The failed Actions jobs on the task's PR, written as a follow-up for its agent. */
+  checkFeedback: (id: string) => call<string>("check_feedback", { id }),
+  /** Its PR was closed unmerged: mark it closed and remove its folder and branch (⌘Z undoes). */
+  closeTask: (id: string) => call<string>("close_task", { id }),
   /** Its PR merged: mark it landed and remove its folder and branch (⌘Z undoes). */
   settleTask: (id: string, commit: string) => call<string>("settle_task", { id, commit }),
   /** `message` null starts the task's own prompt; otherwise it's a follow-up. */
@@ -210,6 +216,9 @@ export const api = {
     call<void>("answer_ask", { id, requestId, allow, message, always }),
   /** Start the next agent without the folder's setup script (#23). */
   skipSetup: (id: string) => call<void>("skip_setup", { id }),
+  /** Keep an image for a prompt; returns the path the prompt names it by.
+   * The bytes go as the request's raw body. */
+  attachImage: (data: Uint8Array) => call<string>("attach_image", data),
   /** A message into the turn the agent is on (#22). */
   steer: (id: string, text: string) => call<void>("steer", { id, text }),
   /** Change the running agent's permission mode. */
