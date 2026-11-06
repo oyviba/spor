@@ -2,7 +2,7 @@
 // run, finished runs folded behind "Worked for …", and stretches of tool
 // calls summarized as one sentence (see issue #27).
 
-import type { Item } from "../../types";
+import type { AskKind, Item } from "../../types";
 
 type Done = Extract<Item, { kind: "done" }>;
 export type Tool = Extract<Item, { kind: "tool" | "tool_error" }>;
@@ -13,7 +13,13 @@ export type Block =
   | { kind: "tools"; tools: Tool[] }
   | { kind: "output"; lines: string[] }
   /** A question the agent asked, and how it was answered (null: waiting). */
-  | { kind: "ask"; id: string; tool: string; detail: string; answer: { allow: boolean; message: string; always: boolean } | null }
+  | ({
+      kind: "ask";
+      id: string;
+      tool: string;
+      detail: string;
+      answer: { allow: boolean; message: string; always: boolean } | null;
+    } & AskKind)
   /** A message sent while it worked. */
   | { kind: "steer"; text: string }
   /** The folder's setup script and its output (ok null: still going). */
@@ -76,7 +82,7 @@ export function runs(items: Item[], running: boolean): RunView[] {
         }
         break;
       case "ask":
-        push({ kind: "ask", id: item.id, tool: item.tool, detail: item.detail, answer: null });
+        push({ ...askKind(item), kind: "ask", id: item.id, tool: item.tool, detail: item.detail, answer: null });
         break;
       case "answer": {
         const ask = (current as RunView | null)?.blocks.find((b) => b.kind === "ask" && b.id === item.id);
@@ -97,6 +103,18 @@ export function runs(items: Item[], running: boolean): RunView[] {
   return out;
 }
 
+/** Just the kind of question an ask item is (older logs have none: a permission). */
+function askKind(item: Extract<Item, { kind: "ask" }>): AskKind {
+  switch (item.ask) {
+    case "questions":
+      return { ask: "questions", questions: item.questions };
+    case "plan":
+      return { ask: "plan", plan: item.plan };
+    default:
+      return { ask: "permission" };
+  }
+}
+
 function foldOf(run: RunView): RunView["fold"] {
   if (run.live || !run.done || !run.done.ok) return null;
   // A refused or failed tool call, or a question answered no, stays in
@@ -105,7 +123,7 @@ function foldOf(run: RunView): RunView["fold"] {
     run.blocks.some(
       (b) =>
         (b.kind === "tools" && b.tools.some((t) => t.kind === "tool_error")) ||
-        (b.kind === "ask" && !b.answer?.allow) ||
+        (b.kind === "ask" && b.ask !== "plan" && !b.answer?.allow) ||
         (b.kind === "setup" && b.ok === false),
     )
   )

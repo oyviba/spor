@@ -4,7 +4,7 @@ import { duration, runs as toRuns, stoppedLabel, summarize, type Block, type Run
 import { useChanged, useNow } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { Markdown } from "../../shared/Markdown";
-import { Alert, Check, Chevron, Square, Terminal, ToolIcon, X } from "../../shared/Icons";
+import { Alert, Check, Chevron, MessageSquare, Square, Terminal, ToolIcon, X } from "../../shared/Icons";
 import { verbOf } from "./Composer";
 
 interface Props {
@@ -260,6 +260,44 @@ function BlockView({
         </div>
       </div>
     );
+  if (block.kind === "ask" && block.ask === "plan") {
+    const a = block.answer;
+    // While it waits, the plan is in the composer's card; once answered,
+    // it opens here.
+    const shown = !!a && open.has(id);
+    return (
+      <div className={`plan-block${a ? (a.allow ? " allowed" : " denied") : " waiting"}`}>
+        <button className="ask-line" onClick={() => a && toggle(id)} aria-expanded={shown}>
+          {a?.allow ? <Check size={13} /> : a ? <X size={13} /> : <Alert size={13} />}
+          <span>Proposed a plan{block.detail && <>: {block.detail}</>}</span>
+          <span className="ask-outcome">
+            {a ? (a.allow ? "Approved" : a.message ? `Sent back: ${a.message}` : "Sent back") : "Waiting for you"}
+          </span>
+          {a && <Chevron size={12} className={`chev${shown ? " open" : ""}`} />}
+        </button>
+        {shown && (
+          <div className="plan-text">
+            <Markdown text={block.plan} />
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (block.kind === "ask" && block.ask === "questions") {
+    const a = block.answer;
+    return (
+      <div className={`ask-line${a ? (a.allow ? " allowed" : " denied") : " waiting"}`}>
+        {a?.allow ? <Check size={13} /> : a ? <X size={13} /> : <MessageSquare size={13} />}
+        <span>
+          Asked: {block.detail}
+          {block.questions.length > 1 && <span className="muted"> (and {block.questions.length - 1} more)</span>}
+        </span>
+        <span className="ask-outcome">
+          {a ? (a.allow ? a.message || "Answered" : a.message ? `Told: ${a.message}` : "Not answered") : "Waiting for you"}
+        </span>
+      </div>
+    );
+  }
   if (block.kind === "ask") {
     const a = block.answer;
     return (

@@ -250,7 +250,8 @@ struct Pending {
 /// One command from spor: `{"message": "…"}`, `{"interrupt": true}`,
 /// `{"mode": "acceptEdits"}`, or
 /// `{"answer": {"request_id": "…", "allow": true, "message": "…"}}`, with
-/// `"always": true` to allow for the rest of the session.
+/// `"always": true` to allow for the rest of the session, or `"input": {…}`
+/// to allow with the tool's input changed.
 #[cfg(unix)]
 fn handle(
     line: &str,
@@ -294,7 +295,12 @@ fn handle(
             }
             pending.remove(id).unwrap()
         };
-        let input = question.input;
+        // An answer can bring the tool's input back changed: the answers
+        // to `AskUserQuestion` go back that way (#102).
+        let input = match answer.get("input") {
+            Json::Null => question.input,
+            changed => changed.to_json(),
+        };
         let response = if always {
             // The suggested rules go back with it, and Claude Code stops
             // asking about this kind of action for the session.

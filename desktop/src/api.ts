@@ -222,6 +222,12 @@ export const api = {
    * `always` allows it for the rest of the session (#40). */
   answerAsk: (id: string, requestId: string, allow: boolean, message = "", always = false) =>
     call<void>("answer_ask", { id, requestId, allow, message, always }),
+  /** Answer `AskUserQuestion` (#102): the labels picked, or words of your
+   * own, for each question in order. */
+  answerQuestions: (id: string, requestId: string, answers: string[][]) =>
+    call<void>("answer_questions", { id, requestId, answers }),
+  /** Approve the agent's plan (#101): it starts, in `mode` from here on. */
+  approvePlan: (id: string, requestId: string, mode: Mode) => call<void>("approve_plan", { id, requestId, mode }),
   /** Start the next agent without the folder's setup script (#23). */
   skipSetup: (id: string) => call<void>("skip_setup", { id }),
   /** Run the setup script again, before the next agent. */

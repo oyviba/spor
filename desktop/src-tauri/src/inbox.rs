@@ -27,6 +27,9 @@ pub(crate) struct InboxTask {
     title: String,
     /// Questions the agent is waiting on.
     asks: usize,
+    /// The first of them in a few words ("asks: Keep the old endpoint?"),
+    /// for its row and notification (#102).
+    ask: Option<String>,
     /// The latest run: running, finished, failed, stopped; None before one.
     run: Option<&'static str>,
     started: Option<i64>,
@@ -49,11 +52,13 @@ pub(crate) fn inbox_tasks(roots: Vec<String>) -> Vec<InboxTask> {
             }
             let runs = Runs::of(&tasks, &task);
             let latest = runs.latest();
+            let asks = runs.asks();
             out.push(InboxTask {
                 repo: root.clone(),
                 id: task.id.clone(),
                 title: task.title(),
-                asks: runs.asks().len(),
+                asks: asks.len(),
+                ask: asks.first().map(|a| a.gist()),
                 run: latest.as_ref().map(|r| match r.state {
                     RunState::Running => "running",
                     RunState::Finished => "finished",

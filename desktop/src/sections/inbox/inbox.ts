@@ -53,7 +53,7 @@ export function inboxItems(
         kind: "ask",
         repo: t.repo,
         title: t.title,
-        detail: t.asks === 1 ? "The agent is asking before it goes on" : `The agent has ${t.asks} questions`,
+        detail: askLine(t.ask, t.asks),
         since: t.started ?? t.created,
         target,
       });
@@ -91,4 +91,10 @@ export function inboxItems(
     });
   const order = GROUPS.map((g) => g.kind);
   return items.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || b.since - a.since);
+}
+
+/** "The agent asks: Keep the old endpoint working?", and how many more wait. */
+export function askLine(ask: string | null, asks: number): string {
+  if (!ask) return asks === 1 ? "The agent is asking before it goes on" : `The agent has ${asks} questions`;
+  return `The agent ${ask}${asks > 1 ? ` (and ${asks - 1} more)` : ""}`;
 }

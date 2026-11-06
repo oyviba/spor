@@ -43,7 +43,7 @@ import { IssuesSection } from "./sections/issues/IssuesSection";
 import { PullsSection } from "./sections/pulls/PullsSection";
 import { ActionsSection } from "./sections/actions/ActionsSection";
 import { InboxSection, useInbox } from "./sections/inbox/InboxSection";
-import type { InboxItem } from "./sections/inbox/inbox";
+import { askLine, type InboxItem } from "./sections/inbox/inbox";
 
 /** When you last looked at each task, by task id, as Work keeps it
  * (`work.seen`, keyed `task:<id>`): whether a finished run is unseen. */
@@ -299,7 +299,7 @@ export function App() {
         if (asking.current.has(t.id) || viewing(t.id)) continue;
         // With the window in the background nobody sees a toast: ask the
         // operating system too (#41).
-        if (!document.hasFocus()) api.notify(`${t.title} needs you`, "An agent is waiting for an answer").catch(() => {});
+        if (!document.hasFocus()) api.notify(`${t.title} needs you`, askLine(t.ask, t.asks)).catch(() => {});
         toast(`${t.title} is waiting for you`, "ok", false, {
           label: "Answer",
           run: () => {

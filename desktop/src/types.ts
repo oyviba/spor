@@ -62,6 +62,8 @@ export interface TaskSummary {
   command: string;
   /** Questions the agent is waiting on. */
   asks: number;
+  /** The first question in a few words ("asks: Keep the old endpoint?"); null when none waits. */
+  ask: string | null;
   mode: Mode | null;
   /** The GitHub issue it was started from. */
   issue: number | null;
@@ -72,18 +74,36 @@ export interface TaskSummary {
 }
 
 /** How much an agent may do without asking (#21). */
-export type Mode = "supervised" | "acceptEdits" | "auto" | "full";
+export type Mode = "supervised" | "acceptEdits" | "auto" | "full" | "plan";
 
 /** Claude Code's `--effort`. */
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
-export interface Ask {
+/** One of `AskUserQuestion`'s questions (#102). */
+export interface Question {
+  question: string;
+  /** A short label for it ("Approach"). */
+  header: string;
+  options: { label: string; description: string }[];
+  /** More than one option can be picked. */
+  multi: boolean;
+}
+
+/** What a question asks for: permission to use a tool, answers to
+ * questions with options (#102), or approval of a plan (#101). */
+export type AskKind =
+  | { ask: "permission" }
+  | { ask: "questions"; questions: Question[] }
+  | { ask: "plan"; plan: string };
+
+export type Ask = {
   id: string;
   tool: string;
+  /** The gist: the command or file, the first question, the plan's title. */
   detail: string;
   /** What "Allow for this session" covers ("`npm test` commands"); null: only once. */
   session: string | null;
-}
+} & AskKind;
 
 export type Item =
   | { kind: "prompt"; text: string }
@@ -99,7 +119,7 @@ export type Item =
       seconds: number | null;
     }
   | { kind: "output"; text: string }
-  | { kind: "ask"; id: string; tool: string; detail: string; session: string | null }
+  | ({ kind: "ask"; id: string; tool: string; detail: string; session: string | null } & AskKind)
   | { kind: "answer"; id: string; allow: boolean; message: string; always: boolean }
   | { kind: "steer"; text: string }
   | { kind: "setup"; ok: boolean | null; code: number | null };
@@ -394,6 +414,8 @@ export interface InboxTask {
   id: string;
   title: string;
   asks: number;
+  /** The first question in a few words ("asks: Keep the old endpoint?"); null when none waits. */
+  ask: string | null;
   run: "running" | "finished" | "failed" | "stopped" | null;
   started: number | null;
   ended: number | null;

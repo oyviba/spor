@@ -83,7 +83,7 @@ test("consecutive tool calls merge into one block", () => {
 test("questions take their answers, and a refusal keeps the run open", () => {
   const items: Item[] = [
     { kind: "prompt", text: "a" },
-    { kind: "ask", id: "q1", tool: "Bash", detail: "make test", session: null },
+    { kind: "ask", ask: "permission", id: "q1", tool: "Bash", detail: "make test", session: null },
     { kind: "answer", id: "q1", allow: false, message: "use cargo", always: false },
     { kind: "steer", text: "also docs" },
     { kind: "text", text: "ok" },
@@ -92,6 +92,7 @@ test("questions take their answers, and a refusal keeps the run open", () => {
   const [run] = runs(items, false);
   assert.deepEqual(run.blocks[0], {
     kind: "ask",
+    ask: "permission",
     id: "q1",
     tool: "Bash",
     detail: "make test",
@@ -104,6 +105,51 @@ test("questions take their answers, and a refusal keeps the run open", () => {
     false,
   );
   assert.notEqual(allowed[0].fold, null, "an allowed question folds like any work");
+});
+
+test("a plan sent back doesn't keep the run open; its text goes with it", () => {
+  const items: Item[] = [
+    { kind: "prompt", text: "a" },
+    { kind: "ask", ask: "plan", id: "p1", tool: "ExitPlanMode", detail: "Rename", session: null, plan: "# Rename\n1. Do it" },
+    { kind: "answer", id: "p1", allow: false, message: "keep an alias", always: false },
+    { kind: "ask", ask: "plan", id: "p2", tool: "ExitPlanMode", detail: "Rename", session: null, plan: "# Rename\n1. Alias" },
+    { kind: "answer", id: "p2", allow: true, message: "", always: false },
+    { kind: "tool", name: "Edit", detail: "a.ts" },
+    { kind: "text", text: "Renamed." },
+    { kind: "done", ok: true, summary: "", cost_usd: null, turns: null, seconds: 30 },
+  ];
+  const [run] = runs(items, false);
+  const plans = run.blocks.filter((b) => b.kind === "ask" && b.ask === "plan");
+  assert.equal(plans.length, 2, "each version of the plan stays");
+  assert.deepEqual(
+    plans.map((b) => (b.kind === "ask" && b.ask === "plan" ? [b.plan, b.answer?.allow] : null)),
+    [
+      ["# Rename\n1. Do it", false],
+      ["# Rename\n1. Alias", true],
+    ],
+  );
+  assert.notEqual(run.fold, null, "revising a plan isn't something going wrong");
+});
+
+test("questions with options keep them, and the answer", () => {
+  const questions = [{ question: "Keep it?", header: "Keep", options: [{ label: "Yes", description: "" }], multi: false }];
+  const [run] = runs(
+    [
+      { kind: "prompt", text: "a" },
+      { kind: "ask", ask: "questions", id: "q", tool: "AskUserQuestion", detail: "Keep it?", session: null, questions },
+      { kind: "answer", id: "q", allow: true, message: "Yes", always: false },
+    ],
+    true,
+  );
+  assert.deepEqual(run.blocks[0], {
+    kind: "ask",
+    ask: "questions",
+    questions,
+    id: "q",
+    tool: "AskUserQuestion",
+    detail: "Keep it?",
+    answer: { allow: true, message: "Yes", always: false },
+  });
 });
 
 test("the setup script's output goes with it", () => {

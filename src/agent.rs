@@ -56,10 +56,19 @@ pub enum Mode {
     Auto,
     /// Never asks.
     Full,
+    /// Reads and plans, changes nothing, and asks for the plan to be
+    /// approved before it starts (#101): its `ExitPlanMode` is a question.
+    Plan,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 4] = [Mode::Supervised, Mode::AcceptEdits, Mode::Auto, Mode::Full];
+    pub const ALL: [Mode; 5] = [
+        Mode::Supervised,
+        Mode::AcceptEdits,
+        Mode::Auto,
+        Mode::Full,
+        Mode::Plan,
+    ];
 
     /// Claude Code's `--permission-mode`.
     pub fn flag(self) -> &'static str {
@@ -68,6 +77,7 @@ impl Mode {
             Mode::AcceptEdits => "acceptEdits",
             Mode::Auto => "auto",
             Mode::Full => "bypassPermissions",
+            Mode::Plan => "plan",
         }
     }
 
@@ -81,6 +91,7 @@ impl Mode {
             Mode::AcceptEdits => "Auto-accept edits",
             Mode::Auto => "Auto",
             Mode::Full => "Full access",
+            Mode::Plan => "Plan first",
         }
     }
 }
@@ -255,6 +266,8 @@ pub enum Entry {
         /// Code suggests (#40): "`npm test` commands". None: it suggests
         /// none, so only this once.
         session: Option<String>,
+        /// A permission, a question with options, or a plan.
+        kind: AskKind,
     },
     /// How a question was answered (`message`: what the user said instead;
     /// `always`: allowed for the rest of the session).
@@ -279,6 +292,142 @@ pub struct Ask {
     pub detail: String,
     /// What "Allow for this session" would cover, if it's offered.
     pub session: Option<String>,
+    pub kind: AskKind,
+}
+
+impl Ask {
+    /// The question in a few words, for a list row or a notification:
+    /// "asks: Keep the old endpoint working?", "has a plan for you to
+    /// review: Rename greet", "wants to run `make test`".
+    pub fn gist(&self) -> String {
+        let with = |s: &str| {
+            if self.detail.is_empty() {
+                s.to_string()
+            } else {
+                format!("{s}: {}", self.detail)
+            }
+        };
+        match &self.kind {
+            AskKind::Questions(_) => with("asks"),
+            AskKind::Plan(_) => with("has a plan for you to review"),
+            AskKind::Permission => {
+                let verb = match self.tool.as_str() {
+                    "Bash" => "run",
+                    "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => "edit",
+                    "WebFetch" => "fetch",
+                    "WebSearch" => "search the web for",
+                    tool => return with(&format!("wants to use {tool}")),
+                };
+                if self.detail.is_empty() {
+                    format!("wants to {verb}")
+                } else {
+                    format!("wants to {verb} `{}`", self.detail)
+                }
+            }
+        }
+    }
+}
+
+/// What the agent is asking for. Claude Code asks all three through the
+/// same `can_use_tool` request; the tool says which it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AskKind {
+    /// To use a tool its permission mode doesn't allow: allow or deny.
+    Permission,
+    /// `AskUserQuestion` (#102): questions, each with options to pick from.
+    /// The answer goes back as the tool's input, with `answers` added.
+    Questions(Vec<Question>),
+    /// `ExitPlanMode` (#101): the plan, in markdown. Approving lets it
+    /// start; denying with comments sends it back to planning.
+    Plan(String),
+}
+
+/// One of `AskUserQuestion`'s questions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Question {
+    pub question: String,
+    /// A short label for it ("Approach").
+    pub header: String,
+    pub options: Vec<Choice>,
+    /// More than one option can be picked.
+    pub multi: bool,
+}
+
+/// An option of a question.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Choice {
+    pub label: String,
+    pub description: String,
+}
+
+impl AskKind {
+    /// Which kind a tool's request is, from its name and input.
+    pub fn of(tool: &str, input: &Json) -> AskKind {
+        match tool {
+            "AskUserQuestion" => AskKind::Questions(
+                input
+                    .get("questions")
+                    .array()
+                    .iter()
+                    .map(|q| Question {
+                        question: q.get("question").str().unwrap_or_default().to_string(),
+                        header: q.get("header").str().unwrap_or_default().to_string(),
+                        options: q
+                            .get("options")
+                            .array()
+                            .iter()
+                            .map(|o| Choice {
+                                label: o.get("label").str().unwrap_or_default().to_string(),
+                                description: o
+                                    .get("description")
+                                    .str()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            })
+                            .collect(),
+                        multi: q.get("multiSelect").bool() == Some(true),
+                    })
+                    .collect(),
+            ),
+            "ExitPlanMode" => {
+                AskKind::Plan(input.get("plan").str().unwrap_or_default().to_string())
+            }
+            _ => AskKind::Permission,
+        }
+    }
+}
+
+/// The gist of a question for one line (the Inbox, a notification): the
+/// first question, or the plan's first line.
+fn ask_detail(kind: &AskKind, input: &Json) -> String {
+    match kind {
+        AskKind::Permission => tool_detail(input),
+        AskKind::Questions(qs) => qs.first().map(|q| q.question.clone()).unwrap_or_default(),
+        AskKind::Plan(plan) => plan
+            .lines()
+            .map(|l| l.trim().trim_start_matches('#').trim())
+            .find(|l| !l.is_empty())
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+/// The input that answers `AskUserQuestion`: what it asked, with
+/// `answers` keyed by each question's text. Several picks are joined with
+/// ", ", as Claude Code expects.
+pub fn answered_input(input: &Json, answers: &[Vec<String>]) -> String {
+    let mut out = match input {
+        Json::Object(o) => o.clone(),
+        _ => Default::default(),
+    };
+    let mut map = std::collections::BTreeMap::new();
+    for (q, picked) in input.get("questions").array().iter().zip(answers) {
+        if let Some(text) = q.get("question").str() {
+            map.insert(text.to_string(), Json::String(picked.join(", ")));
+        }
+    }
+    out.insert("answers".into(), Json::Object(map));
+    Json::Object(out).to_json()
 }
 
 /// A task's setup script (#23), for its details card.
@@ -785,6 +934,55 @@ echo $code > "$SPOR_EXIT""#;
         ))
     }
 
+    /// Answer `AskUserQuestion` (#102): one list of picked labels (or
+    /// words of your own) per question, in order. The agent carries on in
+    /// the same turn with them.
+    pub fn answer_questions(&self, id: &str, answers: &[Vec<String>]) -> Result<(), String> {
+        let input = self
+            .ask_input(id)
+            .ok_or("That question was already answered")?;
+        if answers
+            .iter()
+            .all(|a| a.iter().all(|s| s.trim().is_empty()))
+        {
+            return Err("Pick an answer first".into());
+        }
+        // The picks are the answer's message too, so the transcript says
+        // what was answered.
+        let said: Vec<String> = answers
+            .iter()
+            .map(|a| a.join(", "))
+            .filter(|a| !a.trim().is_empty())
+            .collect();
+        self.command(&format!(
+            r#"{{"answer":{{"request_id":{},"allow":true,"message":{},"input":{}}}}}"#,
+            host::quote(id),
+            host::quote(&said.join(" · ")),
+            answered_input(&input, answers)
+        ))
+    }
+
+    /// Approve the agent's plan (#101): it leaves plan mode and starts, in
+    /// `mode` from here on.
+    pub fn approve_plan(&self, id: &str, mode: Mode) -> Result<(), String> {
+        if mode == Mode::Plan {
+            return Err("Pick how it should work once the plan is approved".into());
+        }
+        self.answer(id, true, "")?;
+        self.set_mode(mode)
+    }
+
+    /// The input of a question the running agent asked, from its log.
+    fn ask_input(&self, id: &str) -> Option<Json> {
+        let run = self.latest().filter(|r| r.state == RunState::Running)?;
+        let log = std::fs::read_to_string(self.file(run.index, "log")).ok()?;
+        log.lines()
+            .filter(|l| l.contains("can_use_tool") && l.contains(id))
+            .filter_map(Json::parse)
+            .find(|e| e.get("request_id").str() == Some(id))
+            .map(|e| e.get("request").get("input").clone())
+    }
+
     /// Change the running agent's permission mode (Claude Code under the
     /// host). Takes effect for what it does next.
     pub fn set_mode(&self, mode: Mode) -> Result<(), String> {
@@ -834,11 +1032,13 @@ echo $code > "$SPOR_EXIT""#;
                     tool,
                     detail,
                     session,
+                    kind,
                 } if !answered.contains(id.as_str()) => Some(Ask {
                     id: id.clone(),
                     tool: tool.clone(),
                     detail: detail.clone(),
                     session: session.clone(),
+                    kind: kind.clone(),
                 }),
                 _ => None,
             })
@@ -1221,15 +1421,22 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                 if event.get("request").get("subtype").str() == Some("can_use_tool") =>
             {
                 let request = event.get("request");
+                let tool = request.get("tool_name").str().unwrap_or("Tool");
+                let kind = AskKind::of(tool, request.get("input"));
                 out.push(Entry::Ask {
                     id: event
                         .get("request_id")
                         .str()
                         .unwrap_or_default()
                         .to_string(),
-                    tool: request.get("tool_name").str().unwrap_or("Tool").to_string(),
-                    detail: tool_detail(request.get("input")),
-                    session: covers(request.get("permission_suggestions")),
+                    tool: tool.to_string(),
+                    detail: ask_detail(&kind, request.get("input")),
+                    // Answering a question or a plan is never "always".
+                    session: match kind {
+                        AskKind::Permission => covers(request.get("permission_suggestions")),
+                        _ => None,
+                    },
+                    kind,
                 });
             }
             Some("spor_answer") => out.push(Entry::Answer {

@@ -6,7 +6,7 @@ use crate::undo::Undo;
 use crate::{first_line, App};
 use serde::{Deserialize, Serialize};
 use spor::agent::{
-    self, AgentKind, Effort, Entry, Mode, Model, Permissions, Run, RunState, Runs, Setup,
+    self, AgentKind, AskKind, Effort, Entry, Mode, Model, Permissions, Run, RunState, Runs, Setup,
     SetupState,
 };
 use spor::tasks::{LandMode, Task, TaskState, TaskStats, Tasks};
@@ -122,6 +122,9 @@ pub(crate) struct TaskSummary {
     command: String,
     /// Questions the agent is waiting on: "Needs you".
     asks: usize,
+    /// The first of them in a few words ("asks: Keep the old endpoint?"),
+    /// for its row and notification (#102).
+    ask: Option<String>,
     /// The permission mode of its latest run.
     mode: Option<&'static str>,
     /// The GitHub issue it was started from.
@@ -135,6 +138,7 @@ pub(crate) struct TaskSummary {
 fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
     let runs = Runs::of(tasks, task);
     let list = runs.list();
+    let asks = runs.asks();
     TaskSummary {
         id: task.id.clone(),
         title: task.title(),
@@ -154,7 +158,8 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
         runs: list.len(),
         run: list.into_iter().last().map(RunInfo::from),
         command: task.agent_command(),
-        asks: runs.asks().len(),
+        asks: asks.len(),
+        ask: asks.first().map(|a| a.gist()),
         issue: task.issue,
         pull: task.pull,
         queued: runs.queued(),
@@ -193,6 +198,9 @@ pub(crate) enum Item {
         detail: String,
         /// What "Allow for this session" covers, if offered (#40).
         session: Option<String>,
+        /// The questions with their options (#102), or the plan (#101).
+        #[serde(flatten)]
+        ask: AskKindInfo,
     },
     Answer {
         id: String,
@@ -239,11 +247,13 @@ impl Item {
                 tool,
                 detail,
                 session,
+                kind,
             } => Item::Ask {
                 id,
                 tool,
                 detail: detail.replace(folder, ""),
                 session,
+                ask: kind.into(),
             },
             Entry::Answer {
                 id,
@@ -322,6 +332,59 @@ pub(crate) struct AskInfo {
     detail: String,
     /// What "Allow for this session" would cover; None: only once.
     session: Option<String>,
+    #[serde(flatten)]
+    kind: AskKindInfo,
+}
+
+/// What a question asks for, as the UI reads it: `ask` is "permission",
+/// "questions" (with `questions`) or "plan" (with `plan`).
+#[derive(Serialize)]
+#[serde(tag = "ask", rename_all = "snake_case")]
+pub(crate) enum AskKindInfo {
+    Permission,
+    Questions { questions: Vec<QuestionInfo> },
+    Plan { plan: String },
+}
+
+#[derive(Serialize)]
+pub(crate) struct QuestionInfo {
+    question: String,
+    header: String,
+    options: Vec<ChoiceInfo>,
+    multi: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ChoiceInfo {
+    label: String,
+    description: String,
+}
+
+impl From<AskKind> for AskKindInfo {
+    fn from(kind: AskKind) -> Self {
+        match kind {
+            AskKind::Permission => AskKindInfo::Permission,
+            AskKind::Plan(plan) => AskKindInfo::Plan { plan },
+            AskKind::Questions(qs) => AskKindInfo::Questions {
+                questions: qs
+                    .into_iter()
+                    .map(|q| QuestionInfo {
+                        question: q.question,
+                        header: q.header,
+                        options: q
+                            .options
+                            .into_iter()
+                            .map(|o| ChoiceInfo {
+                                label: o.label,
+                                description: o.description,
+                            })
+                            .collect(),
+                        multi: q.multi,
+                    })
+                    .collect(),
+            },
+        }
+    }
 }
 
 /// The UI's names for permission modes.
@@ -331,6 +394,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::AcceptEdits => "acceptEdits",
         Mode::Auto => "auto",
         Mode::Full => "full",
+        Mode::Plan => "plan",
     }
 }
 
@@ -431,6 +495,7 @@ pub(crate) fn task_detail(app: State<App>, id: String) -> Result<TaskDetail, Str
                 tool: a.tool,
                 detail: a.detail.replace(&folder, ""),
                 session: a.session,
+                kind: a.kind.into(),
             })
             .collect(),
         listening: runs.listening(),
@@ -831,6 +896,35 @@ pub(crate) fn answer_ask(
     .map_err(|e| first_line(&e))
 }
 
+/// Answer the agent's `AskUserQuestion` (#102): the labels picked (or
+/// words of your own) for each question, in order.
+#[tauri::command(async)]
+pub(crate) fn answer_questions(
+    app: State<App>,
+    id: String,
+    request_id: String,
+    answers: Vec<Vec<String>>,
+) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task)
+        .answer_questions(&request_id, &answers)
+        .map_err(|e| first_line(&e))
+}
+
+/// Approve the agent's plan (#101): it starts, in `mode` from here on.
+#[tauri::command(async)]
+pub(crate) fn approve_plan(
+    app: State<App>,
+    id: String,
+    request_id: String,
+    mode: String,
+) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task)
+        .approve_plan(&request_id, mode_of(&mode)?)
+        .map_err(|e| first_line(&e))
+}
+
 /// Change the running agent's permission mode.
 #[tauri::command(async)]
 pub(crate) fn set_mode(app: State<App>, id: String, mode: String) -> Result<(), String> {
@@ -1036,4 +1130,52 @@ pub(crate) fn close_task(app: State<App>, id: String) -> Result<String, String> 
     let message = format!("Closed {} — its pull request was closed", task.id);
     app.undo.push(message.clone(), Undo::Task(undo));
     Ok(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spor::agent::{Choice, Question};
+
+    #[test]
+    fn a_question_reads_as_the_ui_expects() {
+        let item = Item::from(
+            Entry::Ask {
+                id: "q".into(),
+                tool: "AskUserQuestion".into(),
+                detail: "Keep it?".into(),
+                session: None,
+                kind: AskKind::Questions(vec![Question {
+                    question: "Keep it?".into(),
+                    header: "Keep".into(),
+                    options: vec![Choice {
+                        label: "Yes".into(),
+                        description: "".into(),
+                    }],
+                    multi: false,
+                }]),
+            },
+            "/f/",
+        );
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["kind"], "ask");
+        assert_eq!(json["ask"], "questions");
+        assert_eq!(json["questions"][0]["options"][0]["label"], "Yes");
+
+        let plan = serde_json::to_value(Item::from(
+            Entry::Ask {
+                id: "p".into(),
+                tool: "ExitPlanMode".into(),
+                detail: "Plan".into(),
+                session: None,
+                kind: AskKind::Plan("# Plan".into()),
+            },
+            "/f/",
+        ))
+        .unwrap();
+        assert_eq!(
+            (plan["ask"].as_str(), plan["plan"].as_str()),
+            (Some("plan"), Some("# Plan"))
+        );
+    }
 }
