@@ -4,7 +4,7 @@
 //!
 //! Its own test binary: opting in to the host is process-wide.
 
-use spor::agent::{AgentKind, Entry, Mode, Permissions, RunState, Runs};
+use spor::agent::{AgentKind, AskKind, Entry, Mode, Permissions, Progress, RunState, Runs};
 use spor::git::Repo;
 use spor::tasks::{Task, Tasks};
 use std::path::{Path, PathBuf};
@@ -55,6 +55,29 @@ read -r first
 echo "$init" > init.txt
 echo '{"type":"system","subtype":"init","session_id":"sess-stream"}'
 case "$first" in
+  *mcp-ask*)
+    echo '{"type":"control_request","request_id":"req-m","request":{"subtype":"can_use_tool","tool_name":"mcp__spor__ask","input":{"question":"Which database?","options":["Postgres","SQLite"]},"tool_use_id":"tm"}}'
+    read -r answer
+    echo "$answer" > answer.txt
+    say "Using it." ;;
+  *todo*)
+    echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"Read it","activeForm":"Reading it","status":"completed"},{"content":"Change it","activeForm":"Changing it","status":"in_progress"},{"content":"Test it","activeForm":"Testing it","status":"pending"}]}}]}}'
+    echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"make test"}}]}}'
+    read -r next
+    say "Done it." ;;
+  *question*)
+    echo '{"type":"control_request","request_id":"req-q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Keep the old endpoint working?","header":"Endpoint","options":[{"label":"Keep it","description":"Both work for a release"},{"label":"Remove it","description":""}],"multiSelect":false},{"question":"Which docs?","header":"Docs","options":[{"label":"README","description":""},{"label":"CHANGELOG","description":""}],"multiSelect":true}]},"tool_use_id":"tq"}}'
+    read -r answer
+    echo "$answer" > answer.txt
+    say "Keeping it." ;;
+  *plan*)
+    printf '%s\n' '{"type":"control_request","request_id":"req-p","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":" # Rename greet\n\n1. Rename it\n2. Fix the callers"},"tool_use_id":"tp"}}'
+    read -r answer
+    echo "$answer" > answer.txt
+    case "$answer" in
+      *'"behavior":"allow"'*) read -r next; echo "$next" > mode.txt; say "Renaming." ;;
+      *) say "Revising the plan." ;;
+    esac ;;
   *ask*)
     echo '{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"make test","timeout":5},"tool_use_id":"t1"}}'
     read -r answer
@@ -208,6 +231,7 @@ fn a_question_waits_for_an_answer() {
         (ask.id.as_str(), ask.tool.as_str(), ask.detail.as_str()),
         ("req-1", "Bash", "make test")
     );
+    assert_eq!(ask.gist(), "wants to run `make test`");
     // Still waiting: nothing happens without an answer.
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(runs.latest().unwrap().state, RunState::Running);
@@ -230,6 +254,7 @@ fn a_question_waits_for_an_answer() {
         tool: "Bash".into(),
         detail: "make test".into(),
         session: None,
+        kind: AskKind::Permission,
     }));
     assert!(t.contains(&Entry::Answer {
         id: "req-1".into(),
@@ -389,4 +414,155 @@ fn the_mode_can_change_while_it_works() {
         "{sent}"
     );
     assert_eq!(runs.mode(0), Some(Mode::AcceptEdits));
+}
+
+#[test]
+fn a_question_with_options_is_answered_with_picks() {
+    let f = fixture();
+    let (task, runs) = start(&f, "a question for you");
+    wait_for("the question", || !runs.asks().is_empty());
+    let ask = runs.asks().remove(0);
+    assert_eq!(ask.tool, "AskUserQuestion");
+    assert_eq!(ask.detail, "Keep the old endpoint working?");
+    assert_eq!(ask.gist(), "asks: Keep the old endpoint working?");
+    assert_eq!(
+        ask.session, None,
+        "a question is never allowed for the session"
+    );
+    let AskKind::Questions(qs) = &ask.kind else {
+        panic!("not questions: {:?}", ask.kind)
+    };
+    assert_eq!(qs.len(), 2);
+    assert_eq!(qs[0].header, "Endpoint");
+    assert_eq!(qs[0].options[0].label, "Keep it");
+    assert_eq!(qs[0].options[0].description, "Both work for a release");
+    assert!(!qs[0].multi && qs[1].multi);
+
+    assert!(runs.answer_questions(&ask.id, &[vec![], vec![]]).is_err());
+    runs.answer_questions(
+        &ask.id,
+        &[
+            vec!["Keep it".into()],
+            vec!["README".into(), "CHANGELOG".into()],
+        ],
+    )
+    .unwrap();
+    assert_eq!(done(&runs), RunState::Finished);
+    let sent = std::fs::read_to_string(task.worktree.join("answer.txt")).unwrap();
+    assert!(sent.contains(r#""behavior":"allow""#), "{sent}");
+    assert!(
+        sent.contains(r#""answers":{"Keep the old endpoint working?":"Keep it","Which docs?":"README, CHANGELOG"}"#),
+        "the answers go back in the tool's input: {sent}"
+    );
+    assert!(
+        sent.contains(r#""questions":[{"header":"Endpoint""#),
+        "with the questions it asked: {sent}"
+    );
+    assert!(texts(&runs).contains(&Entry::Answer {
+        id: "req-q".into(),
+        allow: true,
+        message: "Keep it · README, CHANGELOG".into(),
+        always: false,
+    }));
+    assert!(texts(&runs).contains(&Entry::Text("Keeping it.".into())));
+}
+
+#[test]
+fn a_plan_is_approved_and_the_mode_changes() {
+    let f = fixture();
+    let (task, runs) = start(&f, "make a plan");
+    wait_for("the plan", || !runs.asks().is_empty());
+    let ask = runs.asks().remove(0);
+    assert_eq!(ask.detail, "Rename greet");
+    assert_eq!(ask.gist(), "has a plan for you to review: Rename greet");
+    assert_eq!(
+        ask.kind,
+        AskKind::Plan(" # Rename greet\n\n1. Rename it\n2. Fix the callers".into())
+    );
+    assert!(runs.approve_plan(&ask.id, Mode::Plan).is_err());
+    runs.approve_plan(&ask.id, Mode::AcceptEdits).unwrap();
+    assert_eq!(done(&runs), RunState::Finished);
+    let sent = std::fs::read_to_string(task.worktree.join("answer.txt")).unwrap();
+    assert!(sent.contains(r#""behavior":"allow""#), "{sent}");
+    let mode = std::fs::read_to_string(task.worktree.join("mode.txt")).unwrap();
+    assert!(
+        mode.contains(r#""subtype":"set_permission_mode","mode":"acceptEdits""#),
+        "{mode}"
+    );
+    assert_eq!(runs.mode(0), Some(Mode::AcceptEdits));
+    assert!(texts(&runs).contains(&Entry::Text("Renaming.".into())));
+}
+
+#[test]
+fn a_plan_can_be_sent_back_with_comments() {
+    let f = fixture();
+    let (task, runs) = start(&f, "make a plan");
+    wait_for("the plan", || !runs.asks().is_empty());
+    runs.answer("req-p", false, "Keep the old name as an alias")
+        .unwrap();
+    assert_eq!(done(&runs), RunState::Finished);
+    let sent = std::fs::read_to_string(task.worktree.join("answer.txt")).unwrap();
+    assert!(
+        sent.contains(r#""behavior":"deny","message":"Keep the old name as an alias""#),
+        "{sent}"
+    );
+    assert!(texts(&runs).contains(&Entry::Text("Revising the plan.".into())));
+}
+
+#[test]
+fn progress_says_how_far_through_its_plan_it_is() {
+    let f = fixture();
+    let (_task, runs) = start(&f, "a todo list");
+    wait_for("its plan", || {
+        runs.progress()
+            .is_some_and(|p| p.total == 3 && p.tool.is_some())
+    });
+    assert_eq!(
+        runs.progress().unwrap(),
+        Progress {
+            done: 1,
+            total: 3,
+            step: Some("Changing it".into()),
+            tool: Some(("Bash".into(), "make test".into())),
+        }
+    );
+    runs.send("go on").unwrap();
+    assert_eq!(done(&runs), RunState::Finished);
+    assert_eq!(runs.progress(), None, "nothing is running");
+}
+
+#[test]
+fn spors_mcp_server_is_given_to_the_run_and_its_ask_reaches_the_inbox() {
+    let f = fixture();
+    let (task, runs) = start(&f, "mcp-ask");
+    wait_for("the question", || !runs.asks().is_empty());
+    let ask = runs.asks().remove(0);
+    assert_eq!(ask.tool, "mcp__spor__ask");
+    assert_eq!(ask.gist(), "asks: Which database?");
+    let AskKind::Questions(qs) = &ask.kind else {
+        panic!("not a question: {:?}", ask.kind)
+    };
+    assert_eq!(qs[0].options.len(), 2);
+    assert_eq!(qs[0].options[1].label, "SQLite");
+    runs.answer_questions(&ask.id, &[vec!["SQLite".into()]])
+        .unwrap();
+    assert_eq!(done(&runs), RunState::Finished);
+    // The answer goes back in the call's input, where the server finds it.
+    let sent = std::fs::read_to_string(task.worktree.join("answer.txt")).unwrap();
+    assert!(sent.contains(r#""answer":"SQLite""#), "{sent}");
+
+    let args = std::fs::read_to_string(task.worktree.join("claude-args.txt")).unwrap();
+    let lines: Vec<&str> = args.lines().collect();
+    let at = lines.iter().position(|l| *l == "--mcp-config").unwrap();
+    let config = std::fs::read_to_string(lines[at + 1]).unwrap();
+    assert!(
+        config.contains(r#""spor""#) && config.contains("__spor-mcp"),
+        "{config}"
+    );
+    let allowed = lines[lines.iter().position(|l| *l == "--allowedTools").unwrap() + 1];
+    assert!(allowed.contains("mcp__spor__why"), "{allowed}");
+    assert!(
+        !allowed.contains("mcp__spor__ask"),
+        "asking is never pre-approved"
+    );
 }

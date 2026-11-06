@@ -122,6 +122,20 @@ waits, the GUI shows a dialog, and the answer goes back. A Claude Code
 install`"), and Allow / Deny answer it. The rest of the time agents run
 with the permission mode the user picked when starting the task.
 
+Two other questions come the same way, and get their own answers:
+
+- **`AskUserQuestion`** (#102): the agent asks one or more questions, each
+  with options. They show as buttons (checkboxes when several can be
+  picked), with room for an answer of your own, and the picks go back as
+  the tool's input (`answers`, keyed by question), so the agent carries on
+  in the same turn. The Inbox and the notification say the question.
+- **Plan first** (#101), a permission mode: the agent reads and plans, and
+  changes nothing until its `ExitPlanMode` is answered. The plan shows in
+  the composer; clicking a line quotes it into a comment. *Approve plan*
+  lets it start, in the mode picked beside the button; sending a comment
+  sends it back to plan again. Each version of the plan stays in the
+  transcript.
+
 ### What you see
 
 - **Work** in the sidebar (the rail's last section, after Pulls and Actions;
@@ -224,6 +238,18 @@ Each phase is useful on its own.
 5. **Remote agents** (#44). Agents running in the cloud already work on branches
    and open pull requests. A task can follow a remote branch or PR instead
    of a local worktree, so cloud and local agents share one panel.
+
+**Spor as an MCP server** (#106): each Claude Code run gets a stdio MCP
+server (`--mcp-config` names a file in the run directory; the server is
+the app's executable started with `__spor-mcp`). Tools: `ask` (a question
+for the Inbox, answered inside the turn), `report_progress`,
+`other_tasks` (with the files you share), `pr_comments` (unresolved
+threads), `ci_log` (failing jobs, folded to the failure) and `why` (blame
+a line; if the commit has a `Spor-Task` trailer, that task's prompt and
+what its agent did to the file). Everything but `ask` is pre-approved and
+read-only, apart from `report_progress` writing to the run's log. Still to
+do: `checks()` (#43). `ask` isn't asked in `bypassPermissions` mode, where
+Claude Code doesn't prompt for any tool.
 
 ## Decisions to make
 

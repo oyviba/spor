@@ -478,6 +478,12 @@ export function WorkSection() {
             onAllowForSession={(ask) =>
               api.answerAsk(shown.task.id, ask.id, true, "", true).then(afterChange, fail)
             }
+            onAnswerQuestions={(ask, answers) =>
+              api.answerQuestions(shown.task.id, ask.id, answers).then(afterChange, fail)
+            }
+            onApprovePlan={(ask, mode) =>
+              api.approvePlan(shown.task.id, ask.id, mode).then(afterChange, fail)
+            }
             onRetrySetup={() =>
               api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode).then(afterChange, fail)
             }

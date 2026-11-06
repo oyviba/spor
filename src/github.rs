@@ -874,6 +874,64 @@ pub fn line_notes(dir: &Path, number: u64) -> Result<Vec<LineNote>, String> {
     Ok(notes)
 }
 
+/// A review thread on a PR's diff that nobody has resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Thread {
+    pub path: String,
+    /// 0 when the line is gone.
+    pub line: usize,
+    /// Who said what, oldest first.
+    pub comments: Vec<(String, String)>,
+}
+
+/// The unresolved review threads of a PR.
+pub fn unresolved_threads(dir: &Path, repo: &Repo, number: u64) -> Result<Vec<Thread>, String> {
+    let query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{body author{login}}}}}}}}";
+    let jq = r#".data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved|not) | . as $t | $t.comments.nodes[] | ["thread", $t.id, $t.path, (($t.line // 0)|tostring), (.author.login // ""), .body] | @tsv"#;
+    let out = gh(
+        dir,
+        repo,
+        &[
+            "api",
+            "graphql",
+            "-f",
+            &format!("query={query}"),
+            "-f",
+            &format!("owner={}", repo.owner),
+            "-f",
+            &format!("name={}", repo.name),
+            "-F",
+            &format!("number={number}"),
+            "--jq",
+            jq,
+        ],
+    )?;
+    Ok(parse_threads(&out))
+}
+
+fn parse_threads(out: &str) -> Vec<Thread> {
+    let mut threads: Vec<(String, Thread)> = Vec::new();
+    for line in out.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        let ["thread", id, path, n, author, body] = f[..] else {
+            continue;
+        };
+        let comment = (author.to_string(), unescape(body));
+        match threads.iter_mut().find(|(i, _)| i == id) {
+            Some((_, t)) => t.comments.push(comment),
+            None => threads.push((
+                id.to_string(),
+                Thread {
+                    path: unescape(path),
+                    line: n.parse().unwrap_or(0),
+                    comments: vec![comment],
+                },
+            )),
+        }
+    }
+    threads.into_iter().map(|(_, t)| t).collect()
+}
+
 /// What reviewers said on a PR since `since` (Unix seconds), written as a
 /// follow-up for the agent that made it: reviews and comments, then the
 /// line comments as `file:line — comment`. None when there's nothing new.
@@ -1621,6 +1679,21 @@ pub fn pull_failures(dir: &Path, detail: &PullDetail) -> Result<Vec<JobFailure>,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn groups_a_threads_comments_and_keeps_its_place() {
+        let out = "thread\tT1\tsrc/a.rs\t12\tana\tUse a slice\\nhere\nthread\tT1\tsrc/a.rs\t12\tme\tDone\nthread\tT2\tb.rs\t0\tbo\tWhy?\nnoise";
+        let threads = parse_threads(out);
+        assert_eq!(threads.len(), 2);
+        assert_eq!(threads[0].path, "src/a.rs");
+        assert_eq!(threads[0].line, 12);
+        assert_eq!(
+            threads[0].comments[0],
+            ("ana".into(), "Use a slice\nhere".into())
+        );
+        assert_eq!(threads[0].comments.len(), 2);
+        assert_eq!(threads[1].line, 0);
+    }
 
     #[test]
     fn strips_every_kind_of_escape() {

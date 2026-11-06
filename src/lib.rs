@@ -13,6 +13,7 @@ pub mod github;
 pub mod graph;
 pub mod host;
 pub mod json;
+pub mod mcp;
 pub mod patch;
 pub mod remote;
 pub mod tasks;

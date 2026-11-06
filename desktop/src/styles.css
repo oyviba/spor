@@ -1007,7 +1007,8 @@ button.busy::after {
 .composer-footer > .chip-select,
 .composer-footer > .chip-select-wrap {
   flex-shrink: 1;
-  min-width: 0;
+  /* Never shrink to an empty chip: keep room for a cut-short label. */
+  min-width: 72px;
   max-width: max-content;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1062,6 +1063,14 @@ button.busy::after {
   font-size: 11px;
   color: var(--faint);
   white-space: nowrap;
+}
+/* In the composer the hint gives way before the pickers do, but keeps its
+ * first part ("↩ queue") readable; the full text stays in the DOM. */
+.composer-footer > .hint-keys {
+  flex-shrink: 1000;
+  min-width: 7ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .send {
   display: inline-grid;
@@ -3646,4 +3655,246 @@ body.resizing * {
   font-size: 11px;
   color: var(--faint);
   border-top: 1px solid var(--border);
+}
+
+/* ---- Questions with options (#102) and plans (#101) --------------------- */
+
+.ask-card.questions,
+.ask-card.plan {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.ask-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ask-head > svg {
+  color: var(--amber);
+  flex-shrink: 0;
+}
+.ask-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ask-actions > .muted {
+  flex: 1;
+  min-width: 12rem;
+}
+.question {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.question legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.question-header {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 14%, transparent);
+}
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.choice:hover {
+  background: var(--hover);
+}
+.choice.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.choice-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.choice-description {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.choice-own {
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+}
+.plan-body {
+  max-height: 40vh;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+.plan-line {
+  display: block;
+  width: 100%;
+  padding: 1px 6px;
+  margin: 0 -6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: text;
+}
+.plan-line:hover {
+  background: var(--hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.plan-line > * > :first-child {
+  margin-top: 0;
+}
+.plan-line > * > :last-child {
+  margin-bottom: 0;
+}
+.plan-gap {
+  height: 8px;
+}
+.plan-block > .ask-line {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.plan-block.waiting > .ask-line,
+.plan-block.waiting .ask-outcome {
+  color: var(--amber);
+}
+.plan-block.allowed > .ask-line > svg,
+.plan-block.allowed .ask-outcome {
+  color: var(--emerald);
+}
+.plan-block.denied > .ask-line > svg,
+.plan-block.denied .ask-outcome {
+  color: var(--muted);
+}
+.plan-text {
+  margin: 6px 0 0 21px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+  font-size: 13px;
+}
+
+/* ---- What a running agent is doing (#96) -------------------------------- */
+
+.live {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.live-line > .truncate {
+  min-width: 0;
+}
+.live-plan {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 6px 10px;
+}
+.live-plan-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.plan-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--raised);
+  overflow: hidden;
+}
+.plan-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--sky);
+  transition: width 0.3s ease;
+}
+.todo-list {
+  list-style: none;
+  margin: 6px 0 2px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+}
+.todo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+.todo > svg,
+.todo > .dot {
+  flex-shrink: 0;
+}
+.todo > .dot {
+  margin: 0 3px;
+}
+.todo.completed {
+  color: var(--faint);
+}
+.todo.completed > span {
+  text-decoration: line-through;
+  text-decoration-color: var(--border-strong);
+}
+.todo.completed > svg {
+  color: var(--emerald);
+}
+.todo.in_progress {
+  color: var(--fg);
+  font-weight: 500;
+}
+.todo.in_progress > .dot {
+  color: var(--sky);
 }

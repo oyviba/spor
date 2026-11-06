@@ -5,6 +5,14 @@
 import type { AgentChoice, Ask, Issue, IssueDetail, Item, Mode, Pull, RepoInfo, RunInfo, TaskDetail, TaskPull, TaskSummary, WorkBranch, WorkItemInfo } from "./types";
 
 const now = () => Math.floor(Date.now() / 1000);
+
+/** What the backend's `Ask::gist` says, roughly. */
+const gist = (a: Ask) =>
+  a.ask === "questions"
+    ? `asks: ${a.detail}`
+    : a.ask === "plan"
+      ? `has a plan for you to review: ${a.detail}`
+      : `wants to ${a.tool === "Bash" ? "run" : `use ${a.tool}`} \`${a.detail}\``;
 const t0 = now();
 
 interface MockTask {
@@ -81,6 +89,8 @@ const summary = (id: string, prompt: string, created: number, over: Partial<Task
   runs: 0,
   command: `cd /Users/you/code/postplan.spor/${id} && claude '${prompt}'`,
   asks: 0,
+  ask: null,
+  progress: null,
   mode: "acceptEdits",
   issue: null,
   pull: null,
@@ -156,6 +166,49 @@ const LOGIN_PATCH = `diff --git a/src/auth/session.ts b/src/auth/session.ts
  }
 `;
 
+/** The mock agent's plan at step `at` (steps before it done). */
+const sharePlan = (at: number): Item => ({
+  kind: "todos",
+  todos: [
+    ["Find how drafts are stored", "Finding how drafts are stored"],
+    ["Add the shareLinks table", "Adding the shareLinks table"],
+    ["Add the share routes", "Adding the share routes"],
+    ["Check types and tests", "Checking types and tests"],
+    ["Test link expiry", "Testing link expiry"],
+  ].map(([content, active], i) => ({
+    content,
+    active,
+    status: i < at ? "completed" : i === at ? "in_progress" : "pending",
+  })),
+});
+
+/** What the backend's `Runs::progress` reads from a running task. */
+function progressOf(t: MockTask): TaskSummary["progress"] {
+  if (t.summary.run?.state !== "running") return null;
+  const plan = t.transcript.findLast((i) => i.kind === "todos");
+  const tool = t.transcript.findLast((i) => i.kind === "tool" && i.name !== "TodoWrite");
+  const todos = plan?.kind === "todos" ? plan.todos : [];
+  return {
+    done: todos.filter((x) => x.status === "completed").length,
+    total: todos.length,
+    step: todos.find((x) => x.status === "in_progress")?.active ?? null,
+    tool: tool?.kind === "tool" ? tool.name : null,
+    detail: tool?.kind === "tool" ? tool.detail : null,
+  };
+}
+
+const PLAN = `# Rename drafts to posts
+
+The app says "draft" for what people now call a post. Rename it everywhere it's visible, and keep the old API working for a release.
+
+1. Rename the \`drafts\` table to \`posts\` in a migration, with a view named \`drafts\` so old queries keep working
+2. Rename \`src/drafts/\` to \`src/posts/\` and update the imports (14 files)
+3. Add \`/posts/*\` routes; keep \`/drafts/*\` as redirects, marked deprecated
+4. Update the UI strings in \`src/ui/strings.ts\`
+5. Run \`pnpm test\` and \`pnpm tsc --noEmit\`
+
+Not in this change: renaming the share-link tokens' prefix.`;
+
 const tasks: MockTask[] = [
   {
     summary: summary("expiring-share-links", "Add expiring share links to drafts", t0 - 95, {
@@ -166,6 +219,8 @@ const tasks: MockTask[] = [
     transcript: [
       { kind: "prompt", text: "Add expiring share links to drafts" },
       { kind: "text", text: "I'll look at how drafts are stored and routed first." },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(0),
       { kind: "tool", name: "Glob", detail: "src/**/*.ts" },
       { kind: "tool", name: "Read", detail: "src/routes/drafts.ts" },
       { kind: "tool", name: "Read", detail: "src/db/index.ts" },
@@ -174,18 +229,87 @@ const tasks: MockTask[] = [
         kind: "text",
         text: "Drafts live in `db.drafts` and there's no sharing table yet. Plan:\n\n1. A `shareLinks` table with a token and an expiry\n2. `POST /drafts/:id/share` to create one\n3. `GET /s/:token` to open it until it expires",
       },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(1),
       { kind: "tool", name: "Write", detail: "src/drafts/share.ts" },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(2),
       { kind: "tool", name: "Edit", detail: "src/routes/drafts.ts" },
     ],
     script: [
-      { kind: "ask", id: "req-1", tool: "Bash", detail: "pnpm tsc --noEmit", session: "`pnpm tsc` commands" },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(3),
+      {
+        kind: "ask",
+        ask: "permission",
+        id: "req-1",
+        tool: "Bash",
+        detail: "pnpm tsc --noEmit",
+        session: "`pnpm tsc` commands",
+      },
       { kind: "tool", name: "Bash", detail: "pnpm tsc --noEmit" },
       { kind: "tool", name: "Bash", detail: "pnpm test drafts" },
+      {
+        kind: "ask",
+        ask: "questions",
+        id: "req-2",
+        tool: "AskUserQuestion",
+        detail: "How long should a share link last by default?",
+        session: null,
+        questions: [
+          {
+            question: "How long should a share link last by default?",
+            header: "Expiry",
+            options: [
+              { label: "7 days", description: "Long enough for a review round" },
+              { label: "24 hours", description: "Safer for drafts with private details" },
+              { label: "Until revoked", description: "No expiry; the owner removes it" },
+            ],
+            multi: false,
+          },
+          {
+            question: "Who can open a link?",
+            header: "Access",
+            options: [
+              { label: "Anyone with it", description: "" },
+              { label: "Signed-in people", description: "" },
+              { label: "The team", description: "" },
+            ],
+            multi: true,
+          },
+        ],
+      },
       { kind: "text", text: "Types check and the draft tests pass. Adding a test for expiry next." },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(4),
       { kind: "tool", name: "Write", detail: "src/drafts/share.test.ts" },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(5),
     ],
     runs: [run({ state: "running", exit_code: null, started: t0 - 52, ended: null, cost_usd: null })],
     patch: SHARE_PATCH,
+  },
+  {
+    summary: summary("rename-drafts", "Rename drafts to posts", t0 - 400, {
+      run: run({ state: "running", exit_code: null, started: t0 - 380, ended: null, cost_usd: null }),
+      runs: 1,
+      asks: 1,
+      ask: "has a plan for you to review: Rename drafts to posts",
+      mode: "plan",
+    }),
+    transcript: [
+      { kind: "prompt", text: "Rename drafts to posts" },
+      { kind: "text", text: "I'll find everywhere drafts are named before proposing a plan." },
+      { kind: "tool", name: "Grep", detail: "draft" },
+      { kind: "tool", name: "Read", detail: "src/db/schema.ts" },
+      { kind: "tool", name: "Read", detail: "src/routes/drafts.ts" },
+      { kind: "tool", name: "Read", detail: "src/ui/strings.ts" },
+      { kind: "ask", ask: "plan", id: "plan-1", tool: "ExitPlanMode", detail: "Rename drafts to posts", session: null, plan: PLAN },
+    ],
+    script: [],
+    asks: [{ ask: "plan", id: "plan-1", tool: "ExitPlanMode", detail: "Rename drafts to posts", session: null, plan: PLAN }],
+    runs: [run({ state: "running", exit_code: null, started: t0 - 380, ended: null, cost_usd: null })],
+    patch: "",
   },
   {
     summary: summary("login-redirect", "Send people back where they were after logging in", t0 - 3600 * 2, {
@@ -349,6 +473,8 @@ const CHANGES_TASKS = new Set([
   "discard_task",
   "undo",
   "answer_ask",
+  "answer_questions",
+  "approve_plan",
   "steer",
   "set_mode",
   "undo_run",
@@ -357,11 +483,14 @@ const CHANGES_TASKS = new Set([
   "send_queued",
 ]);
 
+for (const t of tasks) t.summary.progress = progressOf(t);
+
 // The working task makes progress every few seconds, then finishes.
 setInterval(() => {
   const t = tasks.find((x) => x.summary.run?.state === "running");
   if (!t || t.asks?.length) return;
   progress(t);
+  t.summary.progress = progressOf(t);
   tasksChanged();
 }, 4000);
 
@@ -370,8 +499,10 @@ function progress(t: MockTask) {
   if (next) {
     t.transcript.push(next);
     if (next.kind === "ask") {
-      t.asks = [{ id: next.id, tool: next.tool, detail: next.detail, session: next.session }];
+      const { kind: _, ...ask } = next;
+      t.asks = [ask];
       t.summary.asks = 1;
+      t.summary.ask = gist(ask);
     }
     return;
   }
@@ -487,6 +618,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
             id: t.summary.id,
             title: t.summary.title,
             asks: t.summary.asks,
+            ask: t.summary.ask,
             run: t.summary.run?.state ?? null,
             started: t.summary.run?.started ?? null,
             ended: t.summary.run?.ended ?? null,
@@ -596,6 +728,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         if (!ask) throw "That question was already answered";
         t.asks = t.asks!.filter((a) => a !== ask);
         t.summary.asks = t.asks.length;
+        t.summary.ask = t.asks[0] ? gist(t.asks[0]) : null;
         t.transcript.push({
           kind: "answer",
           id: ask.id,
@@ -604,6 +737,30 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           always: !!args.allow && !!args.always,
         });
         if (!args.allow) t.script = t.script.filter((x) => !(x.kind === "tool" && x.detail === ask.detail));
+        return null;
+      }
+      case "answer_questions": {
+        const t = find(id);
+        const ask = t.asks?.find((a) => a.id === args.requestId);
+        if (!ask || ask.ask !== "questions") throw "That question was already answered";
+        const answers = (args.answers as string[][]).map((a) => a.join(", ")).filter((a) => a.trim());
+        if (answers.length === 0) throw "Pick an answer first";
+        t.asks = t.asks!.filter((a) => a !== ask);
+        t.summary.asks = t.asks.length;
+        t.summary.ask = t.asks[0] ? gist(t.asks[0]) : null;
+        t.transcript.push({ kind: "answer", id: ask.id, allow: true, message: answers.join(" · "), always: false });
+        return null;
+      }
+      case "approve_plan": {
+        const t = find(id);
+        const ask = t.asks?.find((a) => a.id === args.requestId);
+        if (!ask || ask.ask !== "plan") throw "That plan was already answered";
+        t.asks = t.asks!.filter((a) => a !== ask);
+        t.summary.asks = t.asks.length;
+        t.summary.ask = t.asks[0] ? gist(t.asks[0]) : null;
+        t.summary.mode = args.mode as Mode;
+        t.transcript.push({ kind: "answer", id: ask.id, allow: true, message: "", always: false });
+        t.transcript.push({ kind: "text", text: "Starting on the plan." });
         return null;
       }
       case "steer": {

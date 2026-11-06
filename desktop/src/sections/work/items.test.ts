@@ -18,6 +18,7 @@ const task = (id: string, created: number, over: Partial<TaskSummary> = {}): Tas
   runs: 0,
   command: "",
   asks: 0,
+  ask: null,
   mode: null,
   issue: null,
   pull: null,

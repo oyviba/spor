@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { inboxItems } from "./inbox.ts";
+import { askLine, inboxItems } from "./inbox.ts";
 import type { InboxGithub, InboxTask } from "../../types.ts";
 
 const task = (over: Partial<InboxTask>): InboxTask => ({
@@ -8,6 +8,7 @@ const task = (over: Partial<InboxTask>): InboxTask => ({
   id: "t",
   title: "A task",
   asks: 0,
+  ask: null,
   run: "finished",
   started: 100,
   ended: 200,
@@ -66,4 +67,13 @@ test("a task you've looked at since it finished drops out", () => {
 
 test("stopped runs and tasks never run aren't waiting on you", () => {
   assert.equal(inboxItems([task({ run: "stopped" }), task({ run: null })], null, {}).length, 0);
+});
+
+test("a question's row says what it asks", () => {
+  assert.equal(askLine("asks: Keep the old endpoint?", 1), "The agent asks: Keep the old endpoint?");
+  assert.equal(
+    askLine("has a plan for you to review: Rename", 2),
+    "The agent has a plan for you to review: Rename (and 1 more)",
+  );
+  assert.equal(askLine(null, 1), "The agent is asking before it goes on");
 });
