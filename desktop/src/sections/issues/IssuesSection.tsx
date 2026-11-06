@@ -6,6 +6,7 @@ import { useChanged, usePoll, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { Markdown } from "../../shared/Markdown";
+import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
 import { isOpen } from "../agents/status";
@@ -272,13 +273,20 @@ function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: 
   const [base, setBase] = useState(repo.default_base ?? repo.branch ?? repo.branches[0] ?? "main");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const attachments = useAttachments(shell.fail);
   const verb = settings.agent === "none" ? "Create task" : "Start agent task";
 
   const start = async () => {
-    if (busy || !prompt.trim()) return;
+    if (busy || !prompt.trim() || attachments.saving) return;
     setBusy(true);
     try {
-      const t = await api.createIssueTask(detail.issue.number, prompt, base, choiceOf(settings), settings.mode);
+      const t = await api.createIssueTask(
+        detail.issue.number,
+        withImages(prompt, attachments.images),
+        base,
+        choiceOf(settings),
+        settings.mode,
+      );
       shell.toast(`Started ${t.id} on #${detail.issue.number}`);
       onStarted(t);
     } catch (e) {
@@ -291,7 +299,8 @@ function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: 
   return (
     <div className="composer-dock">
       <div className="column">
-        <div className="composer">
+        <div className={`composer${attachments.dragging ? " dropping" : ""}`} {...attachments.handlers}>
+          <AttachmentStrip images={attachments.images} onRemove={attachments.remove} />
           {open ? (
             <textarea
               rows={8}
@@ -342,7 +351,8 @@ function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: 
               </>
             )}
             <span className="flex-1" />
-            <Button className="primary" disabled={!prompt.trim()} busy={busy} onClick={start}>
+            <AttachButton onFiles={attachments.add} />
+            <Button className="primary" disabled={!prompt.trim() || attachments.saving} busy={busy} onClick={start}>
               <ArrowUp size={12} /> {verb}
             </Button>
           </div>

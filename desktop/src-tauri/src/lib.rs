@@ -424,6 +424,7 @@ pub fn run() {
             agents::answer_ask,
             agents::set_mode,
             agents::steer,
+            agents::attach_image,
             agents::skip_setup,
             agents::create_issue_task,
             agents::publish_task,

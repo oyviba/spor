@@ -319,6 +319,29 @@ impl Tasks {
         self.dir.join(format!("{id}.d"))
     }
 
+    /// Where images attached to prompts are kept: `.git/spor/attachments/`,
+    /// beside the tasks, so they stay out of every folder and commit.
+    pub fn attachments_dir(&self) -> PathBuf {
+        self.dir.with_file_name("attachments")
+    }
+
+    /// Keep an image attached to a prompt, for an agent to look at. It's
+    /// named by its content, so attaching the same picture twice keeps it
+    /// once. PNG, JPEG, GIF and WebP only: what Claude can read.
+    pub fn attach(&self, data: &[u8]) -> Result<PathBuf, String> {
+        let ext = image_kind(data).ok_or("Only PNG, JPEG, GIF and WebP images can be attached")?;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        data.hash(&mut hasher);
+        let dir = self.attachments_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("{:016x}.{ext}", hasher.finish()));
+        if !path.exists() {
+            std::fs::write(&path, data).map_err(|e| e.to_string())?;
+        }
+        Ok(path)
+    }
+
     pub fn stats(&self, task: &Task) -> TaskStats {
         if task.state != TaskState::Open {
             return TaskStats::default();
@@ -774,9 +797,33 @@ fn unescape(s: &str) -> String {
     out
 }
 
+/// An image's extension, from its first bytes.
+fn image_kind(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("jpg")
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attached_images_are_known_by_their_bytes() {
+        assert_eq!(image_kind(b"\x89PNG\r\n\x1a\n...."), Some("png"));
+        assert_eq!(image_kind(&[0xff, 0xd8, 0xff, 0xe0]), Some("jpg"));
+        assert_eq!(image_kind(b"GIF89a.."), Some("gif"));
+        assert_eq!(image_kind(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(image_kind(b"<svg>"), None);
+    }
 
     #[test]
     fn slugs() {
