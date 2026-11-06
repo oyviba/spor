@@ -5,7 +5,7 @@
 use crate::undo::Undo;
 use crate::{first_line, App};
 use serde::{Deserialize, Serialize};
-use spor::agent::{self, AgentKind, Entry, Mode, Permissions, Run, RunState, Runs};
+use spor::agent::{self, AgentKind, Effort, Entry, Mode, Model, Permissions, Run, RunState, Runs};
 use spor::tasks::{LandMode, Task, TaskState, TaskStats, Tasks};
 use tauri::State;
 
@@ -83,7 +83,10 @@ impl From<Run> for RunInfo {
                 AgentKind::Claude => "claude",
                 AgentKind::Command(_) => "command",
             },
-            label: r.kind.label().to_string(),
+            label: match r.model.describe() {
+                Some(model) => format!("{} · {model}", r.kind.label()),
+                None => r.kind.label().to_string(),
+            },
             prompt: r.prompt.clone(),
             state,
             exit_code,
@@ -106,6 +109,8 @@ pub(crate) struct TaskSummary {
     worktree: String,
     created: i64,
     landed: Option<String>,
+    /// Its pull request was closed without merging, and it was cleaned up.
+    closed: bool,
     stats: Stats,
     run: Option<RunInfo>,
     runs: usize,
@@ -133,8 +138,9 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
         created: task.created,
         landed: match &task.state {
             TaskState::Landed(sha) => Some(sha.clone()),
-            TaskState::Open => None,
+            TaskState::Open | TaskState::Closed => None,
         },
+        closed: task.state == TaskState::Closed,
         stats: tasks.stats(task).into(),
         mode: list.last().and_then(|r| runs.mode(r.index)).map(mode_name),
         runs: list.len(),
@@ -288,21 +294,44 @@ fn mode_of(name: &str) -> Result<Mode, String> {
         .ok_or_else(|| format!("Unknown permission mode {name}"))
 }
 
-/// Which agent to run, as the UI names it.
+/// Which agent to run, as the UI names it. Claude's model and effort are
+/// left to Claude Code when they're missing or empty.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum AgentChoice {
-    Claude,
-    Command { template: String },
+    Claude {
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        effort: Option<String>,
+    },
+    Command {
+        template: String,
+    },
     None,
 }
 
 impl AgentChoice {
     fn kind(&self) -> Option<AgentKind> {
         match self {
-            AgentChoice::Claude => Some(AgentKind::Claude),
+            AgentChoice::Claude { .. } => Some(AgentKind::Claude),
             AgentChoice::Command { template } => Some(AgentKind::Command(template.clone())),
             AgentChoice::None => None,
+        }
+    }
+
+    fn model(&self) -> Result<Model, String> {
+        match self {
+            AgentChoice::Claude { model, effort } => {
+                let effort = match effort.as_deref().filter(|e| !e.is_empty()) {
+                    Some(e) => {
+                        Some(Effort::from_flag(e).ok_or_else(|| format!("Unknown effort {e}"))?)
+                    }
+                    None => None,
+                };
+                Model::new(model.as_deref(), effort)
+            }
+            _ => Ok(Model::default()),
         }
     }
 }
@@ -382,6 +411,7 @@ pub(crate) fn create_issue_task(
     mode: String,
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
+    let model = agent.model()?;
     let kind = agent.kind();
     if let Some(e) = kind.as_ref().and_then(missing) {
         return Err(e);
@@ -403,7 +433,14 @@ pub(crate) fn create_issue_task(
         .create_for_issue(&prompt, &base, number, title)
         .map_err(|e| format!("Couldn't create the task: {}", first_line(&e)))?;
     if let Some(kind) = kind {
-        Runs::of(&tasks, &task).start(&task, &kind, &task.prompt, None, Permissions { mode })?;
+        Runs::of(&tasks, &task).start_with(
+            &task,
+            &kind,
+            &task.prompt,
+            None,
+            Permissions { mode },
+            &model,
+        )?;
     }
     Ok(summary(&tasks, &task))
 }
@@ -417,6 +454,7 @@ pub(crate) fn create_task(
     mode: String,
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
+    let model = agent.model()?;
     let kind = agent.kind();
     if let Some(e) = kind.as_ref().and_then(missing) {
         return Err(e);
@@ -426,7 +464,14 @@ pub(crate) fn create_task(
         .create(&prompt, &base)
         .map_err(|e| format!("Couldn't create the task: {}", first_line(&e)))?;
     if let Some(kind) = kind {
-        Runs::of(&tasks, &task).start(&task, &kind, &task.prompt, None, Permissions { mode })?;
+        Runs::of(&tasks, &task).start_with(
+            &task,
+            &kind,
+            &task.prompt,
+            None,
+            Permissions { mode },
+            &model,
+        )?;
     }
     Ok(summary(&tasks, &task))
 }
@@ -445,10 +490,12 @@ pub(crate) fn send_to_agent(
     let (tasks, task) = app.task(&id)?;
     let runs = Runs::of(&tasks, &task);
     let follow_up = message.is_some();
-    // Follow-ups go to the agent that did the work, whatever's picked now.
-    let previous = runs.latest().map(|r| r.kind);
-    let kind = match (follow_up, previous, agent.kind()) {
-        (true, Some(k), _) | (_, _, Some(k)) => k,
+    // Follow-ups go to the agent that did the work, on the model it used,
+    // whatever's picked now.
+    let previous = runs.latest().map(|r| (r.kind, r.model));
+    let (kind, model) = match (follow_up, previous, agent.kind()) {
+        (true, Some(p), _) => p,
+        (_, _, Some(k)) => (k, agent.model()?),
         _ => return Err("Pick an agent first".into()),
     };
     if let Some(e) = missing(&kind) {
@@ -466,12 +513,13 @@ pub(crate) fn send_to_agent(
         Some(m) => m.trim().to_string(),
         None => task.prompt.clone(),
     };
-    runs.start(
+    runs.start_with(
         &task,
         &kind,
         &prompt,
         session.as_deref(),
         Permissions { mode },
+        &model,
     )
     .map(|_| ())
 }
@@ -482,6 +530,20 @@ pub(crate) fn stop_agent(app: State<App>, id: String) -> Result<(), String> {
     // An interrupt when it listens (it keeps its session); else, or if that
     // doesn't land, the old kill.
     Runs::of(&tasks, &task).finish(std::time::Duration::from_secs(4))
+}
+
+/// Keep an image pasted or dropped into a prompt, and say where it is: the
+/// prompt names it by that path. The image is the request's raw body.
+#[tauri::command(async)]
+pub(crate) fn attach_image(
+    app: State<App>,
+    request: tauri::ipc::Request,
+) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("No image was sent".into());
+    };
+    let path = app.tasks()?.attach(data)?;
+    Ok(path.display().to_string())
 }
 
 /// A message into the turn the agent is on (steering, #22).
@@ -760,6 +822,21 @@ pub(crate) fn review_feedback(app: State<App>, id: String) -> Result<String, Str
         .ok_or_else(|| format!("Nothing new on #{number} since the agent last worked on it"))
 }
 
+/// The failed Actions jobs on the task's pull request (the failing step
+/// and the end of each log), as a follow-up for its agent.
+#[tauri::command(async)]
+pub(crate) fn check_feedback(app: State<App>, id: String) -> Result<String, String> {
+    let (tasks, task) = app.task(&id)?;
+    let number = task
+        .pull
+        .ok_or_else(|| format!("{} has no pull request", task.id))?;
+    let dir = tasks.root().to_path_buf();
+    let detail = spor::github::pull_detail(&dir, number).map_err(|e| first_line(&e))?;
+    let failures = spor::github::pull_failures(&dir, &detail).map_err(|e| first_line(&e))?;
+    spor::github::failure_feedback(&failures, Some(&detail.pull))
+        .ok_or_else(|| format!("No Actions job has failed on #{number}"))
+}
+
 /// The task's pull request was merged: mark it landed and remove its folder
 /// and branch. ⌘Z brings them back.
 #[tauri::command(async)]
@@ -773,6 +850,23 @@ pub(crate) fn settle_task(app: State<App>, id: String, commit: String) -> Result
     }
     let undo = tasks.settle(&task, &commit).map_err(|e| first_line(&e))?;
     let message = format!("Cleaned up {} — its pull request was merged", task.id);
+    app.undo.push(message.clone(), Undo::Task(undo));
+    Ok(message)
+}
+
+/// The task's pull request was closed without merging: mark it closed and
+/// remove its folder and branch. ⌘Z brings them back.
+#[tauri::command(async)]
+pub(crate) fn close_task(app: State<App>, id: String) -> Result<String, String> {
+    let (tasks, task) = app.task(&id)?;
+    if Runs::of(&tasks, &task)
+        .latest()
+        .is_some_and(|r| r.state == RunState::Running)
+    {
+        return Err("Stop the agent first".into());
+    }
+    let undo = tasks.close(&task).map_err(|e| first_line(&e))?;
+    let message = format!("Closed {} — its pull request was closed", task.id);
     app.undo.push(message.clone(), Undo::Task(undo));
     Ok(message)
 }

@@ -3,18 +3,19 @@ import { api, errorText } from "../../api";
 import type { Job, LogLine, Run, RunDetail, TaskSummary } from "../../types";
 import { Button } from "../../shared/Button";
 import { useShell } from "../../shared/app";
-import { useNow, usePoll, useStored } from "../../shared/hooks";
+import { useChanged, useNow, usePoll, useStored } from "../../shared/hooks";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { StatusPill } from "../../shared/StatusPill";
 import { CiIcon, ciStatus, elapsed } from "../../shared/ci";
 import { ago } from "../agents/transcript";
 import { choiceOf, useAgentSettings } from "../agents/Composer";
+import { isOpen } from "../agents/status";
 import { Bot, Branch, Chevron, Commit, External, Refresh, Square } from "../../shared/Icons";
 
 /** GitHub Actions: runs, their jobs and logs; re-run and cancel. */
 export function ActionsSection() {
   const shell = useShell();
-  const { fail, state } = shell;
+  const { fail, state, tasks } = shell;
   const [workflow, setWorkflow] = useStored<string>("actions.workflow", "");
   const [mine, setMine] = useStored("actions.mine", false);
   const [workflows, setWorkflows] = useState<string[]>([]);
@@ -23,7 +24,6 @@ export function ActionsSection() {
   const [selected, setSelected] = useStored<number | null>("actions.selected", null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [jobId, setJobId] = useState<number | null>(null);
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
   // Bumped after a re-run or cancel: reload the list and the run now.
   const [nonce, setNonce] = useState(0);
   const now = useNow(1000, runs?.some((r) => r.status === "running" || r.status === "queued") ?? false);
@@ -34,7 +34,7 @@ export function ActionsSection() {
   const filterKey = `${workflow}\n${branch}`;
   const wanted = useRef(filterKey);
   wanted.current = filterKey;
-  useEffect(() => setRuns(null), [filterKey]);
+  useChanged(() => setRuns(null), [filterKey]);
   usePoll(
     async () => {
       const asked = filterKey;
@@ -54,17 +54,16 @@ export function ActionsSection() {
   );
   useEffect(() => {
     api.workflows().then(setWorkflows, () => {});
-    api.listTasks().then(setTasks, () => {});
   }, []);
 
   // Sent here from a PR's checks: that run, and that job.
-  useEffect(() => {
+  useChanged(() => {
     const t = shell.target;
     if (t.section === "actions" && t.runId) {
       setSelected(t.runId);
       if (t.jobId) setJobId(t.jobId);
     }
-  }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shell.target.seq]);
 
   const live = detail?.run.status === "running" || detail?.run.status === "queued";
   usePoll(
@@ -83,13 +82,11 @@ export function ActionsSection() {
     [selected, nonce],
     selected != null && !error,
   );
-  useEffect(() => {
-    setDetail(null);
-  }, [selected]);
+  useChanged(() => setDetail(null), [selected]);
 
   const run = detail?.run.id === selected ? detail : null;
   const job = run?.jobs.find((j) => j.id === jobId) ?? null;
-  const task = run ? tasks.find((t) => t.branch === run.run.branch && !t.landed) : undefined;
+  const task = run ? tasks.find((t) => t.branch === run.run.branch && isOpen(t)) : undefined;
 
   return (
     <>
@@ -278,25 +275,18 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
       })
       .then(onChanged);
 
-  // A failed run on an agent's branch: hand the failure to that agent.
+  // A failed run on an agent's branch: hand the failed job (its failing
+  // step and the end of its log) to that agent.
   const sendToAgent = async () => {
     if (!task) return;
     const failedJob = job?.status === "failure" ? job : run.jobs.find((j) => j.status === "failure");
-    let excerpt = "";
-    if (failedJob) {
-      const lines = await api.jobLog(failedJob.id).catch(() => []);
-      const bad = sections(lines).filter((s) => s.failed);
-      excerpt = bad
-        .map((s) => `${s.title}\n${s.lines.slice(-60).map((l) => l.text).join("\n")}`)
-        .join("\n\n")
-        .slice(-6000);
-    }
-    const message =
-      `CI failed: ${r.workflow} #${r.number}${failedJob ? `, job “${failedJob.name}”` : ""}.` +
-      (excerpt ? `\n\nThe failing part of the log:\n\`\`\`\n${excerpt}\n\`\`\`` : "") +
-      `\n\nFind the cause, fix it, check it passes locally, and commit.`;
+    if (!failedJob) return;
     const ok = await shell.act(
-      () => api.sendToAgent(task.id, message, choiceOf(settings), settings.mode).then(() => `Sent the failure to ${task.id}`),
+      () =>
+        api
+          .jobFeedback(r.id, failedJob.id)
+          .then((message) => api.sendToAgent(task.id, message, choiceOf(settings), settings.mode))
+          .then(() => `Sent the failure to ${task.id}`),
       { undo: false, pending: "Sending the failure…" },
     );
     if (ok) shell.go({ section: "agents", taskId: task.id });

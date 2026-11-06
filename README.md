@@ -61,6 +61,9 @@ details card:
   work at once without touching your checkout. A task is a prompt: spor
   creates `agent/<name>` from a base, checks it out in `<repo>.spor/<name>`
   beside the repository, and starts Claude Code (or any command) there.
+  Paste, drop or attach images (screenshots, mockups) into any prompt —
+  a new task, an issue's, or a follow-up; they're kept in
+  `.git/spor/attachments/` and the agent is told where to find them.
   Watch the conversation, answer its questions, steer it while it works,
   review its changes with line comments, send feedback, undo a run, then
   **Land** it (one squashed commit, or a merge commit), open a pull request
@@ -86,9 +89,10 @@ Across the app:
 - **Credentials.** The app has no terminal, so a passphrase, password or
   new-host question from git or ssh opens a dialog (an askpass bridge)
 - **Workspaces** — named, colored groups of repositories on the rail, like
-  Slack's (⌘⌥1–9), each reopening the repository last open in it. The
-  repository name at the top of the sidebar lists the workspace's
-  repositories with their branch and what there is to pull. The old native
+  Slack's (⌘⌥1–9), each reopening the repository last open in it. Beside
+  the rail, a column lists the workspace's repositories with the open one
+  marked, their branch, changed files and what there is to pull (⌘⇧E hides
+  it). The old native
   app's workspaces are imported on the first run
 - **⌘K** — a palette for every command, section, branch and repository
 - **Settings** (⌘,) — System, Light or Dark, themes (Spor, Nord, Dracula,

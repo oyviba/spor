@@ -2,7 +2,8 @@
 // commits after the chosen one, oldest first; reorder them, reword, squash,
 // fix up or drop, then Rewrite history (⌘Z puts the branch back).
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useChanged } from "../../shared/hooks";
 import { api } from "../../api";
 import type { PlanAction, PlanCommit } from "../../types";
 import { useShell } from "../../shared/app";
@@ -31,7 +32,7 @@ export function Rewrite({ base, onDone, onCancel }: { base: string; onDone: () =
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  useChanged(() => {
     setSteps(null);
     setError(null);
     api.rewritePlan(base).then(
