@@ -109,9 +109,7 @@ impl From<Run> for RunInfo {
             cost_usd: r.cost_usd,
             tokens_in: r.usage.input + r.usage.cache_read + r.usage.cache_created,
             tokens_out: r.usage.output,
-            context: r
-                .usage
-                .fill(model.as_deref().or(r.model.name.as_deref())),
+            context: r.usage.fill(model.as_deref().or(r.model.name.as_deref())),
             mcp_failed: r
                 .init
                 .as_ref()
