@@ -25,7 +25,7 @@ try {
   await w.js("localStorage.clear(); localStorage.setItem('spor.section', JSON.stringify('agents'))");
   await w.refresh();
   console.log("Work");
-  await w.waitFor(`.nav-section[aria-label="Work"][aria-current="page"]`);
+  await w.waitFor(`.rail-item[aria-label="Work"][aria-current="page"]`);
   check(true, "a stored Agents section opens Work");
   await w.until(`return [...$$(".task-row[data-kind=branch]")].some(r => r.innerText.includes("Document how to call greet()"))`, "your branch");
   check((await w.text(".task-list")).includes("In progress"), "your own branch with commits ahead of main is listed, in progress");
@@ -68,17 +68,9 @@ try {
   await w.until(`return $(".task-row .pill")?.innerText.includes("Needs you")`, "the Needs you pill", 5000);
   check(true, "the task says it needs you");
   check((await w.text(".list-label.needs-you")) === "Needs you", "…and moves to the top of the list");
-  await w.until(`return $('.nav-section[aria-label="Inbox"] .rail-badge.asking')?.textContent === "1"`, "the rail's count", 6000);
-  check(true, "the Inbox counts it in amber");
+  await w.until(`return $(".rail-badge.asking")?.textContent === "1"`, "the rail's count", 6000);
+  check(true, "the rail counts it in amber");
   await w.shot("2a-asking");
-
-  console.log("The Inbox has it (#42)");
-  await w.js(`$('.nav-section[aria-label="Inbox"]').click()`);
-  await w.waitFor(".list-label.needs-you");
-  check((await w.text(".task-list")).includes("Let greet() take an optional title"), "the Inbox lists the question");
-  await w.clickText(".task-row", "Let greet()");
-  await w.waitFor(".composer .ask-card");
-  check(true, "clicking it opens the task, with its question");
   await w.clickText(".ask-card button", "Allow");
 
   console.log("Agent finishes");

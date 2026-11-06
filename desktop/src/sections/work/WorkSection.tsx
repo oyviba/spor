@@ -2,18 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import type { LineComment, Pull, RunPatch, TaskDetail, TaskPull, TaskSummary, WorkBranch } from "../../types";
 import { activityAt, matches, moveTo, shelve, workItems, type Filter, type WorkItem } from "./items";
-import { isOpen } from "../agents/status";
-import { catchUpPrompt, restorePrompt } from "../agents/prompts";
 import { useChanged, usePoll, useRepoChanges, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { EmptyState } from "../../shared/Layout";
 import { Sidebar } from "./Sidebar";
 import { BranchPage } from "./BranchPage";
 import { FromIssue } from "./FromIssue";
-import { PullView } from "./pull";
+import { PullPage } from "../pulls/PullsSection";
 import { NewTask } from "../agents/NewTask";
-import { TaskView } from "./TaskView";
-import type { WorkTab } from "./WorkPage";
+import { TaskPage, type Tab } from "../agents/TaskPage";
 import { choiceOf, useAgentSettings, type ComposerHandle } from "../agents/Composer";
 
 /** What the page shows: something to start, or one work item. */
@@ -52,7 +49,7 @@ export function WorkSection() {
   // The Changes tab: everything against the base, or one run's changes.
   const [source, setSource] = useState<"all" | number>("all");
   const [runPatch, setRunPatch] = useState<{ key: string; value: RunPatch } | null>(null);
-  const [tab, setTab] = useState<WorkTab>("agent");
+  const [tab, setTab] = useState<Tab>("conversation");
   const [settings, setSettings] = useAgentSettings();
   const [seen, setSeen] = useStored<Record<string, number>>("work.seen", {});
   const [settledOpen, setSettledOpen] = useStored("work.settled", false);
@@ -60,8 +57,7 @@ export function WorkSection() {
   const [order, setOrder] = useStored<Record<string, number>>("work.order", {});
   const [inspector, setInspector] = useStored("inspector", true);
   const [comments, setComments] = useState<Record<string, LineComment[]>>({});
-  // Queued follow-ups used to be kept here; they're kept with the task now.
-  const [oldQueue, setOldQueue] = useStored<Record<string, string[]>>("queue", {});
+  const [queue, setQueue] = useStored<Record<string, string[]>>("queue", {});
   const [focus, setFocus] = useState<Pick<LineComment, "file" | "line" | "side"> | null>(null);
   const composer = useRef<ComposerHandle>(null);
 
@@ -104,7 +100,7 @@ export function WorkSection() {
   // Open tasks' pull requests (one `gh` call), and a note when one merges.
   const [pulls, setPulls] = useState<Record<string, TaskPull>>({});
   const merged = useRef<Set<string> | null>(null);
-  const openTasks = tasks.filter(isOpen).length;
+  const openTasks = tasks.filter((t) => !t.landed).length;
   const refreshPulls = useCallback(async () => {
     let list: TaskPull[];
     try {
@@ -113,18 +109,14 @@ export function WorkSection() {
       return; // Not GitHub, or no `gh`: tasks just have no PRs.
     }
     setPulls(Object.fromEntries(list.map((p) => [p.task, p])));
-    const now = new Set(list.filter((p) => p.pull.state === "merged" || p.pull.state === "closed").map((p) => p.task));
+    const now = new Set(list.filter((p) => p.pull.state === "merged").map((p) => p.task));
     if (merged.current)
       for (const p of list)
         if (now.has(p.task) && !merged.current.has(p.task))
-          toast(
-            `#${p.pull.number} ${p.pull.state === "merged" ? "landed" : "was closed"} — ${p.task} can be cleaned up`,
-            "ok",
-            false,
-            p.pull.state === "merged"
-              ? { label: "Clean up", run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`) }
-              : { label: "Clean up", run: () => close(p.task) },
-          );
+          toast(`#${p.pull.number} merged — ${p.task} can be cleaned up`, "ok", false, {
+            label: "Clean up",
+            run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`),
+          });
     merged.current = now;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   usePoll(refreshPulls, 30_000, [repo.root, openTasks], openTasks > 0);
@@ -170,7 +162,7 @@ export function WorkSection() {
   useRepoChanges(refreshDetail, ["tasks", "refs"], [selectedId], !!selectedId);
   useChanged(() => {
     setDetail(null);
-    setTab("agent");
+    setTab("conversation");
     setFocus(null);
     setSource("all");
   }, [selectedId]);
@@ -204,25 +196,23 @@ export function WorkSection() {
     if (seen[key] !== at) setSeen((s) => ({ ...s, [key]: at }));
   }, [shown?.task.id, shown && activityAt(shown.task)]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Follow-ups queued before the queue moved to the task: hand them over once.
-  useEffect(() => {
-    const old = Object.entries(oldQueue).filter(([id, q]) => q.length > 0 && tasks.some((t) => t.id === id && isOpen(t)));
-    if (tasks.length === 0 || Object.keys(oldQueue).length === 0) return;
-    setOldQueue({});
-    Promise.all(old.flatMap(([id, q]) => q.map((text) => api.queueFollowUp(id, text)))).then(refreshTasks, fail);
-  }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Queued follow-ups go out, one per run, when their task's agent is idle.
-  // The queue is kept with the task, so it outlives the window.
   const sending = useRef(new Set<string>());
   useEffect(() => {
-    for (const t of tasks) {
-      if (!isOpen(t) || t.queued.length === 0 || t.run?.state === "running" || sending.current.has(t.id)) continue;
-      sending.current.add(t.id);
+    for (const [id, messages] of Object.entries(queue)) {
+      const t = tasks.find((x) => x.id === id);
+      if (!t || t.landed) {
+        if (!t && tasks.length > 0) setQueue(({ [id]: _, ...rest }) => rest);
+        continue;
+      }
+      if (messages.length === 0 || t.run?.state === "running" || sending.current.has(id)) continue;
+      sending.current.add(id);
+      const [first, ...rest] = messages;
       api
-        .sendQueued(t.id, choiceOf(settings), settings.mode)
-        .then((sent) => (sent ? refreshTasks() : undefined), fail)
-        .finally(() => sending.current.delete(t.id));
+        .sendToAgent(id, first, choiceOf(settings), settings.mode)
+        .then(() => setQueue((q) => ({ ...q, [id]: rest })), fail)
+        .then(refreshTasks)
+        .finally(() => sending.current.delete(id));
     }
   }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -288,16 +278,17 @@ export function WorkSection() {
     }
   };
 
-  const send = (text: string, fresh = false) => {
+  const send = (text: string) => {
     if (!shown) return;
     const id = shown.task.id;
     setComments((c) => ({ ...c, [id]: [] }));
     if (shown.task.run?.state === "running") {
-      return api.queueFollowUp(id, text).then(afterChange, fail);
+      setQueue((q) => ({ ...q, [id]: [...(q[id] ?? []), text] }));
+      return;
     }
     return api
-      .sendToAgent(id, text, choiceOf(settings), settings.mode, fresh)
-      .then(() => setTab("agent"))
+      .sendToAgent(id, text, choiceOf(settings), settings.mode)
+      .then(() => setTab("conversation"))
       .then(afterChange, fail);
   };
 
@@ -307,17 +298,11 @@ export function WorkSection() {
       await refreshPulls();
     });
 
-  const close = (id: string) =>
-    shell.act(() => api.closeTask(id), { pending: "Cleaning up…" }).then(async () => {
-      await refreshTasks();
-      await refreshPulls();
-    });
-
   const github = (id: string) => ({
     pull: pulls[id],
-    // The work item's own issue and PR: show them, not the item again.
-    onPublish: async (draft: boolean, commitUncommitted: boolean) =>
-      (await undoesOk("Open the pull request anyway?")) &&
+    onShowIssue: (n: number) => shell.go({ section: "issues", number: n }),
+    onShowPull: (n: number) => shell.go({ section: "pulls", number: n }),
+    onPublish: (draft: boolean, commitUncommitted: boolean) =>
       shell
         .act(() => api.publishTask(id, draft, commitUncommitted), {
           undo: false,
@@ -328,72 +313,23 @@ export function WorkSection() {
           await refreshPulls();
           await refreshGithub();
         }),
-    onPush: (commitUncommitted: boolean) =>
-      shell
-        .act(() => api.pushTask(id, commitUncommitted), {
-          undo: false,
-          pending: commitUncommitted ? "Committing and pushing…" : "Pushing…",
-        })
-        .then(afterChange),
-    // From prompt to landed in one place: merge on GitHub, then clean up
-    // at once (⌘Z brings its folder and branch back).
-    onMerge: async () => {
-      const pr = pulls[id]?.pull;
-      if (!pr) return;
-      const ok = await shell.act(() => api.pullAction(pr.number, "squash"), {
-        undo: false,
-        pending: `Landing #${pr.number} on GitHub…`,
-      });
-      if (!ok) return;
-      // Cleaned up here, so no "landed — can be cleaned up" note follows.
-      merged.current?.add(id);
-      const list = await api.taskPulls().catch(() => [] as TaskPull[]);
-      await settle(id, list.find((p) => p.task === id)?.merge_commit ?? `#${pr.number}`);
-    },
-    onReady: () => {
-      const pr = pulls[id]?.pull;
-      if (!pr) return;
-      return shell
-        .act(() => api.pullAction(pr.number, "ready"), { undo: false, pending: "Marking it ready…" })
-        .then(() => Promise.all([refreshPulls(), refreshGithub()]));
-    },
+    onPush: () => shell.act(() => api.pushTask(id), { undo: false, pending: "Pushing…" }).then(afterChange),
     onSendReview: () =>
       api.reviewFeedback(id).then(async (text) => {
         await send(text);
         toast(shown?.task.run?.state === "running" ? "The review is queued for when the agent is done" : `Sent the review to ${id}`);
       }, fail),
-    onSendFailure: () =>
-      api.checkFeedback(id).then(async (text) => {
-        await send(text);
-        toast(shown?.task.run?.state === "running" ? "The failure is queued for when the agent is done" : `Sent the failure to ${id}`);
-      }, fail),
     onSettle: (commit: string) => settle(id, commit),
-    onClose: () => close(id),
   });
-
-  // Landing or publishing work that would take back what reached the base
-  // since (#81 did, by writing back old copies of files): say so first.
-  const undoesOk = async (title: string) => {
-    if (!shown || shown.undoes.length === 0) return true;
-    const lines = shown.undoes.reduce((n, u) => n + u.lines, 0);
-    return shell.confirm({
-      title,
-      detail:
-        `It would undo ${lines} ${lines === 1 ? "line" : "lines"} that reached ${shown.task.base} after it started, in ` +
-        `${shown.undoes.map((u) => u.path).join(", ")}. Usually that's files written back from an older copy; ` +
-        `“Ask agent to put them back” on its card asks for them back.`,
-      action: "Go ahead anyway",
-      danger: true,
-    });
-  };
-
-  const askRestore = () => {
-    if (shown) send(restorePrompt(shown.task.base, shown.undoes));
-  };
 
   const askRebase = () => {
     if (!shown) return;
-    send(catchUpPrompt(shown.task.base, shown.conflicts, shown.task.pull != null));
+    const base = shown.task.base;
+    send(
+      `${base} has moved on and this branch now conflicts with it in ${shown.conflicts.join(", ")}. ` +
+        `Rebase onto ${base} (git rebase ${base}), resolve the conflicts keeping both sides' intent, ` +
+        `make sure it still builds and the tests pass, and commit.`,
+    );
   };
 
   const taskComments = selectedId ? (comments[selectedId] ?? []) : [];
@@ -412,8 +348,6 @@ export function WorkSection() {
         onSelect={(i) => setView(viewOf(i))}
         onMove={(i, top) => setOrder((o) => moveTo(items, o, i.key, top))}
         onNew={newMenu}
-        onCleanUp={() => api.cleanUpTasks().then((msg) => toast(msg), fail)}
-        spent={{ usd: tasks.reduce((n, t) => n + t.spent, 0), tokens: tasks.reduce((n, t) => n + t.tokens, 0) }}
       />
       <main className="main">
         {view.kind === "new" ? (
@@ -429,11 +363,11 @@ export function WorkSection() {
             <NewTask repo={repo} settings={settings} onSettings={setSettings} onCreate={create} />
           )
         ) : view.kind === "pull" ? (
-          <PullView number={view.number} from="work" />
+          <PullPage number={view.number} />
         ) : view.kind === "branch" ? (
           selectedItem?.kind === "branch" ? (
             selectedItem.pull ? (
-              <PullView number={selectedItem.pull.number} from="work" />
+              <PullPage number={selectedItem.pull.number} />
             ) : (
               <BranchPage branch={selectedItem.branch} />
             )
@@ -443,7 +377,7 @@ export function WorkSection() {
             </EmptyState>
           )
         ) : shown ? (
-          <TaskView
+          <TaskPage
             ref={composer}
             repo={{ ...repo, branch: shell.state?.branch ?? repo.branch }}
             detail={shown}
@@ -466,23 +400,12 @@ export function WorkSection() {
               setSource(index);
               setTab("changes");
             }}
-            onUndoRun={(from) =>
-              shell
-                .act(() => api.undoRun(shown.task.id, from), { pending: from == null ? "Undoing the run…" : "Undoing the runs…" })
-                .then(afterChange)
-            }
-            onRerunSetup={() => api.rerunSetup(shown.task.id).then(afterChange, fail)}
+            onUndoRun={() => shell.act(() => api.undoRun(shown.task.id), { pending: "Undoing the run…" }).then(afterChange)}
             onAnswer={(ask, allow, message) =>
               api.answerAsk(shown.task.id, ask.id, allow, message ?? "").then(afterChange, fail)
             }
             onAllowForSession={(ask) =>
               api.answerAsk(shown.task.id, ask.id, true, "", true).then(afterChange, fail)
-            }
-            onAnswerQuestions={(ask, answers) =>
-              api.answerQuestions(shown.task.id, ask.id, answers).then(afterChange, fail)
-            }
-            onApprovePlan={(ask, mode) =>
-              api.approvePlan(shown.task.id, ask.id, mode).then(afterChange, fail)
             }
             onRetrySetup={() =>
               api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode).then(afterChange, fail)
@@ -519,15 +442,16 @@ export function WorkSection() {
               setTab("changes");
               setFocus({ file: c.file, line: c.line, side: c.side });
             }}
-            queued={shown.task.queued}
-            onUnqueue={(i) => api.unqueue(shown.task.id, i).then(afterChange, fail)}
+            queued={queue[shown.task.id] ?? []}
+            onUnqueue={(i) =>
+              setQueue((q) => ({ ...q, [shown.task.id]: (q[shown.task.id] ?? []).filter((_, j) => j !== i) }))
+            }
             onStart={() =>
               api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode).then(afterChange, fail)
             }
             onSend={send}
             onStop={() => api.stopAgent(shown.task.id).then(afterChange, fail)}
-            onLand={async (merge, commitUncommitted) =>
-              (await undoesOk(`Land on ${shown.task.base} anyway?`)) &&
+            onLand={(merge, commitUncommitted) =>
               shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted), { pending: `Landing on ${shown.task.base}…` }).then(afterChange)
             }
             onDiscard={() =>
@@ -536,11 +460,10 @@ export function WorkSection() {
                 return refreshTasks();
               })
             }
-            onStartTask={(prompt) => create(prompt, shown.task.base, true)}
             onAskRebase={askRebase}
-            onAskRestore={askRestore}
-            onCopy={(text, what) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), fail)}
             onOpenFolder={() => api.openFolder(shown.task.id).catch(fail)}
+            onCopy={(text, what) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), fail)}
+            onShowBranch={() => shell.go({ section: "history", branch: shown.task.branch })}
             github={github(shown.task.id)}
           />
         ) : (

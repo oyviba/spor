@@ -31,54 +31,15 @@ backend), the end-to-end tests and the app's layout.
 
 ## What it does
 
-Left to right, spor goes from the general to the particular: workspaces and
-the Inbox on the rail, then the workspace's repositories, with the open
-one's sections listed under it. The Inbox and Agents span every
-repository, so while one is open no repository is shown (no repository
-column or branch bar); a workspace's badge goes back into its repository,
-to the section you were last in there. The sections are ordered by the questions
-you come with: what needs me, what's in flight, what's in my checkout, what
-happened. Each
-is a list in the sidebar, a page, and a details card. What you follow is a
-**work item** (a branch with its issue, task folder, agent, pull request and
-checks) moving from *Planned* to *Landed*, and every section uses the same
-words for it: [docs/concepts.md](docs/concepts.md). [docs/journeys.md](docs/journeys.md)
-has five journeys through it, each with a budget of how often it changes
-section, run as end-to-end tests.
+Six sections on the rail (⌘1–⌘6), each a list in the sidebar, a page, and a
+details card:
 
-- **Inbox** (⌘1) — what needs you, across every repository of every
-  workspace: an agent waiting on an answer, a finished run you haven't
-  looked at, a failed CI run on your branch, a pull request waiting for
-  your review. Each row opens where you deal with it, and goes once you
-  have. Its count is the rail's only badge
-- **Agents** (⌘⇧A) — every agent task in every repository of every
-  workspace, by status (needs you, working, ready for review, failed or
-  stopped, idle) or by repository, with a table of counts per repository.
-  A row opens the task's conversation in its repository's Work. It sits on
-  the rail beside the Inbox, since it spans repositories, and reads nothing
-  of its own: it's built on the Inbox's poll of the tasks
-- **Work** (⌘2) — every piece of work in flight, in one list: agents'
-  tasks, your own branches with commits ahead of the base, and open pull
-  requests from anyone, in shelves (needs you, in progress, in review,
-  settled). *New…* (⌘N) starts a branch, an agent task, or work on an
-  issue. An agent task gives a coding agent its own branch and folder so several can work at once
-  without touching your checkout. A task is a prompt: spor creates
-  `agent/<name>` from a base, checks it out in `<repo>.spor/<name>` beside
-  the repository, and starts Claude Code (or any command) there. Paste,
-  drop or attach images (screenshots, mockups) into any prompt — a new
-  task, an issue's, or a follow-up; they're kept in `.git/spor/attachments/`
-  and the agent is told where to find them. Watch the conversation, answer its questions, steer it while it works, review its
-  changes with line comments, send feedback, undo a run, then **Land** it
-  (one squashed commit, or a merge commit), **Publish** it as a pull request
-  and land that, or **Discard** it. A work item's issue, pull request and CI runs all open here,
-  wherever you click them from. [docs/agents.md](docs/agents.md) has the
-  design
-- **Changes** (⌘3) — staged and unstaged files; click lines in a diff (shift-click
+- **Changes** — staged and unstaged files; click lines in a diff (shift-click
   to extend) to stage, unstage or discard just those. Commit with ⌘↩, or
   amend. Fetch, Pull (rebasing) and Push or Publish, the branch's pull
   request on GitHub, and stashes: stash (right-click for a message), pop,
   apply and keep, drop
-- **History** (⌘4) — the commit graph with `main` / `master` / `trunk` pinned to
+- **History** — the commit graph with `main` / `master` / `trunk` pinned to
   the leftmost lane and branches colored by prefix (all `feat/*` share a
   hue). Search by message, author or hash, or `path:src/main.rs` for the
   commits that touched a file. The sidebar has local, agent and remote
@@ -91,16 +52,23 @@ section, run as end-to-end tests.
   rebase on screen: reorder, reword, squash, fix up or drop, then Rewrite
   history. **Blame** any file, at a commit or in the working tree. The ⚙
   picks the graph's columns, row height and lane width
-
-Below a divider, three browsers for GitHub, for what doesn't belong to a
-piece of work yet (an issue nobody has started, a run on `main`):
-
-- **Issues**, **Pull requests**, **Actions** (⌘5–⌘7) — through `gh`: an
-  issue and its comments (and *Start with agent* from it); a PR's
-  conversation, files and checks, with comments, line comments, approve,
-  land, check out; a run's jobs and its log folded by step, re-run and
-  cancel. Branch labels in the graph carry their open PR's number, review
-  state and CI (`#42✓`)
+- **Issues**, **Pull requests**, **Actions** — through `gh`: an issue and its
+  comments (and *Start agent task* from it); a PR's conversation, files and
+  checks, with comments, line comments, approve, merge, check out; a run's
+  jobs and its log folded by step, re-run and cancel. Branch labels in the
+  graph carry their open PR's number, review state and CI (`#42✓`)
+- **Work** — everything in flight in the repository in one list: agents'
+  tasks, your own branches with commits ahead of the base, and open pull
+  requests from anyone, in shelves (needs you, in progress, in review,
+  settled). *New…* starts a branch, an agent task, or work on an issue.
+- **Agent tasks** — give a coding agent its own branch and folder so several can
+  work at once without touching your checkout. A task is a prompt: spor
+  creates `agent/<name>` from a base, checks it out in `<repo>.spor/<name>`
+  beside the repository, and starts Claude Code (or any command) there.
+  Watch the conversation, answer its questions, steer it while it works,
+  review its changes with line comments, send feedback, undo a run, then
+  **Land** it (one squashed commit, or a merge commit), open a pull request
+  for it, or discard it. [docs/agents.md](docs/agents.md) has the design
 
 Across the app:
 
@@ -123,11 +91,11 @@ Across the app:
   new-host question from git or ssh opens a dialog (an askpass bridge)
 - **Workspaces** — named, colored groups of repositories on the rail, like
   Slack's (⌘⌥1–9), each reopening the repository last open in it. Beside
-  the rail, a column lists the workspace's repositories with their branch,
-  changed files and what there is to pull, and the open one's sections
-  under it (⌘⇧E folds the column to a strip of those sections' icons). The old native
+  the rail, a column lists the workspace's repositories with the open one
+  marked, their branch, changed files and what there is to pull (⌘⇧E hides
+  it). The old native
   app's workspaces are imported on the first run
-- **⌘K** — a palette for every command, section, work item, branch and repository
+- **⌘K** — a palette for every command, section, branch and repository
 - **Settings** (⌘,) — System, Light or Dark, themes (Spor, Nord, Dracula,
   Midnight; Solarized, Paper) and a live theme editor; unified or
   side-by-side diffs; the graph's options; and your own keyboard shortcuts
@@ -155,9 +123,6 @@ output:
 - `src/agent.rs`, `src/host.rs`, `src/checkpoint.rs` — running agents in
   task folders, the host that lets the app talk to a running Claude Code,
   and per-run checkpoints
-- `src/work.rs` — work items: a pure join of tasks, branches, pull
-  requests, runs and issues into one item per branch, with its stage and
-  who it's waiting on
 - `src/json.rs` — a small JSON reader for agents' event streams
 
 The app is `desktop/`: `src-tauri/` turns the core into commands (one

@@ -1,21 +1,18 @@
-import { Activity, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
-import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "./types";
+import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary } from "./types";
 import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
-import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, Sparkle, X } from "./shared/Icons";
+import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
 import { RepoPanel } from "./shared/Layout";
-import { BranchBar } from "./shared/BranchBar";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
-import { AgentLimit } from "./sections/agents/AgentLimit";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
 import { AppearancePage } from "./shared/ThemeEditor";
 import { useApplyTheme } from "./shared/theme";
-import { display, effective, isMac, keepChanges, lookup, shortcutOf } from "./shared/keys";
+import { display, effective, isMac, lookup, shortcutOf } from "./shared/keys";
 import { getSettings, setSettings, useSettings } from "./shared/settings";
-import { resolveTarget } from "./shared/targets";
 import {
   WORKSPACE_COLORS,
   activeWorkspace,
@@ -43,24 +40,6 @@ import { ChangesSection } from "./sections/changes/ChangesSection";
 import { IssuesSection } from "./sections/issues/IssuesSection";
 import { PullsSection } from "./sections/pulls/PullsSection";
 import { ActionsSection } from "./sections/actions/ActionsSection";
-import { InboxSection, useInbox } from "./sections/inbox/InboxSection";
-import { AgentsSection } from "./sections/agents/AgentsSection";
-import { askLine, type InboxItem } from "./sections/inbox/inbox";
-
-/** When you last looked at each task, by task id, as Work keeps it
- * (`work.seen`, keyed `task:<id>`): whether a finished run is unseen. */
-function seenTasks(): Record<string, number> {
-  try {
-    const seen = JSON.parse(localStorage.getItem("spor.work.seen") ?? "{}") as Record<string, number>;
-    return Object.fromEntries(
-      Object.entries(seen)
-        .filter(([k]) => k.startsWith("task:"))
-        .map(([k, at]) => [k.slice(5), at]),
-    );
-  } catch {
-    return {};
-  }
-}
 
 interface Toast {
   id: number;
@@ -71,25 +50,13 @@ interface Toast {
   action?: ToastAction;
 }
 
-/**
- * The sections (#83), in the order of the questions you come with: what needs
- * me, what's in flight, my checkout, the graph. Then, after a divider, the
- * browsers: GitHub's lists, for what belongs to no work item yet.
- *
- * Left to right is workspace → repository → section: the Inbox and Agents
- * span every repository (`global`), so they sit on the rail with the
- * workspaces; the rest belong to one repository and are listed under the
- * open one in the repository column.
- */
-const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string; browser?: boolean; global?: boolean }[] = [
-  { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "Mod+1", global: true },
-  { id: "agents", label: "Agents", icon: <Sparkle size={17} />, key: "Mod+Shift+A", global: true },
-  { id: "work", label: "Work", icon: <Bot size={17} />, key: "Mod+2" },
-  { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "Mod+3" },
-  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+4" },
-  { id: "issues", label: "Issues", icon: <IssueIcon size={15} />, key: "Mod+5", browser: true },
-  { id: "pulls", label: "Pull requests", icon: <PullRequest size={15} />, key: "Mod+6", browser: true },
-  { id: "actions", label: "Actions", icon: <Play size={15} />, key: "Mod+7", browser: true },
+const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string }[] = [
+  { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "Mod+1" },
+  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+2" },
+  { id: "issues", label: "Issues", icon: <IssueIcon size={17} />, key: "Mod+3" },
+  { id: "pulls", label: "Pull requests", icon: <PullRequest size={17} />, key: "Mod+4" },
+  { id: "actions", label: "Actions", icon: <Play size={17} />, key: "Mod+5" },
+  { id: "work", label: "Work", icon: <Bot size={17} />, key: "Mod+6" },
 ];
 
 /** Is the task open on screen (Work, its page)? Then it needs no toast. */
@@ -137,11 +104,6 @@ function repoCommands(shell: Shell): AppCommand[] {
   ];
 }
 
-/** The rail's layout, so each move of it (#83, then the sections under the
- * open repository) is announced once. */
-const RAIL_KEY = "spor.rail";
-const RAIL = "3";
-
 /** How often the open repository is fetched in the background. */
 const AUTO_FETCH_MS = 5 * 60 * 1000;
 
@@ -167,15 +129,7 @@ export function App() {
     [], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const [state, setState] = useState<RepoState | null>(null);
-  const [section, setSection] = useStored<SectionId>("section", "inbox");
-  // The Inbox and Agents span every repository: open, they show no
-  // repository (no column, branch bar or repository header), and a
-  // workspace's badge goes back to the section last open in its repository.
-  const global = !!SECTIONS.find((s) => s.id === section)?.global;
-  const [repoSection, setRepoSection] = useStored<SectionId>("section.repo", "work");
-  useEffect(() => {
-    if (!global) setRepoSection(section);
-  }, [section]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [section, setSection] = useStored<SectionId>("section", "work");
   const [reposShown, setReposShown] = useStored("repos.shown", true);
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "work", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -294,7 +248,7 @@ export function App() {
       .finally(() => refresh());
   useRepoChanges(refresh, ["refs", "index"], [repo?.root], !!repo);
 
-  // How many files changed, for the repository column.
+  // The rail's count of files changed.
   useRepoChanges(
     async () => {
       const files = await api.status();
@@ -310,41 +264,23 @@ export function App() {
   const reloadTasks = useCallback(async () => {
     const list = await api.listTasks();
     setTasks(list);
-    // Starts held back by the limit on agents at once go when a slot is free.
-    if (list.some((t) => t.waiting != null)) api.startWaiting().catch(() => {});
     const waiting = list.filter((t) => t.asks > 0);
     if (asking.current) {
-      for (const t of waiting) {
-        if (asking.current.has(t.id) || viewing(t.id)) continue;
-        // With the window in the background nobody sees a toast: ask the
-        // operating system too (#41).
-        if (!document.hasFocus()) api.notify(`${t.title} needs you`, askLine(t.ask, t.asks)).catch(() => {});
-        toast(`${t.title} is waiting for you`, "ok", false, {
-          label: "Answer",
-          run: () => {
-            setSection("work");
-            setTarget((old) => ({ section: "work", taskId: t.id, seq: old.seq + 1 }));
-          },
-        });
-      }
+      for (const t of waiting)
+        if (!asking.current.has(t.id) && !viewing(t.id))
+          toast(`${t.title} is waiting for you`, "ok", false, {
+            label: "Answer",
+            run: () => {
+              setSection("work");
+              setTarget((old) => ({ section: "work", taskId: t.id, seq: old.seq + 1 }));
+            },
+          });
     }
     asking.current = new Set(waiting.map((t) => t.id));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useRepoChanges(reloadTasks, ["tasks", "refs"], [repo?.root], !!repo);
-
-  // Every work item, for the work card in each inspector. GitHub's part is
-  // cached in the backend, so this is cheap on every change.
-  const [work, setWork] = useState<WorkItemInfo[]>([]);
-  const reloadWork = useCallback(async () => {
-    const list = await api.workItems(seenTasks()).catch(() => null);
-    if (list) setWork((old) => (JSON.stringify(old) === JSON.stringify(list) ? old : list));
-  }, []);
-  useRepoChanges(reloadWork, ["work"], [repo?.root], !!repo);
-  useEffect(() => setWork([]), [repo?.root]);
-
-  // What needs you in every repository of every workspace: the Inbox, and its badge.
-  const everyRepo = [...new Set(workspaces.list.flatMap((w) => w.repos))];
-  const inbox = useInbox(everyRepo, !!repo);
+  const working = tasks.filter((t) => t.run?.state === "running").length;
+  const askingNow = tasks.filter((t) => t.asks > 0).length;
 
   const undo = useCallback(() => {
     track("Undoing…", api.undo)
@@ -355,38 +291,14 @@ export function App() {
       .catch(fail);
   }, [toast, fail, refresh, track]);
 
-  /** Resolves to whether it opened. */
   const openRepo = (path: string) =>
-    track(`Opening ${path.split("/").pop()}…`, () => api.openRepo(path)).then(
-      (r) => {
+    track(`Opening ${path.split("/").pop()}…`, () => api.openRepo(path))
+      .then((r) => {
         lastState.current = null;
         setRepo(r);
         setState(null);
-        return true;
-      },
-      (e) => {
-        fail(e);
-        return false;
-      },
-    );
-
-  /** An Inbox row: its workspace and repository (switching if need be),
-   * then its section. */
-  const openItem = async (item: Pick<InboxItem, "repo" | "target">) => {
-    if (item.repo !== repo?.root && !(await openRepo(item.repo))) return;
-    const owner = workspaces.list.find((w) => w.repos.includes(item.repo));
-    if (owner && owner.id !== workspaces.active) switchTo(owner.id);
-    // Its work item if it has one, from the tasks of the repository it's in.
-    const to =
-      item.repo === repo?.root
-        ? resolveTarget(item.target, tasks)
-        : await api.listTasks().then(
-            (t) => resolveTarget(item.target, t),
-            () => item.target,
-          );
-    setSection(to.section);
-    setTarget((old) => ({ ...to, seq: old.seq + 1 }));
-  };
+      })
+      .catch(fail);
 
   const shell: Shell | null = useMemo(
     () =>
@@ -397,8 +309,6 @@ export function App() {
             refresh,
             tasks,
             reloadTasks,
-            work,
-            reloadWork,
             toast,
             fail,
             undo,
@@ -412,7 +322,6 @@ export function App() {
                 return false;
               } finally {
                 await refresh();
-                void reloadWork();
               }
             },
             switchBranch: async (run) => {
@@ -437,10 +346,9 @@ export function App() {
                 await refresh();
               }
             },
-            go: (t, opts) => {
-              const to = opts?.browse ? t : resolveTarget(t, tasks);
-              setSection(to.section);
-              setTarget((old) => ({ ...to, seq: old.seq + 1 }));
+            go: (t) => {
+              setSection(t.section);
+              setTarget((old) => ({ ...t, seq: old.seq + 1 }));
             },
             target,
             openRepo,
@@ -457,7 +365,7 @@ export function App() {
             confirm: (spec) => new Promise((resolve) => setDialog({ kind: "confirm", ...spec, resolve })),
           }
         : null,
-    [repo, state, refresh, tasks, work, toast, fail, undo, track, target, workspaces], // eslint-disable-line react-hooks/exhaustive-deps
+    [repo, state, refresh, tasks, toast, fail, undo, track, target, workspaces], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   /** Switch workspace, opening the repository last open there. */
@@ -465,7 +373,6 @@ export function App() {
     const target = workspaces.list.find((w) => w.id === id);
     if (!target) return;
     switchTo(id);
-    if (global) setSection(repoSection);
     const path = landing(target);
     if (path && path !== repo?.root) openRepo(path);
     else if (!path) {
@@ -602,62 +509,10 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // The rail's order and shortcuts moved (#83). Once: keep the shortcuts the
-  // user chose working, and say where the defaults went.
-  useEffect(() => {
-    let was: string | null;
-    try {
-      was = localStorage.getItem(RAIL_KEY);
-      if (was === RAIL) return;
-      localStorage.setItem(RAIL_KEY, RAIL);
-    } catch {
-      return;
-    }
-    // Nothing to move for someone opening spor for the first time.
-    if (firstRun) return;
-    const under = "Work, Changes, History and the browsers now sit under the open repository; the rail has the Inbox and Agents, across every repository.";
-    // Only the layout moved since #83; the shortcuts are as they were.
-    if (was === "2") {
-      toast(under);
-      return;
-    }
-    const kept = keepChanges(appCommands, getSettings().keymap);
-    if (JSON.stringify(kept) !== JSON.stringify(getSettings().keymap)) setSettings({ keymap: kept });
-    const keys = keyLabel("shortcuts");
-    const moved = `${under} The sections' shortcuts moved${keys ? ` (${keys} lists them)` : ""}.`;
-    toast(moved, "ok", false, { label: "Show shortcuts", run: () => setSettingsPage("shortcuts") });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ⌘K also looks in what was said in agents' conversations (#108). A stable
-  // function, so the palette doesn't start its pause over on every render.
-  const goRef = useRef<Shell["go"] | null>(null);
-  goRef.current = shell?.go ?? null;
-  const searchConversations = useCallback(
-    (query: string): Promise<Command[]> =>
-      api.searchTranscripts(query).then((hits) =>
-        hits.map((h, i) => ({
-          id: `said:${h.task}:${h.run}:${i}`,
-          label: h.snippet,
-          hint: `${h.title} · ${h.kind === "prompt" ? (h.run === 0 ? "prompt" : "follow-up") : h.kind === "agent" ? "the agent said" : h.kind === "steer" ? "you steered" : "debrief"}`,
-          run: () => goRef.current?.({ section: "work", taskId: h.task }),
-        })),
-      ),
-    [],
-  );
-
   const commands = (branches: BranchInfo[]): Command[] => {
     if (!shell) return [];
     return [
       ...appCommands.filter((c) => c.id !== "palette").map((c) => ({ id: c.id, label: c.label, hint: c.hint, keys: keyLabel(c.id), run: c.run })),
-      // Work items open their page in Work.
-      ...tasks
-        .filter((t) => !t.landed)
-        .map((t) => ({
-          id: `work:${t.id}`,
-          label: `Open ${t.title}`,
-          hint: t.pull != null ? `work item · #${t.pull}` : t.issue != null ? `work item · issue #${t.issue}` : "work item",
-          run: () => shell.go({ section: "work", taskId: t.id }),
-        })),
       ...branches
         .filter((b) => !b.current && !b.remote)
         .map((b) => ({
@@ -694,7 +549,6 @@ export function App() {
         />
       ),
     },
-    { id: "agents", label: "Agents", render: () => <AgentLimit /> },
     { id: "diffs", label: "Diffs", render: () => <DiffSettings /> },
     { id: "history", label: "History graph", render: () => <GraphOptionsPanel /> },
     {
@@ -717,11 +571,7 @@ export function App() {
       {settingsPage && <SettingsDialog pages={settingsPages} initial={settingsPage} onClose={() => setSettingsPage(null)} />}
       {menu && <MenuView spec={menu} onClose={() => setMenu(null)} />}
       {dialog && <DialogView spec={dialog} onClose={() => setDialog(null)} />}
-      {palette && <Palette
-          commands={commands(palette.branches)}
-          onClose={() => setPalette(null)}
-          search={searchConversations}
-        />}
+      {palette && <Palette commands={commands(palette.branches)} onClose={() => setPalette(null)} />}
       {credential && (
         <CredentialDialog
           ask={credential}
@@ -739,7 +589,7 @@ export function App() {
       {workspaces.list.map((w, i) => (
         <button
           key={w.id}
-          className={`workspace-badge${w.id === ws.id && !global ? " active" : ""}`}
+          className={`workspace-badge${w.id === ws.id ? " active" : ""}`}
           style={{ "--ws": WORKSPACE_COLORS[w.color] } as React.CSSProperties}
           onClick={() => goToWorkspace(w.id)}
           onContextMenu={(e) => {
@@ -748,8 +598,7 @@ export function App() {
           }}
           title={`${w.name}${keyLabel(`workspace:${i + 1}`) ? ` (${keyLabel(`workspace:${i + 1}`)})` : ""} — right-click to rename, recolor or delete`}
           aria-label={`Workspace ${w.name}`}
-          aria-current={w.id === ws.id && !global ? "true" : undefined}
-          data-current={w.id === ws.id || undefined}
+          aria-current={w.id === ws.id ? "true" : undefined}
         >
           {initials(w.name)}
         </button>
@@ -770,36 +619,6 @@ export function App() {
       <Gear size={17} />
     </button>
   );
-
-  /** A section's link: on the rail (the Inbox), in the repository column
-   * under the open repository (named), or in the strip that stands in for
-   * the column while it's hidden (icons). */
-  const sectionLink = (s: (typeof SECTIONS)[number], where: "rail" | "panel" | "strip") => {
-    // One number on the rail: how many things need you.
-    const count = s.id === "inbox" ? inbox.items.length : 0;
-    const keys = keyLabel(`go:${s.id}`);
-    return (
-      <button
-        key={s.id}
-        className={`nav-section ${where === "panel" ? "repo-section" : "rail-item"}${s.browser ? " browser" : ""}${section === s.id ? " active" : ""}`}
-        onClick={() => setSection(s.id)}
-        title={where === "panel" ? keys || undefined : keys ? `${s.label} (${keys})` : s.label}
-        aria-label={s.label}
-        aria-current={section === s.id ? "page" : undefined}
-      >
-        {s.icon}
-        {where === "panel" && <span className="repo-section-label">{s.label}</span>}
-        {count > 0 && <span className="rail-badge num asking">{count}</span>}
-      </button>
-    );
-  };
-  const repoSections = (where: "panel" | "strip") =>
-    SECTIONS.filter((s) => !s.global).map((s, i, all) => (
-      <Fragment key={s.id}>
-        {s.browser && !all[i - 1]?.browser && <span className={where === "panel" ? "repo-sections-divider" : "rail-divider"} />}
-        {sectionLink(s, where)}
-      </Fragment>
-    ));
 
   if (repo === undefined) return <div className="boot" />;
   if (repo === null || !shell)
@@ -823,48 +642,34 @@ export function App() {
 
   return (
     <ShellContext.Provider value={shell}>
-      <div className={`app ${global ? "global-view" : reposShown ? "with-repos" : "with-strip"}`}>
-        <nav className="rail" aria-label="Workspaces">
+      <div className={`app${reposShown ? " with-repos" : ""}`}>
+        <nav className="rail" aria-label="Sections">
           {workspaceRail}
-          {SECTIONS.filter((s) => s.global).map((s) => sectionLink(s, "rail"))}
+          {SECTIONS.map((s) => {
+            const count = s.id === "changes" ? changed : s.id === "work" ? askingNow || working : 0;
+            const tone = s.id === "work" ? (askingNow ? " asking" : " live") : "";
+            return (
+              <button
+                key={s.id}
+                className={`rail-item${section === s.id ? " active" : ""}`}
+                onClick={() => setSection(s.id)}
+                title={keyLabel(`go:${s.id}`) ? `${s.label} (${keyLabel(`go:${s.id}`)})` : s.label}
+                aria-label={s.label}
+                aria-current={section === s.id ? "page" : undefined}
+              >
+                {s.icon}
+                {count > 0 && <span className={`rail-badge num${tone}`}>{count}</span>}
+              </button>
+            );
+          })}
           <span className="flex-1" />
           {settingsButton}
         </nav>
-        {global ? null : reposShown ? (
-          <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed}>
-            {repoSections("panel")}
-          </RepoPanel>
-        ) : (
-          <nav className="section-strip" aria-label={`${repo.name}: sections`} style={{ "--ws": WORKSPACE_COLORS[ws.color] } as React.CSSProperties}>
-            <button
-              className="section-strip-repo"
-              onClick={() => setReposShown(true)}
-              title={`${repo.name} — show the repositories${keyLabel("repos") ? ` (${keyLabel("repos")})` : ""}`}
-              aria-label="Show repositories"
-            >
-              {repo.name.slice(0, 2)}
-            </button>
-            {repoSections("strip")}
-          </nav>
-        )}
+        {reposShown && <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed} />}
         <div className="section">
-          {state && !global && <BranchBar state={state} />}
-          {state?.operation && !global && <OperationBanner state={state} />}
+          {state?.operation && <OperationBanner state={state} />}
           <div className="section-body">
-            <Sections
-              key={repo.root}
-              section={section}
-              globals={{
-                inbox: <InboxSection inbox={inbox} onOpen={openItem} />,
-                agents: (
-                  <AgentsSection
-                    inbox={inbox}
-                    onOpen={(r, taskId) => openItem({ repo: r, target: { section: "work", taskId } })}
-                    onOpenRepo={(r) => openItem({ repo: r, target: { section: "work" } })}
-                  />
-                ),
-              }}
-            />
+            <Sections key={repo.root} section={section} />
           </div>
         </div>
         <Toasts toasts={toasts} onUndo={undo} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
@@ -874,9 +679,7 @@ export function App() {
   );
 }
 
-type GlobalId = "inbox" | "agents";
-
-const SECTION_VIEWS: Record<Exclude<SectionId, GlobalId>, () => React.ReactNode> = {
+const SECTION_VIEWS: Record<SectionId, () => React.ReactNode> = {
   changes: ChangesSection,
   history: HistorySection,
   issues: IssuesSection,
@@ -888,17 +691,17 @@ const SECTION_VIEWS: Record<Exclude<SectionId, GlobalId>, () => React.ReactNode>
 /** The sections opened so far, kept mounted so going back to one shows it
  * as it was at once, and then brings it up to date. A hidden one keeps its
  * state but not its effects: it doesn't poll, watch or take keys. */
-function Sections({ section, globals }: { section: SectionId; globals: Record<GlobalId, React.ReactNode> }) {
+function Sections({ section }: { section: SectionId }) {
   const [opened, setOpened] = useState<SectionId[]>([section]);
   if (!opened.includes(section)) setOpened([...opened, section]);
   return (
     <>
       <KeepScroll shown={section} />
       {SECTIONS.filter((s) => opened.includes(s.id)).map((s) => {
-        const View = s.id === "inbox" || s.id === "agents" ? null : SECTION_VIEWS[s.id];
+        const View = SECTION_VIEWS[s.id];
         return (
           <Activity key={s.id} mode={s.id === section ? "visible" : "hidden"}>
-            {View ? <View /> : globals[s.id as GlobalId]}
+            <View />
           </Activity>
         );
       })}

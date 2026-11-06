@@ -1,14 +1,12 @@
 import type { WorkItem, Shelf, Filter } from "./items";
-import { RulesPanel } from "./RulesPanel";
 import { unseen } from "./items";
-import { isOpen, statusOf } from "../agents/status";
-import { doing } from "../agents/progress";
-import { ago, tokens } from "../agents/transcript";
-import { pullStatus } from "./pull";
+import { statusOf } from "../agents/status";
+import { ago } from "../agents/transcript";
+import { pullStatus } from "../pulls/PullsSection";
 import { useNow } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { StatusPill, type Status } from "../../shared/StatusPill";
-import { AgentIcon, Archive, Branch, Chevron, Plus, PullRequest, Users } from "../../shared/Icons";
+import { AgentIcon, Branch, Chevron, Plus, PullRequest, Users } from "../../shared/Icons";
 import { SidebarHeader } from "../../shared/Layout";
 
 const FILTERS: { id: Filter; label: string }[] = [
@@ -32,10 +30,6 @@ interface Props {
   onMove: (item: WorkItem, top: boolean) => void;
   /** The New… menu, at the button. */
   onNew: (at: { clientX: number; clientY: number }) => void;
-  /** Delete the run checkpoints of tasks that are done, and discarded tasks' transcripts. */
-  onCleanUp: () => void;
-  /** What every agent task here has cost, and the tokens they used. */
-  spent?: { usd: number; tokens: number };
 }
 
 /** Every work item in the repository, in shelves: what needs you, what's
@@ -62,7 +56,7 @@ export function Sidebar(p: Props) {
     const time = i.kind === "task" ? ago(i.task.run?.ended ?? i.task.run?.started ?? i.task.created, at) : ago(i.updated, at);
     const stats =
       i.kind === "task"
-        ? isOpen(i.task) && i.task.stats.files > 0 && i.task.stats
+        ? !i.task.landed && i.task.stats.files > 0 && i.task.stats
         : i.kind === "branch"
           ? i.branch.files > 0 && i.branch
           : i.pull;
@@ -87,16 +81,10 @@ export function Sidebar(p: Props) {
         <div className="task-row-line sub">
           {i.kind === "pull" ? <PullRequest size={11} className="shrink-0" /> : <Branch size={11} className="shrink-0" />}
           <span className="truncate">
-            {i.kind === "task" && i.task.ask
-              ? capitalize(i.task.ask)
-              : i.kind === "task" && i.task.run?.state === "running" && doing(i.task.progress)
-              ? doing(i.task.progress)
-              : i.kind === "task"
+            {i.kind === "task"
               ? i.task.landed
                 ? `landed on ${i.task.base}`
-                : i.task.closed
-                  ? "pull request closed"
-                  : i.task.branch
+                : i.task.branch
               : i.kind === "branch"
                 ? i.branch.name
                 : `#${i.pull.number} · ${i.pull.author}`}
@@ -168,28 +156,10 @@ export function Sidebar(p: Props) {
                 <Chevron size={12} className={`chev${p.settledOpen ? " open" : ""}`} />
               </button>
               {p.settledOpen && p.shelves.settled.map(row)}
-              {p.settledOpen && (
-                <button
-                  className="link small-text shelf-action"
-                  onClick={p.onCleanUp}
-                  title="Delete the run checkpoints of tasks that are done, and discarded tasks' transcripts. Undo can't bring them back afterwards. Opening the repository does this too."
-                >
-                  <Archive size={12} />
-                  Clean up old tasks
-                </button>
-              )}
             </div>
           </div>
         )}
       </div>
-      <RulesPanel />
-      {p.spent && p.spent.usd > 0 && (
-        <div className="sidebar-foot num" title="What the agents' runs on this repository's tasks have cost so far">
-          Agents have spent ${p.spent.usd.toFixed(2)} · {tokens(p.spent.tokens)} tokens
-        </div>
-      )}
     </aside>
   );
 }
-
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);

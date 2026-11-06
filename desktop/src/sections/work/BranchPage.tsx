@@ -4,26 +4,21 @@ import type { WorkBranch } from "../../types";
 import { useShell } from "../../shared/app";
 import { useChanged } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
-import { DetailsCard } from "../../shared/Layout";
+import { DetailsCard, PageHeader, Tabs } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
-import { Bot, Commit, PullRequest } from "../../shared/Icons";
-import { WorkCard } from "../../shared/WorkCard";
-import { findWork, itemFromBranch } from "../../shared/work";
+import { StatusPill } from "../../shared/StatusPill";
+import { Branch, Commit, History, PullRequest } from "../../shared/Icons";
 import { ago } from "../agents/transcript";
-import { useAgentSettings } from "../agents/Composer";
-import { WorkPage, shownTab, type WorkTab } from "./WorkPage";
-import { RunChecks } from "./pull";
-import { handToAgent } from "./handover";
 
-/** One of your own branches on the work page (#80): its commits and
- * changes since it left the base, its Actions runs, and what to do next
- * (switch to it, open a pull request, or hand it to an agent). */
+type Tab = "commits" | "changes";
+
+/** One of your own branches: its commits and changes since it left the
+ * base, and what to do next (switch to it, open a pull request). */
 export function BranchPage({ branch }: { branch: WorkBranch }) {
   const shell = useShell();
-  const [settings] = useAgentSettings();
-  const [tab, setTab] = useState<WorkTab>("changes");
+  const [tab, setTab] = useState<Tab>("commits");
   const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
-  useChanged(() => setTab("changes"), [branch.name]);
+  useChanged(() => setTab("commits"), [branch.name]);
 
   // Reloaded when the branch moves.
   const key = `${branch.name}:${branch.commits[0]?.hash ?? ""}`;
@@ -33,41 +28,68 @@ export function BranchPage({ branch }: { branch: WorkBranch }) {
   }, [tab, key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const now = Date.now();
-  const item = findWork(shell.work, { branch: branch.name }) ?? { ...itemFromBranch(branch.name), base: branch.base };
   const title = branch.commits[branch.commits.length - 1]?.subject ?? branch.name;
-  const tabs: { id: WorkTab; extra?: React.ReactNode }[] = [
-    { id: "changes", extra: <span className="tab-count num">{branch.files}</span> },
-    ...(item.checks ? [{ id: "checks" as const }] : []),
-  ];
-  const shown = shownTab(tabs, tab);
 
   return (
-    <WorkPage
-      item={item}
-      title={title}
-      hint={title}
-      status={branch.current ? { label: "Checked out", tone: "muted", live: false } : null}
-      action={
-        <Button
-          className="ghost"
-          onClick={() => handToAgent(shell, settings, branch.name, branch.base)}
-          title={
-            branch.current
-              ? `Move ${branch.name} and your uncommitted changes to its own folder, with an agent`
-              : `Give ${branch.name} its own folder, with an agent`
-          }
-        >
-          <Bot size={12} /> Start an agent on this
-        </Button>
-      }
-      tabs={tabs}
-      tab={shown}
-      onTab={setTab}
-      inspector
-      details={
+    <div className="task-page with-inspector branch-page">
+      <PageHeader
+        title={
+          <>
+            <h2 title={title}>{title}</h2>
+            {branch.current && <StatusPill status={{ label: "Checked out", tone: "muted", live: false }} />}
+          </>
+        }
+      >
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { id: "commits", label: <>Commits <span className="tab-count num">{branch.commits.length}</span></> },
+            { id: "changes", label: <>Changes <span className="tab-count num">{branch.files}</span></> },
+          ]}
+        />
+      </PageHeader>
+      <div className="task-body">
+        {tab === "commits" ? (
+          <div className="conversation">
+            <div className="column">
+              {branch.commits.length === 0 ? (
+                <p className="hint">
+                  No commits on {branch.name} yet. Commit in Changes and they show up here.
+                </p>
+              ) : (
+                <ul className="check-list branch-commits">
+                  {branch.commits.map((c) => (
+                    <li key={c.hash}>
+                      <Commit size={13} />
+                      <button className="link truncate" onClick={() => shell.go({ section: "history", hash: c.hash })}>
+                        {c.subject}
+                      </button>
+                      <span className="flex-1" />
+                      <span className="muted small-text num">
+                        {c.short} · {ago(c.time, now)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="changes">
+            <div className="changes-column">
+              <DiffView patch={patch?.key === key ? patch.text : null} empty={`No changes on ${branch.name} yet.`} />
+            </div>
+          </div>
+        )}
         <DetailsCard>
-          <WorkCard item={item} from="work" />
           <div className="inspector-section">
+            <div className="inspector-row">
+              <Branch size={13} />
+              <span className="truncate">
+                <code>{branch.name}</code> <span className="muted">→ {branch.base}</span>
+              </span>
+            </div>
             <div className="inspector-row">
               <span className="diffstat num">
                 <span className="add">+{branch.additions}</span> <span className="del">−{branch.deletions}</span>
@@ -76,12 +98,16 @@ export function BranchPage({ branch }: { branch: WorkBranch }) {
                 {branch.files} files · {branch.commits.length} commits
               </span>
             </div>
+            <button className="inspector-row action" onClick={() => shell.go({ section: "history", branch: branch.name })}>
+              <History size={13} />
+              <span>Show in History</span>
+            </button>
           </div>
           <div className="inspector-actions">
             {branch.commits.length > 0 && (
               <Button
-                className="ghost"
-                title={`GitHub's page for a pull request from ${branch.name} into ${branch.base}`}
+                className="primary"
+                title={`Open a pull request from ${branch.name} into ${branch.base} on the host`}
                 onClick={() =>
                   api
                     .pullRequestBetween(branch.name, branch.base)
@@ -103,39 +129,7 @@ export function BranchPage({ branch }: { branch: WorkBranch }) {
             )}
           </div>
         </DetailsCard>
-      }
-    >
-      {shown === "changes" ? (
-        <div className="changes">
-          <div className="changes-column">
-            {branch.commits.length === 0 ? (
-              <p className="hint">No commits on {branch.name} yet. Commit in Changes and they show up here.</p>
-            ) : (
-              <ul className="check-list branch-commits">
-                {branch.commits.map((c) => (
-                  <li key={c.hash}>
-                    <Commit size={13} />
-                    <button className="link truncate" onClick={() => shell.go({ section: "history", hash: c.hash })}>
-                      {c.subject}
-                    </button>
-                    <span className="flex-1" />
-                    <span className="muted small-text num">
-                      {c.short} · {ago(c.time, now)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <DiffView patch={patch?.key === key ? patch.text : null} empty={`No changes on ${branch.name} yet.`} />
-          </div>
-        </div>
-      ) : (
-        <div className="conversation">
-          <div className="column">
-            <RunChecks branch={branch.name} />
-          </div>
-        </div>
-      )}
-    </WorkPage>
+      </div>
+    </div>
   );
 }

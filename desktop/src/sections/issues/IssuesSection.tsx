@@ -2,8 +2,6 @@ import { useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Issue, IssueDetail, TaskSummary } from "../../types";
 import { useShell } from "../../shared/app";
-import { WorkCard } from "../../shared/WorkCard";
-import { findWork, itemFromIssue, itemFromTask } from "../../shared/work";
 import { useChanged, usePoll, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
@@ -13,8 +11,7 @@ import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
 import { isOpen } from "../agents/status";
 import { ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
-import { ArrowUp, Bot, External, MessageSquare, Tag, Users } from "../../shared/Icons";
-import { BasePicker, defaultStart } from "../../shared/BasePicker";
+import { ArrowUp, Bot, Branch, External, MessageSquare, Tag, Users } from "../../shared/Icons";
 
 type Filter = "assigned" | "yours" | "open" | "closed";
 const FILTERS: { id: Filter; label: string }[] = [
@@ -215,10 +212,6 @@ function IssueTimeline({ detail }: { detail: IssueDetail }) {
 function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: TaskSummary; onChanged: () => void }) {
   const shell = useShell();
   const i = detail.issue;
-  // Its work item: the task or branch started from it, else Planned.
-  const item =
-    findWork(shell.work, { task: task?.id, issue: i.number }) ??
-    (task ? itemFromTask(task) : itemFromIssue(i.number, i.title, i.open));
   const act = (action: "close" | "reopen") =>
     shell
       .act(() => api.issueAction(i.number, action), {
@@ -228,7 +221,6 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
       .then((ok) => ok && onChanged());
   return (
     <DetailsCard>
-      <WorkCard item={item} from="issues" />
       <div className="inspector-section">
         {i.labels.length > 0 && (
           <div className="inspector-row">
@@ -242,6 +234,22 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
             {i.assignees.length > 0 ? i.assignees.join(", ") : <span className="muted">No one assigned</span>}
           </span>
         </div>
+        {task && (
+          <button className="inspector-row action" onClick={() => shell.go({ section: "work", taskId: task.id })}>
+            <Bot size={13} />
+            <span className="truncate">
+              {task.landed ? "Landed by" : task.closed ? "Closed task:" : "Agent task:"} <b>{task.id}</b>
+            </span>
+          </button>
+        )}
+        {task?.pull != null && (
+          <button className="inspector-row action" onClick={() => shell.go({ section: "pulls", number: task.pull! }, { browse: true })}>
+            <Branch size={13} />
+            <span>
+              Pull request <span className="num">#{task.pull}</span>
+            </span>
+          </button>
+        )}
       </div>
       <div className="inspector-actions">
         <Button className="ghost" onClick={() => act(i.open ? "close" : "reopen")}>
@@ -262,11 +270,11 @@ export function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarte
   const { repo } = shell;
   const [settings, setSettings] = useAgentSettings();
   const [prompt, setPrompt] = useState(detail.prompt);
-  const [base, setBase] = useState(defaultStart(repo));
+  const [base, setBase] = useState(repo.default_base ?? repo.branch ?? repo.branches[0] ?? "main");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const attachments = useAttachments(shell.fail);
-  const verb = settings.agent === "none" ? "Start task" : "Start with agent";
+  const verb = settings.agent === "none" ? "Create task" : "Start agent task";
 
   const start = async () => {
     if (busy || !prompt.trim() || attachments.saving) return;
@@ -317,7 +325,14 @@ export function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarte
             </button>
           )}
           <div className="composer-footer">
-            <BasePicker repo={repo} value={base} onChange={setBase} title="The branch it starts from and its pull request goes into" />
+            <label className="chip-select-wrap" title="The branch it starts from and its pull request goes into">
+              <Branch size={12} />
+              <select className="chip-select bare" value={base} onChange={(e) => setBase(e.target.value)}>
+                {repo.branches.map((b) => (
+                  <option key={b}>{b}</option>
+                ))}
+              </select>
+            </label>
             <select
               className="chip-select"
               value={settings.agent}

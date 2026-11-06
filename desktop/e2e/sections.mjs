@@ -20,14 +20,7 @@ const w = await open(app, out);
 
 // Sections by their rail label, so adding one doesn't shift the rest.
 const section = async (label, ready) => {
-  const sel = `.nav-section[aria-label="${label}"]`;
-  // A repository's sections aren't shown in the Inbox or Agents: the
-  // workspace's badge goes back into the repository first.
-  if (!(await w.js(`return !!$(arguments[0])`, sel))) {
-    await w.js(`$('.workspace-badge[data-current]').click()`);
-    await w.waitFor(sel);
-  }
-  await w.js(`$(arguments[0]).click()`, sel);
+  await w.js(`$(\`.rail-item[aria-label="\${arguments[0]}"]\`).click()`, label);
   await w.waitFor(ready);
 };
 // Right-click the first element matching `css` whose text has `text`.
@@ -58,13 +51,14 @@ const rowClick = (css, i, shift = false) =>
 try {
   await w.js("localStorage.clear(); localStorage.setItem('spor.section', JSON.stringify('changes'))");
   await w.refresh();
-  await w.waitFor(".nav-section");
+  await w.waitFor(".rail-item");
   const head = git("rev-parse", "HEAD");
 
   console.log("Changes");
   await w.waitFor(".file-row");
   check((await w.count(".file-row")) === 3, "lists the staged, edited and untracked files");
-  check(!(await w.js(`return !!$('.nav-section[aria-label="Changes"] .rail-badge')`)), "the rail has no count per section");
+  await w.until(`return $(".rail-badge")?.textContent === "3"`, "the rail's count");
+  check(true, "the rail counts 3 changed files");
   await w.clickText(".file-row-main", "greet.py");
   await w.until(`return $("h2")?.textContent === "greet.py" && $$(".diff tr.add").length === 4`, "greet.py's diff");
   // Pick the two lines of shout(): click one, shift-click the next.
@@ -264,22 +258,6 @@ try {
   await w.until(`return $(".task-header .stage-track [aria-current]")?.innerText === "Landed"`, "the landing");
   check(ghState().merged.includes(11), "Land merges through gh");
   await w.shot("pulls-3-merged");
-
-  console.log("Inbox");
-  await toastGone();
-  await section("Inbox", ".task-row");
-  await w.until(`return $$(".task-list .task-row").length === 2`, "the Inbox's rows", 10000);
-  const inbox = await w.text(".task-list");
-  check(inbox.includes("CI failed on agent/let-greet-take-optional"), "the Inbox lists the failed run on the agent's branch");
-  check(inbox.includes("#12") && !inbox.includes("#11"), "…and #12's review request, but not the merged #11");
-  await w.shot("inbox-1");
-  check(await w.js(`return !!document.querySelector('.nav-section[aria-label="Inbox"] .rail-badge')`), "the Inbox has the rail's badge");
-  await w.clickText(".task-row", "CI failed");
-  await w.waitFor(".task-page");
-  check(
-    await w.js(`return document.querySelector('.nav-section[aria-label="Work"]').getAttribute("aria-current") === "page"`),
-    "the run is on the agent's branch, so it opens the task in Work",
-  );
 
   console.log("Actions");
   await toastGone();

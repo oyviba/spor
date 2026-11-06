@@ -52,7 +52,7 @@ const open = (p?: Pull) => p != null && (p.state === "open" || p.state === "draf
 const troubled = (p: Pull) => p.review === "changesrequested" || p.checks === "failing";
 
 function taskShelf(t: TaskSummary, pull: Pull | undefined, seenAt: number | undefined): Shelf {
-  if (t.landed || t.closed || pull?.state === "merged" || pull?.state === "closed") return "settled";
+  if (t.landed || pull?.state === "merged" || pull?.state === "closed") return "settled";
   if (t.asks > 0) return "needs";
   if (t.run?.state === "running") return "progress";
   const unseen = seenAt == null || seenAt < activityAt(t);

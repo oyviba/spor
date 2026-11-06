@@ -4,7 +4,6 @@
 //! core, and these only turn it into JSON and record what Undo needs.
 
 mod agents;
-mod cache;
 mod changes;
 mod github;
 mod history;
@@ -29,8 +28,6 @@ pub(crate) struct App {
     asks: Mutex<(u64, std::collections::BTreeMap<u64, spor::askpass::Request>)>,
     /// The open repository's watcher, sending the UI its changes.
     watch: Mutex<Option<watch::Watch>>,
-    /// What GitHub said, per repository and host, shared by the sections.
-    github: cache::Github,
 }
 
 impl App {
@@ -50,9 +47,6 @@ struct RepoInfo {
     branch: Option<String>,
     branches: Vec<String>,
     default_base: Option<String>,
-    /// Where new tasks start unless another branch is picked: origin's
-    /// copy of the default branch (`origin/main`) when there is one.
-    default_start: Option<String>,
     claude: bool,
 }
 
@@ -75,7 +69,6 @@ fn repo_info(repo: &Repo) -> RepoInfo {
         branch: repo.tracking().ok().and_then(|t| t.branch),
         branches,
         default_base: repo.default_base_branch(),
-        default_start: repo.default_start(),
         claude: spor::agent::available("claude"),
     }
 }
@@ -91,35 +84,9 @@ fn open_repo(handle: AppHandle, app: State<App>, path: String) -> Result<RepoInf
     let repo = Repo::discover(&path).map_err(|e| first_line(&e))?;
     let info = repo_info(&repo);
     watch_repo(&handle, &repo);
-    tidy(&repo);
     *app.repo.lock().unwrap() = Some(repo);
     app.undo.clear();
     Ok(info)
-}
-
-/// Opening a repository starts with nothing to undo, so the run checkpoints
-/// of tasks that are done have outlived their undo window (#41).
-fn tidy(repo: &Repo) {
-    let repo = repo.clone();
-    std::thread::spawn(move || {
-        if let Ok(tasks) = spor::tasks::Tasks::open(&repo) {
-            tasks.clean_up();
-        }
-    });
-}
-
-/// A notification from the operating system, for when the window is in
-/// the background (an agent needs you, #41).
-#[tauri::command]
-fn notify_os(handle: AppHandle, title: String, body: String) -> Result<(), String> {
-    use tauri_plugin_notification::NotificationExt as _;
-    handle
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-        .map_err(|e| e.to_string())
 }
 
 /// Send the UI an event when `repo` changes (see `watch`), in place of the
@@ -129,16 +96,8 @@ fn watch_repo(handle: &AppHandle, repo: &Repo) {
     let mut current = app.watch.lock().unwrap();
     *current = None;
     let to = handle.clone();
-    let root = repo.root().to_path_buf();
     match watch::start(repo, move |change| {
-        if change == watch::Change::Refs {
-            // A fetch or a push: what GitHub says may have changed too.
-            to.state::<App>().github.touch(&root);
-        }
         let _ = to.emit(change.event(), ());
-        if change.touches_work() {
-            let _ = to.emit("work-changed", ());
-        }
     }) {
         Ok(w) => *current = Some(w),
         Err(e) => eprintln!("spor: {e}"),
@@ -431,11 +390,9 @@ pub fn run() {
         .map(|p| expand_home(&p))
         .or_else(|| std::env::current_dir().ok());
     if let Some(repo) = start.and_then(|p| Repo::discover(&p).ok()) {
-        tidy(&repo);
         *app.repo.lock().unwrap() = Some(repo);
     }
     tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
         .manage(app)
         .setup(|tauri| {
             let handle = tauri.handle();
@@ -451,19 +408,16 @@ pub fn run() {
             repo_state,
             undo,
             open_url,
-            notify_os,
             askpass_pending,
             askpass_answer,
             legacy_workspaces,
             repo_heads,
-            agents::debrief_task,
             inbox::inbox_tasks,
             inbox::inbox_github,
             agents::list_tasks,
             agents::task_detail,
             agents::task_patch,
             agents::create_task,
-            agents::hand_to_agent,
             agents::send_to_agent,
             agents::stop_agent,
             agents::land_task,
@@ -472,24 +426,10 @@ pub fn run() {
             agents::run_patch,
             agents::undo_run,
             agents::answer_ask,
-            agents::answer_questions,
-            agents::approve_plan,
             agents::set_mode,
             agents::steer,
             agents::attach_image,
             agents::skip_setup,
-            agents::rerun_setup,
-            agents::queue_follow_up,
-            agents::unqueue,
-            agents::send_queued,
-            agents::clean_up_tasks,
-            agents::suggest_rules,
-            agents::get_max_agents,
-            agents::set_max_agents,
-            agents::start_waiting,
-            agents::search_transcripts,
-            agents::add_rule,
-            agents::decline_rule,
             agents::create_issue_task,
             agents::publish_task,
             agents::push_task,
@@ -562,7 +502,6 @@ pub fn run() {
             github::issue_action,
             work::work_branches,
             work::branch_patch,
-            work::work_items,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Spor");

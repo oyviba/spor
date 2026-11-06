@@ -3,8 +3,6 @@ import { api, errorText } from "../../api";
 import type { Job, LogLine, Run, RunDetail, TaskSummary } from "../../types";
 import { Button } from "../../shared/Button";
 import { useShell } from "../../shared/app";
-import { WorkCard } from "../../shared/WorkCard";
-import { findWork, itemFromBranch } from "../../shared/work";
 import { useChanged, useNow, usePoll, useStored } from "../../shared/hooks";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { StatusPill } from "../../shared/StatusPill";
@@ -58,19 +56,12 @@ export function ActionsSection() {
     api.workflows().then(setWorkflows, () => {});
   }, []);
 
-  // Sent here from a PR's checks: that run, and that job. From a work
-  // card's checks: the branch's latest run, failing jobs first.
+  // Sent here from a PR's checks: that run, and that job.
   useChanged(() => {
     const t = shell.target;
-    if (t.section !== "actions") return;
-    if (t.runId) {
+    if (t.section === "actions" && t.runId) {
       setSelected(t.runId);
       if (t.jobId) setJobId(t.jobId);
-    } else if (t.branch) {
-      api.runs(t.branch, null).then((list) => {
-        const latest = list.find((r) => r.status === "failure") ?? list[0];
-        if (latest) setSelected(latest.id);
-      }, fail);
     }
   }, [shell.target.seq]);
 
@@ -274,7 +265,6 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
   const shell = useShell();
   const [settings] = useAgentSettings();
   const r = run.run;
-  const item = findWork(shell.work, { task: task?.id, branch: r.branch }) ?? itemFromBranch(r.branch);
   const live = r.status === "running" || r.status === "queued";
   const failed = run.jobs.some((j) => j.status === "failure");
   const act = (a: "rerun" | "rerun_failed" | "cancel") =>
@@ -304,7 +294,6 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
 
   return (
     <DetailsCard>
-      <WorkCard item={item} from="actions" />
       <div className="inspector-section">
         <div className="inspector-row">
           <Refresh size={13} />
@@ -312,13 +301,24 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
             {r.workflow} <span className="muted num">#{r.number}{r.attempt > 1 ? ` · attempt ${r.attempt}` : ""}</span>
           </span>
         </div>
-        <div className="inspector-row muted">
-          <span className="truncate">On {r.event.replace(/_/g, " ")}</span>
+        <div className="inspector-row">
+          <Branch size={13} />
+          <span className="truncate">
+            <code>{r.branch}</code> <span className="muted">· {r.event.replace(/_/g, " ")}</span>
+          </span>
         </div>
         <button className="inspector-row action" onClick={() => shell.go({ section: "history", hash: r.sha })} title="Show the commit in History">
           <Commit size={13} />
           <span className="mono">{r.sha.slice(0, 7)}</span>
         </button>
+        {task && (
+          <button className="inspector-row action" onClick={() => shell.go({ section: "work", taskId: task.id })}>
+            <Bot size={13} />
+            <span className="truncate">
+              Agent task: <b>{task.title}</b>
+            </span>
+          </button>
+        )}
       </div>
       <div className="inspector-actions">
         {task && failed && !live && (

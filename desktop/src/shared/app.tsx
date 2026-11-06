@@ -3,20 +3,18 @@
 // section ("open this run in Actions").
 
 import { createContext, useContext } from "react";
-import type { RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "../types";
+import type { RepoInfo, RepoState, TaskSummary } from "../types";
 import type { MenuItem } from "./Overlay";
 
-export type SectionId = "inbox" | "agents" | "changes" | "history" | "issues" | "pulls" | "actions" | "work";
+export type SectionId = "changes" | "history" | "issues" | "pulls" | "actions" | "work";
 
 /** Where to go: a section, and what to open there. */
 export type Target =
-  | { section: "inbox" }
-  | { section: "agents" }
   | { section: "changes"; path?: string }
   | { section: "history"; hash?: string; branch?: string; blame?: { path: string; rev: string | null } }
   | { section: "issues"; number?: number }
-  | { section: "pulls"; number?: number; /** Its head, to find its work item. */ branch?: string }
-  | { section: "actions"; runId?: number; jobId?: number; /** The run's branch, to find its work item. */ branch?: string }
+  | { section: "pulls"; number?: number }
+  | { section: "actions"; runId?: number; jobId?: number }
   | { section: "work"; taskId?: string; number?: number; branch?: string };
 
 export interface ToastAction {
@@ -33,10 +31,6 @@ export interface Shell {
   tasks: TaskSummary[];
   /** Re-read the tasks now (after changing one). */
   reloadTasks: () => Promise<void>;
-  /** Every work item in the repository (#78), for the work card in every
-   * inspector (#79). Reloaded when one may have changed, and after `act`. */
-  work: WorkItemInfo[];
-  reloadWork: () => Promise<void>;
   toast: (text: string, tone?: "ok" | "error", undo?: boolean, action?: ToastAction) => void;
   fail: (e: unknown) => void;
   /**
@@ -57,12 +51,7 @@ export interface Shell {
    */
   switchBranch: (run: (stash: boolean) => Promise<string>) => Promise<boolean>;
   undo: () => void;
-  /**
-   * Go somewhere. A pull request, issue or run that belongs to a work item
-   * opens the item in Work instead (#83), unless `browse` asks for the
-   * browser section itself ("Open in Actions", a work item's own PR).
-   */
-  go: (target: Target, opts?: { browse?: boolean }) => void;
+  go: (target: Target) => void;
   /** The last target sent to a section, with a counter so a repeat still lands. */
   target: Target & { seq: number };
   openRepo: (path: string) => void;
