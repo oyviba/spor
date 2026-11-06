@@ -4,6 +4,7 @@ import { useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
 import { Button } from "../../shared/Button";
+import { PlanCard, QuestionCard } from "./AskCards";
 import { AgentIcon, Alert, ArrowUp, Check, Clock, CornerDownRight, MessageSquare, Square, X } from "../../shared/Icons";
 
 export interface AgentSettings {
@@ -38,6 +39,11 @@ export const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "acceptEdits", label: "Auto-accept edits", hint: "Edits freely, asks before commands" },
   { id: "auto", label: "Auto", hint: "Claude's own review approves routine actions and asks about the rest" },
   { id: "full", label: "Full access", hint: "Never asks. git push is refused in every mode" },
+  {
+    id: "plan",
+    label: "Plan first",
+    hint: "Reads and plans, changes nothing, and asks you to approve its plan before it starts",
+  },
 ];
 
 /** The agent settings new runs use, kept between sessions. Settings saved
@@ -130,6 +136,10 @@ interface Props {
   asks: Ask[];
   onAnswer: (ask: Ask, allow: boolean, message?: string) => unknown;
   onAllowForSession: (ask: Ask) => unknown;
+  /** Answer `AskUserQuestion`: picks (or your own words) per question (#102). */
+  onAnswerQuestions: (ask: Ask, answers: string[][]) => unknown;
+  /** Approve the plan; it starts in `mode` (#101). */
+  onApprovePlan: (ask: Ask, mode: Mode) => unknown;
   /** The running agent's mode, changeable while it works; null otherwise. */
   liveMode: Mode | null;
   onLiveMode: (m: Mode) => void;
@@ -170,6 +180,10 @@ export function verbOf(tool: string): string {
       return "fetch a page";
     case "WebSearch":
       return "search the web";
+    case "AskUserQuestion":
+      return "ask you something";
+    case "ExitPlanMode":
+      return "start on its plan";
     default:
       return `use ${tool}`;
   }
@@ -189,6 +203,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
   const hasContent = text.trim().length > 0 || p.comments.length > 0 || attachments.images.length > 0;
   const neverRan = p.latest == null;
   const ask = p.asks[0];
+  // The mode an approved plan works in: the last one picked for that.
+  const [afterPlan, setAfterPlan] = useStored<Mode>("afterPlan", "acceptEdits");
   // While it works, a message waits for the next turn (queue) or goes into
   // this one (steer): your default on ↩, the other on ⌘↩ (#22).
   const [followUp, setFollowUp] = useStored<"queue" | "steer">("followUp", "queue");
@@ -242,7 +258,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
   };
 
   const placeholder = ask
-    ? "Or say what to do instead — that answers no"
+    ? ask.ask === "plan"
+      ? "Comment on the plan — sending it asks for a new one"
+      : ask.ask === "questions"
+        ? "Or tell it something else instead of answering"
+        : "Or say what to do instead — that answers no"
     : running
       ? p.canSteer
         ? "Steer the agent, or queue a follow-up for when it's done"
@@ -274,7 +294,28 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
           className={`composer${ask ? " asking" : ""}${attachments.dragging ? " dropping" : ""}`}
           {...attachments.handlers}
         >
-          {ask && (
+          {ask?.ask === "questions" && (
+            <QuestionCard
+              key={ask.id}
+              ask={ask}
+              more={p.asks.length - 1}
+              onAnswer={(answers) => p.onAnswerQuestions(ask, answers)}
+            />
+          )}
+          {ask?.ask === "plan" && (
+            <PlanCard
+              key={ask.id}
+              ask={ask}
+              then={afterPlan === "plan" ? "acceptEdits" : afterPlan}
+              onThen={setAfterPlan}
+              onApprove={() => p.onApprovePlan(ask, afterPlan === "plan" ? "acceptEdits" : afterPlan)}
+              onQuote={(line) => {
+                setText((t) => `${t}${t && !t.endsWith("\n") ? "\n" : ""}> ${line}\n`);
+                input.current?.focus();
+              }}
+            />
+          )}
+          {ask && ask.ask !== "questions" && ask.ask !== "plan" && (
             <div className="ask-card" role="alert">
               <Alert size={14} />
               <div className="ask-text">
@@ -392,7 +433,9 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
               {action === "queue" || action === "steer"
                 ? `↩ ${action}${other !== action ? ` · ⌘↩ ${other}` : ""}`
                 : action === "reply"
-                  ? "↩ deny with this reply"
+                  ? ask?.ask === "plan"
+                    ? "↩ send back with this"
+                    : "↩ deny with this reply"
                   : "↩ send · ⇧↩ new line"}
             </span>
             <Button
@@ -410,7 +453,9 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
                       : action === "start"
                         ? "Start the agent on the task's prompt"
                         : action === "reply"
-                          ? "Deny, and tell the agent this instead"
+                          ? ask?.ask === "plan"
+                            ? "Send the plan back with these comments"
+                            : "Deny, and tell the agent this instead"
                           : "Send to the agent"
               }
             >

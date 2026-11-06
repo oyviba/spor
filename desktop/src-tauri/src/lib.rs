@@ -471,6 +471,8 @@ pub fn run() {
             agents::run_patch,
             agents::undo_run,
             agents::answer_ask,
+            agents::answer_questions,
+            agents::approve_plan,
             agents::set_mode,
             agents::steer,
             agents::attach_image,

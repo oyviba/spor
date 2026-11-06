@@ -3,6 +3,7 @@
 
 import type { Pull, TaskSummary } from "../../types";
 import { duration } from "./transcript";
+import { steps } from "./progress";
 import { activityAt } from "../work/items";
 
 import type { Status } from "../../shared/StatusPill";
@@ -29,8 +30,12 @@ export function statusOf(t: TaskSummary, seenAt: number | undefined, nowMs: numb
   if (t.stats.missing) return { label: "Folder gone", tone: "amber", live: false };
   const run = t.run;
   if (t.asks > 0) return { label: "Needs you", tone: "amber", live: false };
-  if (run?.state === "running")
-    return { label: `Working ${duration(nowMs / 1000 - run.started)}`, tone: "sky", live: true };
+  if (run?.state === "running") {
+    // How long, and how far through its plan (#96): "Working 12m · 5/7".
+    const plan = steps(t.progress, true);
+    const time = `Working ${duration(nowMs / 1000 - run.started)}`;
+    return { label: plan ? `${time} · ${plan}` : time, tone: "sky", live: true };
+  }
   const unseen = seenAt == null || seenAt < activityAt(t);
   if (run?.state === "failed" && unseen) return { label: "Failed", tone: "red", live: false };
   if (run?.state === "stopped" && unseen) return { label: "Stopped", tone: "muted", live: false };

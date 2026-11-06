@@ -62,6 +62,10 @@ export interface TaskSummary {
   command: string;
   /** Questions the agent is waiting on. */
   asks: number;
+  /** The first question in a few words ("asks: Keep the old endpoint?"); null when none waits. */
+  ask: string | null;
+  /** While it runs: how far through its plan, and what it's doing (#96). */
+  progress: Progress | null;
   mode: Mode | null;
   /** The GitHub issue it was started from. */
   issue: number | null;
@@ -72,18 +76,36 @@ export interface TaskSummary {
 }
 
 /** How much an agent may do without asking (#21). */
-export type Mode = "supervised" | "acceptEdits" | "auto" | "full";
+export type Mode = "supervised" | "acceptEdits" | "auto" | "full" | "plan";
 
 /** Claude Code's `--effort`. */
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
-export interface Ask {
+/** One of `AskUserQuestion`'s questions (#102). */
+export interface Question {
+  question: string;
+  /** A short label for it ("Approach"). */
+  header: string;
+  options: { label: string; description: string }[];
+  /** More than one option can be picked. */
+  multi: boolean;
+}
+
+/** What a question asks for: permission to use a tool, answers to
+ * questions with options (#102), or approval of a plan (#101). */
+export type AskKind =
+  | { ask: "permission" }
+  | { ask: "questions"; questions: Question[] }
+  | { ask: "plan"; plan: string };
+
+export type Ask = {
   id: string;
   tool: string;
+  /** The gist: the command or file, the first question, the plan's title. */
   detail: string;
   /** What "Allow for this session" covers ("`npm test` commands"); null: only once. */
   session: string | null;
-}
+} & AskKind;
 
 export type Item =
   | { kind: "prompt"; text: string }
@@ -99,10 +121,33 @@ export type Item =
       seconds: number | null;
     }
   | { kind: "output"; text: string }
-  | { kind: "ask"; id: string; tool: string; detail: string; session: string | null }
+  | ({ kind: "ask"; id: string; tool: string; detail: string; session: string | null } & AskKind)
   | { kind: "answer"; id: string; allow: boolean; message: string; always: boolean }
   | { kind: "steer"; text: string }
-  | { kind: "setup"; ok: boolean | null; code: number | null };
+  | { kind: "setup"; ok: boolean | null; code: number | null }
+  /** The agent's plan as it now stands (TodoWrite, #96). */
+  | { kind: "todos"; todos: Todo[] };
+
+/** One step of the agent's plan. */
+export interface Todo {
+  /** "Migrate the tests". */
+  content: string;
+  /** "Migrating the tests": the step while it's being done. */
+  active: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+/** What a running agent is doing (#96). */
+export interface Progress {
+  /** Steps done, of how many; total 0 without a plan. */
+  done: number;
+  total: number;
+  /** The step in progress ("Migrating the tests"). */
+  step: string | null;
+  /** Its latest tool call. */
+  tool: string | null;
+  detail: string | null;
+}
 
 export interface TaskDetail {
   task: TaskSummary;
@@ -394,6 +439,8 @@ export interface InboxTask {
   id: string;
   title: string;
   asks: number;
+  /** The first question in a few words ("asks: Keep the old endpoint?"); null when none waits. */
+  ask: string | null;
   run: "running" | "finished" | "failed" | "stopped" | null;
   started: number | null;
   ended: number | null;

@@ -59,6 +59,8 @@ interface Props {
   onAnswer: (ask: Ask, allow: boolean, message?: string) => unknown;
   /** Allow it, and don't ask again about this kind of action this session. */
   onAllowForSession: (ask: Ask) => unknown;
+  onAnswerQuestions: (ask: Ask, answers: string[][]) => unknown;
+  onApprovePlan: (ask: Ask, mode: Mode) => unknown;
   onLiveMode: (mode: Mode) => void;
   onSteer: (text: string) => unknown;
   onRetrySetup: () => unknown;
@@ -110,6 +112,8 @@ export const TaskView = forwardRef<ComposerHandle, Props>(function TaskView(p, c
       asks={p.detail.asks}
       onAnswer={p.onAnswer}
       onAllowForSession={p.onAllowForSession}
+      onAnswerQuestions={p.onAnswerQuestions}
+      onApprovePlan={p.onApprovePlan}
       liveMode={p.detail.listening ? (t.mode ?? null) : null}
       onLiveMode={p.onLiveMode}
       canSteer={p.detail.listening}

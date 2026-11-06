@@ -122,6 +122,20 @@ waits, the GUI shows a dialog, and the answer goes back. A Claude Code
 install`"), and Allow / Deny answer it. The rest of the time agents run
 with the permission mode the user picked when starting the task.
 
+Two other questions come the same way, and get their own answers:
+
+- **`AskUserQuestion`** (#102): the agent asks one or more questions, each
+  with options. They show as buttons (checkboxes when several can be
+  picked), with room for an answer of your own, and the picks go back as
+  the tool's input (`answers`, keyed by question), so the agent carries on
+  in the same turn. The Inbox and the notification say the question.
+- **Plan first** (#101), a permission mode: the agent reads and plans, and
+  changes nothing until its `ExitPlanMode` is answered. The plan shows in
+  the composer; clicking a line quotes it into a comment. *Approve plan*
+  lets it start, in the mode picked beside the button; sending a comment
+  sends it back to plan again. Each version of the plan stays in the
+  transcript.
+
 ### What you see
 
 - **Work** in the sidebar (the rail's last section, after Pulls and Actions;

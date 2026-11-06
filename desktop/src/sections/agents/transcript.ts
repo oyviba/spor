@@ -2,7 +2,7 @@
 // run, finished runs folded behind "Worked for …", and stretches of tool
 // calls summarized as one sentence (see issue #27).
 
-import type { Item } from "../../types";
+import type { AskKind, Item, Todo } from "../../types";
 
 type Done = Extract<Item, { kind: "done" }>;
 export type Tool = Extract<Item, { kind: "tool" | "tool_error" }>;
@@ -13,7 +13,13 @@ export type Block =
   | { kind: "tools"; tools: Tool[] }
   | { kind: "output"; lines: string[] }
   /** A question the agent asked, and how it was answered (null: waiting). */
-  | { kind: "ask"; id: string; tool: string; detail: string; answer: { allow: boolean; message: string; always: boolean } | null }
+  | ({
+      kind: "ask";
+      id: string;
+      tool: string;
+      detail: string;
+      answer: { allow: boolean; message: string; always: boolean } | null;
+    } & AskKind)
   /** A message sent while it worked. */
   | { kind: "steer"; text: string }
   /** The folder's setup script and its output (ok null: still going). */
@@ -26,6 +32,8 @@ export interface RunView {
   done: Done | null;
   /** The run still in progress (the last one, while the agent works). */
   live: boolean;
+  /** Its plan as it last stood (TodoWrite, #96), if it kept one. */
+  plan: Todo[] | null;
   /**
    * For a run that finished well: everything but its final message folds
    * away, and that message stays in view. Null when the run doesn't fold.
@@ -40,7 +48,7 @@ export function runs(items: Item[], running: boolean): RunView[] {
   let setup: Extract<Block, { kind: "setup" }> | null = null;
   const push = (block: Block) => {
     if (!current) {
-      current = { index: out.length, prompt: "", blocks: [], done: null, live: false, fold: null };
+      current = { index: out.length, prompt: "", blocks: [], done: null, live: false, plan: null, fold: null };
       out.push(current);
     }
     const last = current.blocks.at(-1);
@@ -51,7 +59,7 @@ export function runs(items: Item[], running: boolean): RunView[] {
   for (const item of items) {
     switch (item.kind) {
       case "prompt":
-        current = { index: out.length, prompt: item.text, blocks: [], done: null, live: false, fold: null };
+        current = { index: out.length, prompt: item.text, blocks: [], done: null, live: false, plan: null, fold: null };
         out.push(current);
         break;
       case "text":
@@ -76,7 +84,7 @@ export function runs(items: Item[], running: boolean): RunView[] {
         }
         break;
       case "ask":
-        push({ kind: "ask", id: item.id, tool: item.tool, detail: item.detail, answer: null });
+        push({ ...askKind(item), kind: "ask", id: item.id, tool: item.tool, detail: item.detail, answer: null });
         break;
       case "answer": {
         const ask = (current as RunView | null)?.blocks.find((b) => b.kind === "ask" && b.id === item.id);
@@ -89,12 +97,27 @@ export function runs(items: Item[], running: boolean): RunView[] {
       case "done":
         if (current) (current as RunView).done = item;
         break;
+      case "todos":
+        if (current) (current as RunView).plan = item.todos;
+        break;
     }
   }
   const last = out.at(-1);
   if (last && running && !last.done) last.live = true;
   for (const run of out) run.fold = foldOf(run);
   return out;
+}
+
+/** Just the kind of question an ask item is (older logs have none: a permission). */
+function askKind(item: Extract<Item, { kind: "ask" }>): AskKind {
+  switch (item.ask) {
+    case "questions":
+      return { ask: "questions", questions: item.questions };
+    case "plan":
+      return { ask: "plan", plan: item.plan };
+    default:
+      return { ask: "permission" };
+  }
 }
 
 function foldOf(run: RunView): RunView["fold"] {
@@ -105,7 +128,7 @@ function foldOf(run: RunView): RunView["fold"] {
     run.blocks.some(
       (b) =>
         (b.kind === "tools" && b.tools.some((t) => t.kind === "tool_error")) ||
-        (b.kind === "ask" && !b.answer?.allow) ||
+        (b.kind === "ask" && b.ask !== "plan" && !b.answer?.allow) ||
         (b.kind === "setup" && b.ok === false),
     )
   )
@@ -115,11 +138,18 @@ function foldOf(run: RunView): RunView["fold"] {
   const hidden = run.blocks.filter((_, i) => i !== finalIndex);
   if (hidden.length === 0) return null;
   const seconds = run.done.seconds;
+  const worked = seconds != null ? `Worked for ${duration(seconds)}` : "Worked";
   return {
-    label: seconds != null ? `Worked for ${duration(seconds)}` : "Worked",
+    label: run.plan?.length ? `${worked} · ${planEnd(run.plan)}` : worked,
     hidden,
     final,
   };
+}
+
+/** How far a finished run got through its plan: "7 of 7 done", "stopped at 5 of 7". */
+export function planEnd(plan: Todo[]): string {
+  const done = plan.filter((t) => t.status === "completed").length;
+  return done === plan.length ? `${done} of ${plan.length} done` : `stopped at ${done} of ${plan.length}`;
 }
 
 /** The label for a run that ended without finishing. */

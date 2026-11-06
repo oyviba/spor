@@ -1,10 +1,11 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import type { RunInfo, TaskDetail } from "../../types";
+import type { Progress, RunInfo, TaskDetail, Todo } from "../../types";
+import { liveLine } from "./progress";
 import { duration, runs as toRuns, stoppedLabel, summarize, type Block, type RunView, type Tool } from "./transcript";
-import { useChanged, useNow } from "../../shared/hooks";
+import { useChanged, useNow, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { Markdown } from "../../shared/Markdown";
-import { Alert, Check, Chevron, Square, Terminal, ToolIcon, X } from "../../shared/Icons";
+import { Alert, Check, Chevron, Circle, MessageSquare, Square, Terminal, ToolIcon, X } from "../../shared/Icons";
 import { verbOf } from "./Composer";
 
 interface Props {
@@ -84,7 +85,15 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetryS
             setup={run.index === setupActions.last - 1 && !running ? setupActions : null}
           />
         ))}
-        {running && latest && <LiveLine run={latest} waiting={detail.asks.length > 0} onStop={onStop} />}
+        {running && latest && (
+          <LiveLine
+            run={latest}
+            waiting={detail.asks.length > 0}
+            progress={detail.task.progress}
+            plan={views.at(-1)?.plan ?? null}
+            onStop={onStop}
+          />
+        )}
       </div>
     </div>
   );
@@ -260,6 +269,44 @@ function BlockView({
         </div>
       </div>
     );
+  if (block.kind === "ask" && block.ask === "plan") {
+    const a = block.answer;
+    // While it waits, the plan is in the composer's card; once answered,
+    // it opens here.
+    const shown = !!a && open.has(id);
+    return (
+      <div className={`plan-block${a ? (a.allow ? " allowed" : " denied") : " waiting"}`}>
+        <button className="ask-line" onClick={() => a && toggle(id)} aria-expanded={shown}>
+          {a?.allow ? <Check size={13} /> : a ? <X size={13} /> : <Alert size={13} />}
+          <span>Proposed a plan{block.detail && <>: {block.detail}</>}</span>
+          <span className="ask-outcome">
+            {a ? (a.allow ? "Approved" : a.message ? `Sent back: ${a.message}` : "Sent back") : "Waiting for you"}
+          </span>
+          {a && <Chevron size={12} className={`chev${shown ? " open" : ""}`} />}
+        </button>
+        {shown && (
+          <div className="plan-text">
+            <Markdown text={block.plan} />
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (block.kind === "ask" && block.ask === "questions") {
+    const a = block.answer;
+    return (
+      <div className={`ask-line${a ? (a.allow ? " allowed" : " denied") : " waiting"}`}>
+        {a?.allow ? <Check size={13} /> : a ? <X size={13} /> : <MessageSquare size={13} />}
+        <span>
+          Asked: {block.detail}
+          {block.questions.length > 1 && <span className="muted"> (and {block.questions.length - 1} more)</span>}
+        </span>
+        <span className="ask-outcome">
+          {a ? (a.allow ? a.message || "Answered" : a.message ? `Told: ${a.message}` : "Not answered") : "Waiting for you"}
+        </span>
+      </div>
+    );
+  }
   if (block.kind === "ask") {
     const a = block.answer;
     return (
@@ -321,6 +368,8 @@ function ToolGroup({
   const { text, failed } = summarize(tools);
   const last = tools.at(-1);
   const lastTool = tools.findLast((t) => t.kind === "tool");
+  // The plan has its own checklist; what it's doing is the last other call.
+  const now = tools.findLast((t) => t.kind === "tool" && t.name !== "TodoWrite");
   return (
     <div className="tools">
       <button className="tools-summary" onClick={() => toggle(id)} aria-expanded={expanded}>
@@ -350,9 +399,10 @@ function ToolGroup({
         </ul>
       ) : (
         live &&
-        last?.kind === "tool" && (
+        last?.kind === "tool" &&
+        now?.kind === "tool" && (
           <div className="tool-now">
-            <span className="tool-name">{last.name}</span> <code>{last.detail}</code>
+            <span className="tool-name">{now.name}</span> <code>{now.detail}</code>
           </div>
         )
       )}
@@ -360,17 +410,66 @@ function ToolGroup({
   );
 }
 
-function LiveLine({ run, waiting, onStop }: { run: RunInfo; waiting: boolean; onStop: () => unknown }) {
+/** How long it has run, where it is in its plan and what it's doing now,
+ * on one line (#96), with the plan as a checklist above it. */
+function LiveLine({
+  run,
+  waiting,
+  progress,
+  plan,
+  onStop,
+}: {
+  run: RunInfo;
+  waiting: boolean;
+  progress: Progress | null;
+  plan: Todo[] | null;
+  onStop: () => unknown;
+}) {
   const now = useNow(1000);
+  const seconds = now / 1000 - run.started;
+  const [showPlan, setShowPlan] = useStored("livePlan", true);
+  const done = plan?.filter((t) => t.status === "completed").length ?? 0;
   return (
-    <div className={`live-line${waiting ? " waiting" : ""}`}>
-      <span className={`dot${waiting ? "" : " pulse"}`} />
-      <span className="num">
-        {waiting ? "Waiting for you" : `Working ${duration(now / 1000 - run.started)}`}
-      </span>
-      <Button className="ghost small" onClick={onStop}>
-        <Square size={10} /> Stop
-      </Button>
+    <div className="live">
+      {plan && plan.length > 0 && (
+        <div className="live-plan">
+          <button className="live-plan-head" onClick={() => setShowPlan(!showPlan)} aria-expanded={showPlan}>
+            <span>Plan</span>
+            <span className="num muted">
+              {done} of {plan.length}
+            </span>
+            <span className="plan-bar" aria-hidden>
+              <span style={{ width: `${(done / plan.length) * 100}%` }} />
+            </span>
+            <Chevron size={12} className={`chev${showPlan ? " open" : ""}`} />
+          </button>
+          {showPlan && (
+            <ol className="todo-list">
+              {plan.map((t, i) => (
+                <li key={i} className={`todo ${t.status}`}>
+                  {t.status === "completed" ? (
+                    <Check size={12} />
+                  ) : t.status === "in_progress" ? (
+                    <span className="dot pulse" />
+                  ) : (
+                    <Circle size={12} />
+                  )}
+                  <span>{t.status === "in_progress" ? t.active : t.content}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+      <div className={`live-line${waiting ? " waiting" : ""}`}>
+        <span className={`dot${waiting ? "" : " pulse"}`} />
+        <span className="num truncate" title={liveLine(progress, seconds)}>
+          {waiting ? `Waiting for you · ${duration(seconds)}` : liveLine(progress, seconds)}
+        </span>
+        <Button className="ghost small" onClick={onStop}>
+          <Square size={10} /> Stop
+        </Button>
+      </div>
     </div>
   );
 }
