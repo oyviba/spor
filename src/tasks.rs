@@ -390,6 +390,54 @@ impl Tasks {
         }
     }
 
+    /// What landing the task (or merging its pull request) would take away
+    /// from its base that came to the base after the task started: lines
+    /// added there since, that the result wouldn't have. That's almost
+    /// always files written back from an older copy after a rebase or a
+    /// merge, which quietly reverts other work. Lines that moved elsewhere
+    /// don't count. Per file, most lines first.
+    /// Nothing when the merge would conflict (that shows as conflicts) or
+    /// the branch's reflog doesn't say where it started.
+    pub fn undoes(&self, task: &Task) -> Vec<(String, usize)> {
+        if task.state != TaskState::Open || !task.worktree.exists() {
+            return Vec::new();
+        }
+        // Where the branch was created from, by its reflog.
+        let Some(start) = self.repo.first_logged(&task.branch) else {
+            return Vec::new();
+        };
+        let arrived: std::collections::HashSet<String> = self
+            .repo
+            .commits_in(&format!("{start}..{}", task.base))
+            .into_iter()
+            .collect();
+        if arrived.is_empty() {
+            return Vec::new();
+        }
+        let Some(tree) = task.repo().merged_tree(&task.base, "HEAD") else {
+            return Vec::new();
+        };
+        let touched = self.repo.changed_paths(&start, &task.base);
+        // A line that's somewhere else in the result moved; it didn't go.
+        let added = self.repo.added_lines(&task.base, &tree);
+        let mut undone: Vec<(String, usize)> = self
+            .repo
+            .removed_lines(&task.base, &tree, &touched)
+            .into_iter()
+            .filter_map(|(path, runs)| {
+                let n = self
+                    .repo
+                    .blame_runs(&task.base, &path, &runs)
+                    .iter()
+                    .filter(|l| arrived.contains(&l.hash) && !added.contains(l.text.trim()))
+                    .count();
+                (n > 0).then_some((path, n))
+            })
+            .collect();
+        undone.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        undone
+    }
+
     /// Everything the task changed since it left its base, uncommitted work
     /// and new files included.
     pub fn patch(&self, task: &Task) -> Result<String, String> {

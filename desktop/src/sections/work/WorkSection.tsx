@@ -3,7 +3,7 @@ import { api } from "../../api";
 import type { LineComment, Pull, RunPatch, TaskDetail, TaskPull, TaskSummary, WorkBranch } from "../../types";
 import { activityAt, matches, moveTo, shelve, workItems, type Filter, type WorkItem } from "./items";
 import { isOpen } from "../agents/status";
-import { catchUpPrompt } from "../agents/prompts";
+import { catchUpPrompt, restorePrompt } from "../agents/prompts";
 import { useChanged, usePoll, useRepoChanges, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { EmptyState } from "../../shared/Layout";
@@ -315,7 +315,8 @@ export function WorkSection() {
     // The work item's own issue and PR: show them, not the item again.
     onShowIssue: (n: number) => shell.go({ section: "issues", number: n }, { browse: true }),
     onShowPull: (n: number) => shell.go({ section: "pulls", number: n }, { browse: true }),
-    onPublish: (draft: boolean, commitUncommitted: boolean) =>
+    onPublish: async (draft: boolean, commitUncommitted: boolean) =>
+      (await undoesOk("Open the pull request anyway?")) &&
       shell
         .act(() => api.publishTask(id, draft, commitUncommitted), {
           undo: false,
@@ -340,6 +341,26 @@ export function WorkSection() {
     onSettle: (commit: string) => settle(id, commit),
     onClose: () => close(id),
   });
+
+  // Landing or publishing work that would take back what reached the base
+  // since (#81 did, by writing back old copies of files): say so first.
+  const undoesOk = async (title: string) => {
+    if (!shown || shown.undoes.length === 0) return true;
+    const lines = shown.undoes.reduce((n, u) => n + u.lines, 0);
+    return shell.confirm({
+      title,
+      detail:
+        `It would undo ${lines} ${lines === 1 ? "line" : "lines"} that reached ${shown.task.base} after it started, in ` +
+        `${shown.undoes.map((u) => u.path).join(", ")}. Usually that's files written back from an older copy; ` +
+        `“Ask agent to put them back” on its card asks for them back.`,
+      action: "Go ahead anyway",
+      danger: true,
+    });
+  };
+
+  const askRestore = () => {
+    if (shown) send(restorePrompt(shown.task.base, shown.undoes));
+  };
 
   const askRebase = () => {
     if (!shown) return;
@@ -465,7 +486,8 @@ export function WorkSection() {
             }
             onSend={send}
             onStop={() => api.stopAgent(shown.task.id).then(afterChange, fail)}
-            onLand={(merge, commitUncommitted) =>
+            onLand={async (merge, commitUncommitted) =>
+              (await undoesOk(`Land on ${shown.task.base} anyway?`)) &&
               shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted), { pending: `Landing on ${shown.task.base}…` }).then(afterChange)
             }
             onDiscard={() =>
@@ -475,6 +497,7 @@ export function WorkSection() {
               })
             }
             onAskRebase={askRebase}
+            onAskRestore={askRestore}
             onOpenFolder={() => api.openFolder(shown.task.id).catch(fail)}
             onCopy={(text, what) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), fail)}
             onShowBranch={() => shell.go({ section: "history", branch: shown.task.branch })}

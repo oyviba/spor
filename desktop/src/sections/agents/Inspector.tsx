@@ -45,6 +45,8 @@ interface Props extends GithubActions {
   onLand: (merge: boolean, commitUncommitted: boolean) => unknown;
   onDiscard: () => unknown;
   onAskRebase: () => void;
+  /** Ask the agent to put back what it would undo on the base. */
+  onAskRestore: () => void;
   onShowBranch: () => void;
 }
 
@@ -87,6 +89,7 @@ export function Inspector({ detail, ...p }: Props) {
         : s.uncommitted > 0 && !includeUncommitted
           ? "It has uncommitted changes"
           : null;
+  const undoneLines = detail.undoes.reduce((n, u) => n + u.lines, 0);
   const lastRun = detail.runs.at(-1);
   const spent = detail.runs.reduce((n, r) => n + (r.cost_usd ?? 0), 0);
 
@@ -189,6 +192,22 @@ export function Inspector({ detail, ...p }: Props) {
               Conflicts with {t.base} in {detail.conflicts.join(", ")}
               <button className="link" onClick={p.onAskRebase} disabled={running}>
                 {t.pull != null ? `Ask agent to merge ${t.base} in` : "Ask agent to rebase"}
+              </button>
+            </span>
+          </div>
+        )}
+        {detail.undoes.length > 0 && !done && (
+          <div className="inspector-row bad" title={detail.undoes.map((u) => `${u.path}: ${u.lines}`).join("\n")}>
+            <Alert size={13} />
+            <span>
+              Would undo {undoneLines} {undoneLines === 1 ? "line" : "lines"} that reached {t.base} after it started, in{" "}
+              {detail.undoes
+                .slice(0, 2)
+                .map((u) => u.path.split("/").pop())
+                .join(", ")}
+              {detail.undoes.length > 2 && ` and ${detail.undoes.length - 2} more`}
+              <button className="link" onClick={p.onAskRestore} disabled={running}>
+                Ask agent to put them back
               </button>
             </span>
           </div>

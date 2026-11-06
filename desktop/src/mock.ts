@@ -475,6 +475,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           transcript: t.transcript,
           runs: t.runs.map((r, i) => ({ ...r, prompt: r.prompt || promptOf(t, i) })),
           conflicts: t.summary.id === "dark-mode-dashboard" ? ["src/styles/theme.css"] : [],
+          undoes: [],
           undoable: last && !last.undone && last.state !== "running" ? last.index : null,
           asks: t.asks ?? [],
           listening: t.summary.run?.state === "running",
