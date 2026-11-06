@@ -1,7 +1,7 @@
 import type { WorkItem, Shelf, Filter } from "./items";
 import { unseen } from "./items";
 import { isOpen, statusOf } from "../agents/status";
-import { ago } from "../agents/transcript";
+import { ago, tokens } from "../agents/transcript";
 import { pullStatus } from "./pull";
 import { useNow } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
@@ -32,6 +32,8 @@ interface Props {
   onNew: (at: { clientX: number; clientY: number }) => void;
   /** Delete the run checkpoints of tasks that are done, and discarded tasks' transcripts. */
   onCleanUp: () => void;
+  /** What every agent task here has cost, and the tokens they used. */
+  spent?: { usd: number; tokens: number };
 }
 
 /** Every work item in the repository, in shelves: what needs you, what's
@@ -174,6 +176,11 @@ export function Sidebar(p: Props) {
           </div>
         )}
       </div>
+      {p.spent && p.spent.usd > 0 && (
+        <div className="sidebar-foot num" title="What the agents' runs on this repository's tasks have cost so far">
+          Agents have spent ${p.spent.usd.toFixed(2)} · {tokens(p.spent.tokens)} tokens
+        </div>
+      )}
     </aside>
   );
 }

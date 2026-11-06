@@ -37,6 +37,15 @@ export interface RunInfo {
   started: number;
   ended: number | null;
   cost_usd: number | null;
+  /** Tokens sent to the model (input and cached) and received. */
+  tokens_in: number;
+  tokens_out: number;
+  /** How full the context was at the last turn, in percent (null: no turn yet). */
+  context: number | null;
+  /** The model that actually ran, from `init`; it can differ from the one asked for. */
+  model: string | null;
+  /** MCP servers that didn't connect. */
+  mcp_failed: string[];
   resumable: boolean;
   /** Taken back: its changes are gone, follow-ups resume from before it. */
   undone: boolean;
@@ -69,6 +78,9 @@ export interface TaskSummary {
   pull: number | null;
   /** Follow-ups waiting for the agent to finish, kept with the task. */
   queued: string[];
+  /** What all its runs cost, in dollars, and the tokens they used. */
+  spent: number;
+  tokens: number;
 }
 
 /** How much an agent may do without asking (#21). */
@@ -102,7 +114,11 @@ export type Item =
   | { kind: "ask"; id: string; tool: string; detail: string; session: string | null }
   | { kind: "answer"; id: string; allow: boolean; message: string; always: boolean }
   | { kind: "steer"; text: string }
-  | { kind: "setup"; ok: boolean | null; code: number | null };
+  | { kind: "setup"; ok: boolean | null; code: number | null }
+  /** Claude Code started: the model that ran, and MCP servers that failed to connect. */
+  | { kind: "init"; model: string; mcp_failed: string[] }
+  /** The conversation was compacted here. */
+  | { kind: "compacted" };
 
 export interface TaskDetail {
   task: TaskSummary;

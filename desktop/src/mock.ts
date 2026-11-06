@@ -50,6 +50,11 @@ const run = (over: Partial<RunInfo>): RunInfo => ({
   started: t0 - 600,
   ended: t0 - 300,
   cost_usd: 0.42,
+  tokens_in: 184_000,
+  tokens_out: 6_200,
+  context: 38,
+  model: null,
+  mcp_failed: [],
   resumable: true,
   prompt: "",
   undone: false,
@@ -80,6 +85,8 @@ const summary = (id: string, prompt: string, created: number, over: Partial<Task
   issue: null,
   pull: null,
   queued: [],
+  spent: 0.42,
+  tokens: 190_200,
   ...over,
 });
 

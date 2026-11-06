@@ -67,6 +67,16 @@ pub(crate) struct RunInfo {
     started: i64,
     ended: Option<i64>,
     cost_usd: Option<f64>,
+    /// Tokens sent to the model (input and cached) and received (#98).
+    tokens_in: u64,
+    tokens_out: u64,
+    /// How full the context was at the last turn, in percent.
+    context: Option<u32>,
+    /// The model that actually ran, from `init`; it can differ from the
+    /// one asked for.
+    model: Option<String>,
+    /// MCP servers that didn't connect.
+    mcp_failed: Vec<String>,
     resumable: bool,
     /// Taken back: its changes are gone and follow-ups resume from before it.
     undone: bool,
@@ -80,6 +90,7 @@ impl From<Run> for RunInfo {
             RunState::Failed(c) => ("failed", Some(c)),
             RunState::Stopped => ("stopped", None),
         };
+        let model = r.init.as_ref().map(|i| i.model.clone());
         Self {
             index: r.index,
             agent: match r.kind {
@@ -96,6 +107,17 @@ impl From<Run> for RunInfo {
             started: r.started,
             ended: r.ended,
             cost_usd: r.cost_usd,
+            tokens_in: r.usage.input + r.usage.cache_read + r.usage.cache_created,
+            tokens_out: r.usage.output,
+            context: r
+                .usage
+                .fill(model.as_deref().or(r.model.name.as_deref())),
+            mcp_failed: r
+                .init
+                .as_ref()
+                .map(|i| i.failed().into_iter().map(String::from).collect())
+                .unwrap_or_default(),
+            model,
             resumable: r.session.is_some(),
             undone: r.undone,
         }
@@ -130,11 +152,16 @@ pub(crate) struct TaskSummary {
     pull: Option<u64>,
     /// Follow-ups waiting for the agent to finish (#22), kept with the task.
     queued: Vec<String>,
+    /// What all its runs cost, and the tokens they used (#98).
+    spent: f64,
+    tokens: u64,
 }
 
 fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
     let runs = Runs::of(tasks, task);
     let list = runs.list();
+    let spent = list.iter().filter_map(|r| r.cost_usd).sum();
+    let tokens = list.iter().map(|r| r.usage.tokens()).sum();
     TaskSummary {
         id: task.id.clone(),
         title: task.title(),
@@ -158,6 +185,8 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
         issue: task.issue,
         pull: task.pull,
         queued: runs.queued(),
+        spent,
+        tokens,
     }
 }
 
@@ -207,6 +236,13 @@ pub(crate) enum Item {
         ok: Option<bool>,
         code: Option<i32>,
     },
+    /// The model that ran and the MCP servers that didn't connect.
+    Init {
+        model: String,
+        mcp_failed: Vec<String>,
+    },
+    /// The conversation was compacted here.
+    Compacted,
 }
 
 impl Item {
@@ -258,6 +294,11 @@ impl Item {
             },
             Entry::Steer(text) => Item::Steer { text },
             Entry::Setup { ok, code } => Item::Setup { ok, code },
+            Entry::Init(init) => Item::Init {
+                mcp_failed: init.failed().into_iter().map(String::from).collect(),
+                model: init.model,
+            },
+            Entry::Compacted => Item::Compacted,
         }
     }
 }

@@ -209,9 +209,73 @@ pub struct Run {
     /// The model it ran (Claude Code).
     pub model: Model,
     pub cost_usd: Option<f64>,
+    /// Tokens spent and how full the context is (Claude Code).
+    pub usage: Usage,
+    /// What Claude Code reported when it started: the model that actually
+    /// ran, and its MCP servers (Claude Code).
+    pub init: Option<Init>,
     /// Undone: its changes were taken back, and follow-ups resume from
     /// before it.
     pub undone: bool,
+}
+
+/// Tokens a Claude Code run used, and how full its context window was.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_created: u64,
+    /// What the last turn sent as context: input plus cached tokens. Zero
+    /// until the first assistant message.
+    pub context: u64,
+    /// The model's context window, when the run reported it; else a guess
+    /// from the model's name and how much has been sent (`window()`).
+    pub window: Option<u64>,
+}
+
+impl Usage {
+    /// Everything the run sent and received.
+    pub fn tokens(&self) -> u64 {
+        self.input + self.output + self.cache_read + self.cache_created
+    }
+
+    /// The context window: as reported, else 1M for a `[1m]` model or when
+    /// more than 200k has already fit, else 200k.
+    pub fn window(&self, model: Option<&str>) -> u64 {
+        self.window.unwrap_or_else(|| {
+            if self.context > 200_000 || model.is_some_and(|m| m.contains("[1m]")) {
+                1_000_000
+            } else {
+                200_000
+            }
+        })
+    }
+
+    /// How full the context is, 0 to 100 and over. None before any turn.
+    pub fn fill(&self, model: Option<&str>) -> Option<u32> {
+        (self.context > 0)
+            .then(|| (self.context as f64 * 100.0 / self.window(model) as f64).round() as u32)
+    }
+}
+
+/// Claude Code's `system/init`: the model that ran and its MCP servers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Init {
+    pub model: String,
+    /// Each MCP server's name and status (`connected`, `failed`, …).
+    pub servers: Vec<(String, String)>,
+}
+
+impl Init {
+    /// The servers that didn't connect.
+    pub fn failed(&self) -> Vec<&str> {
+        self.servers
+            .iter()
+            .filter(|(_, status)| status != "connected")
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
 }
 
 /// One run's changes, from its `before` checkpoint to its `after` (or to
@@ -266,6 +330,10 @@ pub enum Entry {
     },
     /// A message sent to the agent while it worked (steering, #22).
     Steer(String),
+    /// Claude Code started: the model that actually ran and its MCP servers.
+    Init(Init),
+    /// Claude Code compacted the conversation here (#98).
+    Compacted,
     /// The folder's setup script (#23): started (`ok` None), or done. Its
     /// output is the `Output` lines between.
     Setup { ok: Option<bool>, code: Option<i32> },
@@ -623,6 +691,8 @@ echo $code > "$SPOR_EXIT""#;
             session: None,
             model: model.clone(),
             cost_usd: None,
+            usage: Usage::default(),
+            init: None,
             undone: false,
         })
     }
@@ -1036,13 +1106,14 @@ echo $code > "$SPOR_EXIT""#;
             None if running => RunState::Running,
             None => RunState::Stopped,
         };
-        let (session, cost_usd) = match kind {
+        let stats = match kind {
             AgentKind::Claude => {
                 let log = std::fs::read_to_string(self.file(index, "log")).unwrap_or_default();
-                claude_session(&log)
+                claude_log(&log)
             }
-            AgentKind::Command(_) => (None, None),
+            AgentKind::Command(_) => LogStats::default(),
         };
+        let (session, cost_usd) = (stats.session, stats.cost);
         Some(Run {
             index,
             kind,
@@ -1058,6 +1129,8 @@ echo $code > "$SPOR_EXIT""#;
                     .and_then(|e| Effort::from_flag(&e)),
             },
             cost_usd,
+            usage: stats.usage,
+            init: stats.init,
             undone: self.file(index, "undone").exists(),
         })
     }
@@ -1232,6 +1305,16 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                     session: covers(request.get("permission_suggestions")),
                 });
             }
+            Some("system") => match event.get("subtype").str() {
+                Some("init") => {
+                    let init = init_of(&event);
+                    if !init.model.is_empty() {
+                        out.push(Entry::Init(init));
+                    }
+                }
+                Some("compact_boundary") => out.push(Entry::Compacted),
+                _ => {}
+            },
             Some("spor_answer") => out.push(Entry::Answer {
                 id: event
                     .get("request_id")
@@ -1288,27 +1371,111 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
     out
 }
 
-/// The session id and cost a Claude Code log reports.
-fn claude_session(log: &str) -> (Option<String>, Option<f64>) {
-    let mut session = None;
-    let mut cost = None;
+fn init_of(event: &Json) -> Init {
+    Init {
+        model: event.get("model").str().unwrap_or_default().to_string(),
+        servers: event
+            .get("mcp_servers")
+            .array()
+            .iter()
+            .map(|m| {
+                (
+                    m.get("name").str().unwrap_or_default().to_string(),
+                    m.get("status").str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect(),
+    }
+}
+
+/// What a Claude Code log reports besides the transcript.
+#[derive(Debug, Default, PartialEq)]
+struct LogStats {
+    session: Option<String>,
+    cost: Option<f64>,
+    usage: Usage,
+    init: Option<Init>,
+}
+
+/// The session, cost, token use and `init` of a Claude Code log.
+fn claude_log(log: &str) -> LogStats {
+    let mut stats = LogStats::default();
+    // A message arrives once per content block, each with its usage: count
+    // it once, as of its last block.
+    let mut pending: Option<(String, [u64; 4])> = None;
+    let commit = |usage: &mut Usage, p: &mut Option<(String, [u64; 4])>, main: bool| {
+        if let Some((_, [i, o, r, c])) = p.take() {
+            usage.input += i;
+            usage.output += o;
+            usage.cache_read += r;
+            usage.cache_created += c;
+            if main {
+                usage.context = i + r + c;
+            }
+        }
+    };
+    let mut pending_main = true;
     for line in log.lines() {
-        // Only the events that carry them; skip parsing the rest.
-        if !(line.contains("\"session_id\"")
-            && (line.contains("\"init\"") || line.contains("\"result\"")))
+        // Only the events that carry something; skip parsing the rest.
+        if !(line.contains("\"type\":\"assistant\"")
+            || line.contains("\"type\":\"system\"")
+            || line.contains("\"type\":\"result\""))
         {
             continue;
         }
-        if let Some(event) = Json::parse(line) {
-            if let Some(id) = event.get("session_id").str() {
-                session = Some(id.to_string());
+        let Some(event) = Json::parse(line) else {
+            continue;
+        };
+        match event.get("type").str() {
+            Some("assistant") => {
+                let message = event.get("message");
+                let u = message.get("usage");
+                let n = |k: &str| u.get(k).num().unwrap_or(0.0) as u64;
+                let counts = [
+                    n("input_tokens"),
+                    n("output_tokens"),
+                    n("cache_read_input_tokens"),
+                    n("cache_creation_input_tokens"),
+                ];
+                let id = message.get("id").str().unwrap_or_default().to_string();
+                if pending
+                    .as_ref()
+                    .is_some_and(|(p, _)| *p != id || id.is_empty())
+                {
+                    commit(&mut stats.usage, &mut pending, pending_main);
+                }
+                // A subagent's turns spend tokens but aren't the context.
+                pending_main = matches!(event.get("parent_tool_use_id"), Json::Null);
+                pending = Some((id, counts));
             }
-            if let Some(c) = event.get("total_cost_usd").num() {
-                cost = Some(c);
+            Some("system") if event.get("subtype").str() == Some("init") => {
+                if let Some(id) = event.get("session_id").str() {
+                    stats.session = Some(id.to_string());
+                }
+                stats.init = Some(init_of(&event));
             }
+            Some("result") => {
+                if let Some(id) = event.get("session_id").str() {
+                    stats.session = Some(id.to_string());
+                }
+                if let Some(c) = event.get("total_cost_usd").num() {
+                    stats.cost = Some(c);
+                }
+                if let Json::Object(models) = event.get("modelUsage") {
+                    let window = models
+                        .values()
+                        .filter_map(|m| m.get("contextWindow").num())
+                        .fold(0.0, f64::max);
+                    if window > 0.0 {
+                        stats.usage.window = Some(window as u64);
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    (session, cost)
+    commit(&mut stats.usage, &mut pending, pending_main);
+    stats
 }
 
 /// The gist of a tool call: its command, file, pattern or URL.
@@ -1738,7 +1905,66 @@ not json at all
                 },
             ]
         );
-        assert_eq!(claude_session(log), (Some("s-1".into()), Some(0.25)));
+        let stats = claude_log(log);
+        assert_eq!(
+            (stats.session, stats.cost),
+            (Some("s-1".into()), Some(0.25))
+        );
+    }
+
+    #[test]
+    fn claude_log_counts_tokens_once_per_message() {
+        let log = r#"{"type":"system","subtype":"init","session_id":"s-1","model":"claude-opus-5-5","mcp_servers":[{"name":"gh","status":"connected"},{"name":"db","status":"failed"}]}
+{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200},"content":[{"type":"text","text":"a"}]}}
+{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":7,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200},"content":[{"type":"tool_use","name":"Bash","input":{}}]}}
+{"type":"assistant","parent_tool_use_id":"t1","message":{"id":"s1","usage":{"input_tokens":3,"output_tokens":1,"cache_read_input_tokens":50,"cache_creation_input_tokens":0},"content":[]}}
+{"type":"assistant","message":{"id":"m2","usage":{"input_tokens":20,"output_tokens":9,"cache_read_input_tokens":1100,"cache_creation_input_tokens":300},"content":[]}}
+{"type":"result","subtype":"success","is_error":false,"result":"","total_cost_usd":0.5,"modelUsage":{"claude-opus-5-5":{"contextWindow":1000000}}}"#;
+        let stats = claude_log(log);
+        assert_eq!(
+            stats.usage,
+            Usage {
+                input: 33,
+                output: 17,
+                cache_read: 2150,
+                cache_created: 500,
+                context: 1420,
+                window: Some(1_000_000),
+            }
+        );
+        assert_eq!(stats.usage.fill(None), Some(0));
+        let init = stats.init.unwrap();
+        assert_eq!(init.model, "claude-opus-5-5");
+        assert_eq!(init.failed(), vec!["db"]);
+    }
+
+    #[test]
+    fn context_window_is_guessed_without_a_report() {
+        let mut u = Usage {
+            context: 162_000,
+            ..Usage::default()
+        };
+        assert_eq!(u.fill(Some("opus")), Some(81));
+        assert_eq!(u.fill(Some("opus[1m]")), Some(16));
+        u.context = 300_000;
+        assert_eq!(u.fill(None), Some(30));
+        assert_eq!(Usage::default().fill(None), None);
+    }
+
+    #[test]
+    fn compaction_and_init_enter_the_transcript() {
+        let log = r#"{"type":"system","subtype":"init","model":"m","mcp_servers":[]}
+{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":150000}}"#;
+        assert_eq!(
+            parse_claude(log),
+            vec![
+                Entry::Init(Init {
+                    model: "m".into(),
+                    servers: vec![]
+                }),
+                Entry::Compacted
+            ]
+        );
     }
 
     #[test]

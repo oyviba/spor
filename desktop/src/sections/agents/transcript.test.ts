@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { duration, runs, summarize, type Tool } from "./transcript.ts";
+import { duration, runs, summarize, tokens, type Tool } from "./transcript.ts";
 import type { Item } from "../../types.ts";
 
 const tool = (name: string, detail = ""): Tool => ({ kind: "tool", name, detail });
@@ -124,4 +124,36 @@ test("duration formats", () => {
   assert.equal(duration(42), "42s");
   assert.equal(duration(125), "2m 05s");
   assert.equal(duration(3780), "1h 03m");
+});
+
+test("compaction is marked where it happened and noted on the fold", () => {
+  const items: Item[] = [
+    { kind: "prompt", text: "a" },
+    { kind: "text", text: "before" },
+    { kind: "compacted" },
+    { kind: "text", text: "after" },
+    { kind: "done", ok: true, summary: "", cost_usd: null, turns: null, seconds: 65 },
+  ];
+  const [run] = runs(items, false);
+  assert.deepEqual(run.blocks.map((b) => b.kind), ["text", "compacted", "text"]);
+  assert.equal(run.fold?.label, "Worked for 1m 05s, compacted");
+});
+
+test("an MCP server that failed to connect keeps the run unfolded", () => {
+  const items: Item[] = [
+    { kind: "prompt", text: "a" },
+    { kind: "init", model: "m", mcp_failed: ["db"] },
+    { kind: "text", text: "hi" },
+    { kind: "tool", name: "Read", detail: "x" },
+    { kind: "done", ok: true, summary: "", cost_usd: null, turns: null, seconds: 5 },
+  ];
+  const [run] = runs(items, false);
+  assert.deepEqual(run.blocks[0], { kind: "mcp", failed: ["db"] });
+  assert.equal(run.fold, null);
+  // A clean start shows nothing.
+  assert.equal(runs([{ kind: "prompt", text: "a" }, { kind: "init", model: "m", mcp_failed: [] }], false)[0].blocks.length, 0);
+});
+
+test("tokens are short", () => {
+  assert.deepEqual([tokens(850), tokens(1234), tokens(12_345), tokens(1_250_000)], ["850", "1.2k", "12k", "1.3M"]);
 });

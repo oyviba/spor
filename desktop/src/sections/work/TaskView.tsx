@@ -6,6 +6,7 @@
 import { forwardRef, useState } from "react";
 import type { Ask, LineComment, Mode, RepoInfo, TaskDetail } from "../../types";
 import { isOpen, statusOf } from "../agents/status";
+import { CONTEXT_HIGH } from "../agents/transcript";
 import { useShell } from "../../shared/app";
 import { useNow } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
@@ -145,9 +146,23 @@ export const TaskView = forwardRef<ComposerHandle, Props>(function TaskView(p, c
       status={statusOf(t, p.seenAt, now, pull)}
       action={
         isOpen(t) && (
-          <Button className="ghost" onClick={p.onOpenFolder} title={`Open ${t.worktree} and work in it yourself`}>
-            <Folder size={12} /> Take over
-          </Button>
+          <>
+            {latest?.state === "running" && latest.context != null && (
+              <span
+                className={`context-chip num${latest.context >= CONTEXT_HIGH ? " high" : ""}`}
+                title={
+                  latest.context >= CONTEXT_HIGH
+                    ? "The agent's context is nearly full. Claude Code will compact the conversation soon, and the agent may forget earlier decisions"
+                    : "How much of the agent's context window is in use"
+                }
+              >
+                context {latest.context}%
+              </span>
+            )}
+            <Button className="ghost" onClick={p.onOpenFolder} title={`Open ${t.worktree} and work in it yourself`}>
+              <Folder size={12} /> Take over
+            </Button>
+          </>
         )
       }
       tabs={tabs}

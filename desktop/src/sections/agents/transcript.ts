@@ -17,7 +17,11 @@ export type Block =
   /** A message sent while it worked. */
   | { kind: "steer"; text: string }
   /** The folder's setup script and its output (ok null: still going). */
-  | { kind: "setup"; ok: boolean | null; code: number | null; lines: string[] };
+  | { kind: "setup"; ok: boolean | null; code: number | null; lines: string[] }
+  /** The conversation was compacted here; the agent may have lost detail. */
+  | { kind: "compacted" }
+  /** MCP servers that failed to connect when the agent started. */
+  | { kind: "mcp"; failed: string[] };
 
 export interface RunView {
   index: number;
@@ -86,6 +90,12 @@ export function runs(items: Item[], running: boolean): RunView[] {
       case "steer":
         push({ kind: "steer", text: item.text });
         break;
+      case "compacted":
+        push({ kind: "compacted" });
+        break;
+      case "init":
+        if (item.mcp_failed.length > 0) push({ kind: "mcp", failed: item.mcp_failed });
+        break;
       case "done":
         if (current) (current as RunView).done = item;
         break;
@@ -106,6 +116,7 @@ function foldOf(run: RunView): RunView["fold"] {
       (b) =>
         (b.kind === "tools" && b.tools.some((t) => t.kind === "tool_error")) ||
         (b.kind === "ask" && !b.answer?.allow) ||
+        b.kind === "mcp" ||
         (b.kind === "setup" && b.ok === false),
     )
   )
@@ -115,8 +126,9 @@ function foldOf(run: RunView): RunView["fold"] {
   const hidden = run.blocks.filter((_, i) => i !== finalIndex);
   if (hidden.length === 0) return null;
   const seconds = run.done.seconds;
+  const worked = seconds != null ? `Worked for ${duration(seconds)}` : "Worked";
   return {
-    label: seconds != null ? `Worked for ${duration(seconds)}` : "Worked",
+    label: run.blocks.some((b) => b.kind === "compacted") ? `${worked}, compacted` : worked,
     hidden,
     final,
   };
@@ -253,3 +265,15 @@ export function ago(unixSeconds: number, nowMs: number): string {
   const d = Math.floor(h / 24);
   return d < 30 ? `${d}d` : `${Math.floor(d / 30)}mo`;
 }
+
+// ---- Tokens and context -------------------------------------------------------
+
+/** 850, 12.3k, 1.2M. */
+export function tokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** Past this much of the window, quality starts to slip and compaction is near. */
+export const CONTEXT_HIGH = 80;
