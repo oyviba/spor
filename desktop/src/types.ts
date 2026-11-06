@@ -410,3 +410,27 @@ export interface RepoHead {
   behind: number;
   changes: number;
 }
+
+// ---- Work ----
+
+export interface BranchCommit {
+  hash: string;
+  short: string;
+  subject: string;
+  author: string;
+  time: number;
+}
+
+/** One of your own branches with work on it (#81): commits its base
+ * doesn't have, or checked out. */
+export interface WorkBranch {
+  name: string;
+  base: string;
+  current: boolean;
+  /** Newest first. */
+  commits: BranchCommit[];
+  files: number;
+  additions: number;
+  deletions: number;
+  updated: number;
+}

@@ -171,7 +171,7 @@ export function IssuesSection() {
               <StartTask
                 key={shown.issue.number}
                 detail={shown}
-                onStarted={(t) => shell.go({ section: "agents", taskId: t.id })}
+                onStarted={(t) => shell.go({ section: "work", taskId: t.id })}
               />
             )}
           </div>
@@ -235,7 +235,7 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
           </span>
         </div>
         {task && (
-          <button className="inspector-row action" onClick={() => shell.go({ section: "agents", taskId: task.id })}>
+          <button className="inspector-row action" onClick={() => shell.go({ section: "work", taskId: task.id })}>
             <Bot size={13} />
             <span className="truncate">
               {task.landed ? "Landed by" : task.closed ? "Closed task:" : "Agent task:"} <b>{task.id}</b>
@@ -265,7 +265,7 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
 
 /** The issue as an agent's prompt, ready to edit, with where it starts
  * from and which agent runs it. */
-function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: TaskSummary) => void }) {
+export function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: TaskSummary) => void }) {
   const shell = useShell();
   const { repo } = shell;
   const [settings, setSettings] = useAgentSettings();

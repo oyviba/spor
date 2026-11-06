@@ -10,10 +10,8 @@ import { Markdown } from "../../shared/Markdown";
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { CiIcon } from "../../shared/ci";
 import { ago } from "../agents/transcript";
-import { isOpen } from "../agents/status";
 import { Bot, Branch, Check, ChevronDown, External, MessageSquare, Play, X } from "../../shared/Icons";
 import { choiceOf, useAgentSettings } from "../agents/Composer";
-import { catchUpPrompt } from "../agents/prompts";
 
 type Filter = "review" | "yours" | "open" | "closed";
 const FILTERS: { id: Filter; label: string }[] = [
@@ -38,15 +36,10 @@ export function pullStatus(p: Pull): Status {
 /** Pull requests on GitHub, through `gh`: read, review, merge. */
 export function PullsSection() {
   const shell = useShell();
-  const { fail, tasks } = shell;
   const [filter, setFilter] = useStored<Filter>("pulls.filter", "open");
   const [pulls, setPulls] = useState<Pull[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useStored<number | null>("pulls.selected", null);
-  const [detail, setDetail] = useState<PullDetail | null>(null);
-  const [tab, setTab] = useState<"conversation" | "files" | "checks">("conversation");
-  const [diff, setDiff] = useState<string | null>(null);
-  const [comments, setComments] = useState<LineComment[]>([]);
 
   // The filter shown: an answer for one picked before it is dropped.
   const wanted = useRef(filter);
@@ -71,28 +64,6 @@ export function PullsSection() {
   useChanged(() => {
     if (shell.target.section === "pulls" && shell.target.number) setSelected(shell.target.number);
   }, [shell.target.seq]);
-
-  const loadDetail = async () => {
-    if (selected == null) return;
-    try {
-      setDetail(await api.pullDetail(selected));
-    } catch (e) {
-      fail(e);
-    }
-  };
-  usePoll(loadDetail, 30_000, [selected], selected != null && !error);
-  useChanged(() => {
-    setDetail(null);
-    setDiff(null);
-    setComments([]);
-    setTab("conversation");
-  }, [selected]);
-  useEffect(() => {
-    if (tab === "files" && selected != null && diff == null) api.pullDiff(selected).then(setDiff, fail);
-  }, [tab, selected]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const task = detail ? tasks.find((t) => t.branch === detail.pull.head && isOpen(t)) : undefined;
-  const pr = detail?.pull.number === selected ? detail : null;
 
   return (
     <>
@@ -146,85 +117,120 @@ export function PullsSection() {
       <main className="main">
         {selected == null || error ? (
           <EmptyState title={error ? "Pull requests aren't available" : "Pick a pull request"}>{error}</EmptyState>
-        ) : !pr ? (
-          <div className="boot" />
         ) : (
-          <div className="task-page with-inspector">
-            <PageHeader
-              title={
-                <>
-                  <h2 title={pr.pull.title}>
-                    {pr.pull.title} <span className="muted num">#{pr.pull.number}</span>
-                  </h2>
-                  <StatusPill status={pullStatus(pr.pull)} />
-                </>
-              }
-            >
-              <Tabs
-                value={tab}
-                onChange={setTab}
-                tabs={[
-                  { id: "conversation", label: "Conversation" },
-                  {
-                    id: "files",
-                    label: (
-                      <>
-                        Files <span className="tab-count num">{pr.changed_files}</span>
-                        {comments.length > 0 && (
-                          <span className="tab-count accent num">
-                            <MessageSquare size={10} /> {comments.length}
-                          </span>
-                        )}
-                      </>
-                    ),
-                  },
-                  { id: "checks", label: <>Checks <span className="tab-count num">{pr.checks.length}</span></> },
-                ]}
-              />
-            </PageHeader>
-            <div className="task-body">
-              {tab === "conversation" ? (
-                <div className="conversation">
-                  <div className="column">
-                    <Timeline pr={pr} />
-                  </div>
-                </div>
-              ) : tab === "files" ? (
-                <div className="changes">
-                  <div className="changes-column">
-                    <DiffView
-                      patch={diff}
-                      comments={comments}
-                      onComment={(file, line, side, text) =>
-                        setComments((c) => [...c, { id: `${Date.now()}`, file, line, side, text }])
-                      }
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="conversation">
-                  <div className="column">
-                    <Checks pr={pr} />
-                  </div>
-                </div>
-              )}
-              <PullCard pr={pr} task={task} onChanged={loadDetail} />
-            </div>
-            {pr.pull.state !== "merged" && (
-              <ReviewBox
-                pr={pr}
-                comments={comments}
-                onRemoveComment={(id) => setComments((c) => c.filter((x) => x.id !== id))}
-                onSent={() => {
-                  setComments([]);
-                  loadDetail();
-                }}
-              />
-            )}
-          </div>
+          <PullPage number={selected} />
         )}
       </main>
     </>
+  );
+}
+
+/** One pull request: its conversation, files and checks, with the
+ * details card and a box to comment or approve. Pulls and Work show it. */
+export function PullPage({ number }: { number: number }) {
+  const shell = useShell();
+  const { fail, tasks } = shell;
+  const [detail, setDetail] = useState<PullDetail | null>(null);
+  const [tab, setTab] = useState<"conversation" | "files" | "checks">("conversation");
+  const [diff, setDiff] = useState<string | null>(null);
+  const [comments, setComments] = useState<LineComment[]>([]);
+
+  const loadDetail = async () => {
+    try {
+      setDetail(await api.pullDetail(number));
+    } catch (e) {
+      fail(e);
+    }
+  };
+  usePoll(loadDetail, 30_000, [number]);
+  useChanged(() => {
+    setDetail(null);
+    setDiff(null);
+    setComments([]);
+    setTab("conversation");
+  }, [number]);
+  useEffect(() => {
+    if (tab === "files" && diff == null) api.pullDiff(number).then(setDiff, fail);
+  }, [tab, number]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const task = detail ? tasks.find((t) => t.branch === detail.pull.head && !t.landed) : undefined;
+  const pr = detail?.pull.number === number ? detail : null;
+  if (!pr) return <div className="boot" />;
+
+  return (
+      <div className="task-page with-inspector">
+        <PageHeader
+          title={
+            <>
+              <h2 title={pr.pull.title}>
+                {pr.pull.title} <span className="muted num">#{pr.pull.number}</span>
+              </h2>
+              <StatusPill status={pullStatus(pr.pull)} />
+            </>
+          }
+        >
+          <Tabs
+            value={tab}
+            onChange={setTab}
+            tabs={[
+              { id: "conversation", label: "Conversation" },
+              {
+                id: "files",
+                label: (
+                  <>
+                    Files <span className="tab-count num">{pr.changed_files}</span>
+                    {comments.length > 0 && (
+                      <span className="tab-count accent num">
+                        <MessageSquare size={10} /> {comments.length}
+                      </span>
+                    )}
+                  </>
+                ),
+              },
+              { id: "checks", label: <>Checks <span className="tab-count num">{pr.checks.length}</span></> },
+            ]}
+          />
+        </PageHeader>
+        <div className="task-body">
+          {tab === "conversation" ? (
+            <div className="conversation">
+              <div className="column">
+                <Timeline pr={pr} />
+              </div>
+            </div>
+          ) : tab === "files" ? (
+            <div className="changes">
+              <div className="changes-column">
+                <DiffView
+                  patch={diff}
+                  comments={comments}
+                  onComment={(file, line, side, text) =>
+                    setComments((c) => [...c, { id: `${Date.now()}`, file, line, side, text }])
+                  }
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="conversation">
+              <div className="column">
+                <Checks pr={pr} />
+              </div>
+            </div>
+          )}
+          <PullCard pr={pr} task={task} onChanged={loadDetail} />
+        </div>
+        {pr.pull.state !== "merged" && (
+          <ReviewBox
+            pr={pr}
+            comments={comments}
+            onRemoveComment={(id) => setComments((c) => c.filter((x) => x.id !== id))}
+            onSent={() => {
+              setComments([]);
+              loadDetail();
+            }}
+          />
+        )}
+      </div>
   );
 }
 
@@ -279,7 +285,7 @@ function Checks({ pr }: { pr: PullDetail }) {
           {c.run_id ? (
             <button
               className="link small-text"
-              onClick={() => shell.go({ section: "actions", runId: c.run_id!, jobId: c.job_id ?? undefined }, { browse: true })}
+              onClick={() => shell.go({ section: "actions", runId: c.run_id!, jobId: c.job_id ?? undefined })}
             >
               <Play size={11} /> Open in Actions
             </button>
@@ -306,7 +312,6 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
   }, [pr.pull.number]);
   const p = pr.pull;
   const open = p.state === "open" || p.state === "draft";
-  const conflicting = open && pr.mergeable === "conflicting";
   const failing = pr.checks.filter((c) => c.status === "failure").length;
   const passing = pr.checks.filter((c) => c.status === "success").length;
   const PENDING: Record<string, string> = {
@@ -336,19 +341,7 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
       },
       { undo: false, pending: "Sending the review…" },
     );
-    if (ok) shell.go({ section: "agents", taskId: task.id });
-  };
-  // GitHub won't merge it until the base is merged into the branch.
-  const askCatchUp = async () => {
-    if (!task) return;
-    const ok = await shell.act(
-      async () => {
-        await api.sendToAgent(task.id, catchUpPrompt(p.base, [], true), choiceOf(settings), settings.mode);
-        return `Asked ${task.id} to merge ${p.base} in`;
-      },
-      { undo: false, pending: "Sending to the agent…" },
-    );
-    if (ok) shell.go({ section: "agents", taskId: task.id });
+    if (ok) shell.go({ section: "work", taskId: task.id });
   };
   return (
     <DetailsCard>
@@ -376,29 +369,14 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
             </span>
           </div>
         )}
-        {conflicting && (
+        {open && pr.mergeable === "conflicting" && (
           <div className="inspector-row bad">
             <X size={13} />
-            <span>
-              Conflicts with {p.base}, so GitHub can't merge it.{" "}
-              {task
-                ? "Have the agent merge it in, then push its commit."
-                : `Check it out, merge origin/${p.base} into it, resolve the conflicts and push.`}
-              {task && (
-                <button
-                  className="link"
-                  disabled={task.run?.state === "running"}
-                  title={task.run?.state === "running" ? "The agent is working — ask when it's done" : undefined}
-                  onClick={askCatchUp}
-                >
-                  Ask agent to merge {p.base} in
-                </button>
-              )}
-            </span>
+            <span>Conflicts with {p.base}</span>
           </div>
         )}
         {task && (
-          <button className="inspector-row action" onClick={() => shell.go({ section: "agents", taskId: task.id })}>
+          <button className="inspector-row action" onClick={() => shell.go({ section: "work", taskId: task.id })}>
             <Bot size={13} />
             <span className="truncate">
               Agent task: <b>{task.title}</b>
@@ -421,19 +399,13 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
           <div className="split">
             <Button
               className={confirm === "squash" ? "danger" : "primary"}
-              disabled={p.state === "draft" || conflicting}
-              title={
-                p.state === "draft"
-                  ? "Mark it ready for review first"
-                  : conflicting
-                    ? `Resolve the conflicts with ${p.base} first`
-                    : "Squash and merge on GitHub"
-              }
+              disabled={p.state === "draft"}
+              title={p.state === "draft" ? "Mark it ready for review first" : "Squash and merge on GitHub"}
               onClick={() => merge("squash")}
             >
               {confirm === "squash" ? "Squash and merge?" : "Squash and merge"}
             </Button>
-            <button className="primary split-more" aria-label="Other merge methods" disabled={p.state === "draft" || conflicting} onClick={() => setMenu((m) => !m)}>
+            <button className="primary split-more" aria-label="Other merge methods" disabled={p.state === "draft"} onClick={() => setMenu((m) => !m)}>
               <ChevronDown size={12} />
             </button>
             {menu && (

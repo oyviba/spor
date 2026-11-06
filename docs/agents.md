@@ -124,7 +124,9 @@ with the permission mode the user picked when starting the task.
 
 ### What you see
 
-- **Agents panel** in the sidebar (the rail's Agents section, after Pulls and Actions). One row
+- **Work** in the sidebar (the rail's last section, after Pulls and Actions;
+  it was the Agents panel until #81). Tasks are listed beside your own
+  branches and everyone's open pull requests. One row
   per task: its state, how long it's been running, files changed and +/−,
   and checks once they've run. *Needs you* rows go to the top, highlighted.
   The workspace's repository sidebar gets a count, the way it shows commits

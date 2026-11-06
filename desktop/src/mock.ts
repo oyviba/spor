@@ -783,6 +783,17 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       return "Done";
     case "pulls":
       return f.pulls[args.filter as string] ?? [];
+    case "work_branches": {
+      // Your branches ahead of main, made up from the recorded graph's subjects.
+      const at = Math.floor(Date.now() / 1000);
+      const commit = (subject: string, ago: number) => ({ hash: `${subject.length}`.padEnd(40, "0"), short: "0000000", subject, author: "you", time: at - ago });
+      return [
+        { name: "feat/farewell", base: "main", current: false, commits: [commit("Add farewell()", 5400)], files: 1, additions: 6, deletions: 0, updated: at - 5400 },
+        { name: "docs/contributing", base: "main", current: false, commits: [commit("Add a CONTRIBUTING guide", 9000)], files: 1, additions: 48, deletions: 0, updated: at - 9000 },
+      ];
+    }
+    case "branch_patch":
+      return `diff --git a/greet.py b/greet.py\n--- a/greet.py\n+++ b/greet.py\n@@ -3,0 +4,6 @@\n+\n+\n+def farewell(name):\n+    \"\"\"Say goodbye.\"\"\"\n+    return f\"Goodbye, {name}!\"\n+\n`;
     case "pull_detail":
       return f.pullDetails[n] ?? Promise.reject(`No pull request #${n} in the recording`);
     case "pull_diff":

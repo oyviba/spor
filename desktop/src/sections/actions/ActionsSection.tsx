@@ -289,7 +289,7 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
           .then(() => `Sent the failure to ${task.id}`),
       { undo: false, pending: "Sending the failure…" },
     );
-    if (ok) shell.go({ section: "agents", taskId: task.id });
+    if (ok) shell.go({ section: "work", taskId: task.id });
   };
 
   return (
@@ -312,7 +312,7 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
           <span className="mono">{r.sha.slice(0, 7)}</span>
         </button>
         {task && (
-          <button className="inspector-row action" onClick={() => shell.go({ section: "agents", taskId: task.id })}>
+          <button className="inspector-row action" onClick={() => shell.go({ section: "work", taskId: task.id })}>
             <Bot size={13} />
             <span className="truncate">
               Agent task: <b>{task.title}</b>

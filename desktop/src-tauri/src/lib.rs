@@ -10,6 +10,7 @@ mod history;
 mod inbox;
 mod undo;
 mod watch;
+mod work;
 
 use serde::Serialize;
 use spor::git::Repo;
@@ -499,6 +500,8 @@ pub fn run() {
             github::issues,
             github::issue_detail,
             github::issue_action,
+            work::work_branches,
+            work::branch_patch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Spor");

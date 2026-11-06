@@ -30,6 +30,7 @@ import type {
   TaskSummary,
   TaskPull,
   WorktreeInfo,
+  WorkBranch,
 } from "./types";
 import type { Place } from "./shared/DiffView";
 
@@ -232,6 +233,12 @@ export const api = {
   runPatch: (id: string, index: number) => call<RunPatch>("run_patch", { id, index }),
   /** Take back the task's last run (⌘Z brings it back). */
   undoRun: (id: string) => call<string>("undo_run", { id }),
+
+  // Work
+  /** Your own branches with work on them (not agents'). */
+  workBranches: () => call<WorkBranch[]>("work_branches"),
+  /** A branch's changes since it left the base. */
+  branchPatch: (branch: string) => call<string>("branch_patch", { branch }),
 };
 
 export function errorText(e: unknown): string {

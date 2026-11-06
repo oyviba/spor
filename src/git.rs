@@ -540,6 +540,37 @@ impl Repo {
         Ok(parse_log(&out))
     }
 
+    /// Commits on `branch` that `base` doesn't have, newest first: a
+    /// branch's own work.
+    pub fn branch_commits(&self, base: &str, branch: &str) -> Result<Vec<Commit>, String> {
+        let range = format!("{base}..{branch}");
+        let pretty = format!("--pretty=format:{LOG_FORMAT}");
+        let out = self.run_ok(&["log", "-n200", &pretty, &range])?;
+        Ok(parse_log(&out))
+    }
+
+    /// Files, added and deleted lines on `branch` since it left `base`.
+    pub fn branch_numstat(&self, base: &str, branch: &str) -> (usize, usize, usize) {
+        let range = format!("{base}...{branch}");
+        let out = self
+            .run_ok(&["diff", "--no-ext-diff", "--numstat", &range, "--"])
+            .unwrap_or_default();
+        out.lines().fold((0, 0, 0), |(f, a, d), line| {
+            let mut it = line.split('\t');
+            let n = |s: Option<&str>| s.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            (f + 1, a + n(it.next()), d + n(it.next()))
+        })
+    }
+
+    /// `branch`'s changes since it left `base`, as one patch.
+    pub fn branch_patch(&self, base: &str, branch: &str) -> Result<String, String> {
+        let range = format!("{base}...{branch}");
+        let mut args = vec!["diff"];
+        args.extend(PATCH_FLAGS);
+        args.extend([range.as_str(), "--"]);
+        self.run_ok(&args)
+    }
+
     /// Diff for one working-tree entry. Untracked files have nothing in the
     /// index to compare against, so they're shown as entirely new content.
     pub fn diff_entry(&self, entry: &StatusEntry) -> Result<String, String> {
