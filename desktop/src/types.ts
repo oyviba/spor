@@ -443,6 +443,40 @@ export interface BranchCommit {
   time: number;
 }
 
+/** A work item (#74, #78): a branch with whatever goes with it (its issue,
+ * task folder and agent, pull request, checks), or an issue assigned to you
+ * with no branch yet. The words are `docs/concepts.md`'s; the join is
+ * `spor::work::items`, served by `work_items`. */
+export interface WorkItemInfo {
+  /** `branch:<name>` or `issue:<number>`. */
+  key: string;
+  title: string;
+  branch: string | null;
+  /** What it lands on: the trunk, or another item's branch when stacked. */
+  base: string | null;
+  /** The task's folder, or the checkout the branch is in. */
+  worktree: string | null;
+  /** The task's id. */
+  task: string | null;
+  issue: number | null;
+  pull: {
+    number: number;
+    title: string;
+    state: "open" | "draft" | "merged" | "closed";
+    review: "none" | "approved" | "changesrequested";
+    author: string;
+    url: string;
+  } | null;
+  checks: "passed" | "failed" | "running" | null;
+  owner: { kind: "you" } | { kind: "agent"; name: string } | { kind: "teammate"; login: string };
+  stage: "planned" | "inprogress" | "inreview" | "landed" | "closed";
+  waiting_on: {
+    who: "you" | "agent" | "teammate" | "ci";
+    why: "question" | "unseen" | "review" | "checksfailed" | "changesrequested" | "ready" | null;
+  } | null;
+  updated: number;
+}
+
 /** One of your own branches with work on it (#81): commits its base
  * doesn't have, or checked out. */
 export interface WorkBranch {

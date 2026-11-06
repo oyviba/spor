@@ -779,15 +779,17 @@ pub(crate) struct PrBadge {
 #[tauri::command(async)]
 pub(crate) fn pr_badges(app: State<App>) -> Result<Vec<PrBadge>, String> {
     let repo = app.repo()?;
-    Ok(spor::remote::fetch_prs_in(repo.root())
+    Ok(app
+        .github
+        .open_pulls(repo.root())
         .unwrap_or_default()
         .into_iter()
         .map(|p| PrBadge {
-            branch: p.head_branch,
-            number: p.number,
-            draft: p.draft,
+            draft: p.state == spor::remote::PrState::Draft,
             review: crate::name_of(&p.review),
             checks: crate::name_of(&p.checks),
+            branch: p.head,
+            number: p.number,
         })
         .collect())
 }
@@ -810,10 +812,12 @@ pub(crate) fn pull_request_url(app: State<App>) -> Result<String, String> {
     if tracking.upstream.is_none() {
         return Err("Publish this branch first (Push)".into());
     }
-    let existing = spor::remote::fetch_prs_in(repo.root())
+    let existing = app
+        .github
+        .open_pulls(repo.root())
         .unwrap_or_default()
         .into_iter()
-        .find(|p| p.head_branch == head);
+        .find(|p| p.head == head);
     Ok(match existing {
         Some(pr) => format!("{}/pull/{}", info.web_url, pr.number),
         None => spor::remote::compare_url(&info, &base, &head),

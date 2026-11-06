@@ -831,6 +831,7 @@ pub(crate) fn publish_task(
             agent::available("claude"),
         )
         .map_err(|e| first_line(&e))?;
+    app.github.clear(tasks.root());
     Ok(format!(
         "Opened {}pull request #{number}",
         if draft { "draft " } else { "" }
@@ -862,6 +863,7 @@ pub(crate) fn push_task(
     tasks
         .push(&task, &remote(&app)?, commit)
         .map_err(|e| first_line(&e))?;
+    app.github.clear(tasks.root());
     Ok(match (n, task.pull) {
         (0, _) => format!("{} is up to date", task.branch),
         (n, Some(pr)) => format!(

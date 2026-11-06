@@ -31,6 +31,7 @@ import type {
   TaskPull,
   WorktreeInfo,
   WorkBranch,
+  WorkItemInfo,
 } from "./types";
 import type { Place } from "./shared/DiffView";
 
@@ -52,7 +53,9 @@ async function call<T>(cmd: string, args?: Record<string, unknown> | Uint8Array)
 
 /** What the backend's watcher says changed (`src-tauri/src/watch.rs`):
  * refs (HEAD, branches, tags), the index, the working tree, or agent tasks. */
-export type RepoChange = "refs" | "index" | "worktree" | "tasks";
+/** `work`: a branch moved or a task did something, so a work item may have
+ * changed (sent after `refs` and `tasks`). */
+export type RepoChange = "refs" | "index" | "worktree" | "tasks" | "work";
 
 type Listen = (event: string, fn: () => void) => Promise<() => void>;
 let listenImpl: Listen | null = null;
@@ -251,6 +254,10 @@ export const api = {
   workBranches: () => call<WorkBranch[]>("work_branches"),
   /** A branch's changes since it left the base. */
   branchPatch: (branch: string) => call<string>("branch_patch", { branch }),
+  /** Every work item in the repository, most recently changed first (#78).
+   * GitHub's part is cached in the backend, so call it on every `work`
+   * change. `seen`: when you last looked at each task, by task id. */
+  workItems: (seen: Record<string, number> = {}) => call<WorkItemInfo[]>("work_items", { seen }),
 };
 
 export function errorText(e: unknown): string {

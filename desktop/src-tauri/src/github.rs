@@ -49,16 +49,29 @@ fn root(app: &App) -> Result<std::path::PathBuf, String> {
     Ok(app.repo()?.root().to_path_buf())
 }
 
-/// `filter`: open, yours, review, closed.
+/// `filter`: open, yours, review, closed. Open, yours and review come out
+/// of one cached list of open pull requests (see `cache`), so the sections
+/// that show them share one `gh pr list`.
 #[tauri::command(async)]
 pub(crate) fn pulls(app: State<App>, filter: String) -> Result<Vec<Pull>, String> {
-    let filter = match filter.as_str() {
-        "yours" => gh::PullFilter::Yours,
-        "review" => gh::PullFilter::ReviewRequested,
-        "closed" => gh::PullFilter::Closed,
-        _ => gh::PullFilter::Open,
+    let dir = root(&app)?;
+    let cache = &app.github;
+    let list = match filter.as_str() {
+        "yours" => cache.yours(&dir, &gh::repo(&dir)?),
+        "review" => {
+            let numbers = cache
+                .review_numbers(&gh::repo(&dir)?)
+                .map_err(|e| first_line(&e))?;
+            cache.open_pulls(&dir).map(|all| {
+                all.into_iter()
+                    .filter(|p| numbers.contains(&p.number))
+                    .collect()
+            })
+        }
+        "closed" => gh::list_pulls(&dir, gh::PullFilter::Closed),
+        _ => cache.open_pulls(&dir),
     };
-    Ok(gh::list_pulls(&root(&app)?, filter)
+    Ok(list
         .map_err(|e| first_line(&e))?
         .into_iter()
         .map(Pull::from)
@@ -175,6 +188,7 @@ pub(crate) fn pull_action(
         "reopen" => gh::set_pull_open(&dir, n, true).map(|_| format!("Reopened #{n}")),
         other => return Err(format!("Unknown action {other}")),
     };
+    app.github.clear(&dir);
     result.map_err(|e| first_line(&e))
 }
 
@@ -214,19 +228,25 @@ impl From<gh::Run> for Run {
     }
 }
 
+/// Every branch's runs come from the cache; one branch's or workflow's are
+/// asked for, since the cached list holds only the most recent.
 #[tauri::command(async)]
 pub(crate) fn runs(
     app: State<App>,
     branch: Option<String>,
     workflow: Option<String>,
 ) -> Result<Vec<Run>, String> {
-    Ok(
-        gh::list_runs(&root(&app)?, branch.as_deref(), workflow.as_deref())
-            .map_err(|e| first_line(&e))?
-            .into_iter()
-            .map(Run::from)
-            .collect(),
-    )
+    let dir = root(&app)?;
+    let list = if branch.is_none() && workflow.is_none() {
+        app.github.runs(&dir)
+    } else {
+        gh::list_runs(&dir, branch.as_deref(), workflow.as_deref())
+    };
+    Ok(list
+        .map_err(|e| first_line(&e))?
+        .into_iter()
+        .map(Run::from)
+        .collect())
 }
 
 #[tauri::command(async)]
@@ -291,13 +311,14 @@ pub(crate) fn run_detail(app: State<App>, id: u64) -> Result<RunDetail, String> 
 #[tauri::command(async)]
 pub(crate) fn run_action(app: State<App>, id: u64, action: String) -> Result<String, String> {
     let dir = root(&app)?;
-    match action.as_str() {
+    let result = match action.as_str() {
         "rerun" => gh::rerun(&dir, id, false).map(|_| "Re-running all jobs".to_string()),
         "rerun_failed" => gh::rerun(&dir, id, true).map(|_| "Re-running failed jobs".to_string()),
         "cancel" => gh::cancel_run(&dir, id).map(|_| "Cancelling the run".to_string()),
         other => return Err(format!("Unknown action {other}")),
-    }
-    .map_err(|e| first_line(&e))
+    };
+    app.github.clear(&dir);
+    result.map_err(|e| first_line(&e))
 }
 
 #[derive(Serialize)]
@@ -358,16 +379,17 @@ impl From<gh::Issue> for Issue {
     }
 }
 
-/// `filter`: assigned, yours, open, closed.
+/// `filter`: assigned (cached, as Work reads it too), yours, open, closed.
 #[tauri::command(async)]
 pub(crate) fn issues(app: State<App>, filter: String) -> Result<Vec<Issue>, String> {
-    let filter = match filter.as_str() {
-        "assigned" => gh::IssueFilter::Assigned,
-        "yours" => gh::IssueFilter::Yours,
-        "closed" => gh::IssueFilter::Closed,
-        _ => gh::IssueFilter::Open,
+    let dir = root(&app)?;
+    let list = match filter.as_str() {
+        "assigned" => app.github.assigned_issues(&dir),
+        "yours" => gh::list_issues(&dir, gh::IssueFilter::Yours),
+        "closed" => gh::list_issues(&dir, gh::IssueFilter::Closed),
+        _ => gh::list_issues(&dir, gh::IssueFilter::Open),
     };
-    Ok(gh::list_issues(&root(&app)?, filter)
+    Ok(list
         .map_err(|e| first_line(&e))?
         .into_iter()
         .map(Issue::from)
@@ -414,7 +436,7 @@ pub(crate) fn issue_action(
 ) -> Result<String, String> {
     let dir = root(&app)?;
     let n = number;
-    match action.as_str() {
+    let result = match action.as_str() {
         "comment" => {
             let b = body.unwrap_or_default();
             if b.trim().is_empty() {
@@ -425,6 +447,7 @@ pub(crate) fn issue_action(
         "close" => gh::set_issue_open(&dir, n, false).map(|_| format!("Closed #{n}")),
         "reopen" => gh::set_issue_open(&dir, n, true).map(|_| format!("Reopened #{n}")),
         other => return Err(format!("Unknown action {other}")),
-    }
-    .map_err(|e| first_line(&e))
+    };
+    app.github.clear(&dir);
+    result.map_err(|e| first_line(&e))
 }

@@ -220,6 +220,8 @@ pub(crate) fn sync(app: State<App>, action: String) -> Result<String, String> {
         }
         "push" => {
             app.undo.forget_history();
+            // A new branch's pull request, or new checks on it.
+            app.github.clear(repo.root());
             Ok(match (&tracking.upstream, tracking.ahead) {
                 (None, _) => format!("Published {}", branch.as_deref().unwrap_or("the branch")),
                 (_, 1) => "Pushed 1 commit".into(),

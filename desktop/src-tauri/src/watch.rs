@@ -11,6 +11,9 @@
 //!   committing, at most once a second (Agents, and the open task's
 //!   transcript)
 //!
+//! `refs-changed` and `tasks-changed` are followed by `work-changed`, for
+//! whatever lists work items (#78).
+//!
 //! A burst (a checkout writing a thousand files) comes out as one event of
 //! each kind. The UI still reloads every 30 s in case an event is missed,
 //! on a network filesystem say.
@@ -48,6 +51,12 @@ impl Change {
             Change::Worktree => "worktree-changed",
             Change::Tasks => "tasks-changed",
         }
+    }
+
+    /// Whether a work item can have changed (a branch moved, a task did
+    /// something), so the UI hears `work-changed` too.
+    pub(crate) fn touches_work(self) -> bool {
+        matches!(self, Change::Refs | Change::Tasks)
     }
 
     /// The least time between two events of this kind.

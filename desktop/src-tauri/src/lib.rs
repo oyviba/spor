@@ -4,6 +4,7 @@
 //! core, and these only turn it into JSON and record what Undo needs.
 
 mod agents;
+mod cache;
 mod changes;
 mod github;
 mod history;
@@ -28,6 +29,8 @@ pub(crate) struct App {
     asks: Mutex<(u64, std::collections::BTreeMap<u64, spor::askpass::Request>)>,
     /// The open repository's watcher, sending the UI its changes.
     watch: Mutex<Option<watch::Watch>>,
+    /// What GitHub said, per repository and host, shared by the sections.
+    github: cache::Github,
 }
 
 impl App {
@@ -126,8 +129,16 @@ fn watch_repo(handle: &AppHandle, repo: &Repo) {
     let mut current = app.watch.lock().unwrap();
     *current = None;
     let to = handle.clone();
+    let root = repo.root().to_path_buf();
     match watch::start(repo, move |change| {
+        if change == watch::Change::Refs {
+            // A fetch or a push: what GitHub says may have changed too.
+            to.state::<App>().github.touch(&root);
+        }
         let _ = to.emit(change.event(), ());
+        if change.touches_work() {
+            let _ = to.emit("work-changed", ());
+        }
     }) {
         Ok(w) => *current = Some(w),
         Err(e) => eprintln!("spor: {e}"),
@@ -540,6 +551,7 @@ pub fn run() {
             github::issue_action,
             work::work_branches,
             work::branch_patch,
+            work::work_items,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Spor");

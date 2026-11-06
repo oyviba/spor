@@ -417,6 +417,27 @@ pub fn review_requests(host: &str) -> Result<Vec<ReviewRequest>, String> {
     Ok(found)
 }
 
+/// Your login on `host`: who `@me` is, so a list of open pull requests can
+/// tell yours from your teammates' without asking `gh` again.
+pub fn login(host: &str) -> Result<String, String> {
+    let out = Command::new("gh")
+        .env("GH_HOST", host)
+        .args(["api", "user", "--jq", ".login"])
+        .output()
+        .map_err(|e| format!("Couldn't run gh: {e}"))?;
+    let me = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.status.success() || me.is_empty() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(err
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("gh couldn't say who you are")
+            .to_string());
+    }
+    Ok(me)
+}
+
 /// Whether GitHub would let the PR merge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mergeable {

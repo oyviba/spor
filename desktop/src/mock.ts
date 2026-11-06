@@ -2,7 +2,7 @@
 // It keeps a few tasks in memory, one of which is "working" and grows its
 // transcript over time, and answers the same commands as src-tauri.
 
-import type { AgentChoice, Ask, Issue, IssueDetail, Item, Mode, Pull, RepoInfo, RunInfo, TaskDetail, TaskPull, TaskSummary } from "./types";
+import type { AgentChoice, Ask, Issue, IssueDetail, Item, Mode, Pull, RepoInfo, RunInfo, TaskDetail, TaskPull, TaskSummary, WorkBranch, WorkItemInfo } from "./types";
 
 const now = () => Math.floor(Date.now() / 1000);
 const t0 = now();
@@ -331,7 +331,8 @@ export async function listen(event: string, fn: () => void): Promise<() => void>
   listeners.get(event)!.add(fn);
   return () => listeners.get(event)!.delete(fn);
 }
-const tasksChanged = () => listeners.get("tasks-changed")?.forEach((fn) => fn());
+const tasksChanged = () =>
+  ["tasks-changed", "work-changed"].forEach((e) => listeners.get(e)?.forEach((fn) => fn()));
 const CHANGES_TASKS = new Set([
   "create_task",
   "send_to_agent",
@@ -750,6 +751,143 @@ async function load(): Promise<Fixtures> {
   return fixtures;
 }
 
+/** Your branches ahead of main, made up from the recorded graph's subjects. */
+function mockBranches(): WorkBranch[] {
+  const at = Math.floor(Date.now() / 1000);
+  const commit = (subject: string, ago: number) => ({ hash: `${subject.length}`.padEnd(40, "0"), short: "0000000", subject, author: "you", time: at - ago });
+  return [
+    { name: "feat/farewell", base: "main", current: false, commits: [commit("Add farewell()", 5400)], files: 1, additions: 6, deletions: 0, updated: at - 5400 },
+    { name: "docs/contributing", base: "main", current: false, commits: [commit("Add a CONTRIBUTING guide", 9000)], files: 1, additions: 48, deletions: 0, updated: at - 9000 },
+  ];
+}
+
+/** What `work_items` would say about the tasks kept here, the made-up
+ * branches and the recorded pull requests: a rough copy of
+ * `spor::work::items`, enough to work on the UI with. */
+function mockWorkItems(pulls: Pull[], review: Set<number>, seen: Record<string, number>): WorkItemInfo[] {
+  const me = "you";
+  const summary = (p: Pull): NonNullable<WorkItemInfo["pull"]> => ({
+    number: p.number,
+    title: p.title,
+    state: p.state as NonNullable<WorkItemInfo["pull"]>["state"],
+    review: p.review as NonNullable<WorkItemInfo["pull"]>["review"],
+    author: p.author,
+    url: p.url,
+  });
+  const checks = (p?: Pull): WorkItemInfo["checks"] =>
+    p?.checks === "passing" ? "passed" : p?.checks === "failing" ? "failed" : p?.checks === "pending" ? "running" : null;
+  const pullWaiting = (p: Pull, theirs: boolean): WorkItemInfo["waiting_on"] => {
+    if (p.state === "open" && review.has(p.number)) return { who: "you", why: "review" };
+    if (theirs) return { who: "teammate", why: null };
+    if (p.checks === "failing") return { who: "you", why: "checksfailed" };
+    if (p.checks === "pending") return { who: "ci", why: null };
+    if (p.state !== "open") return null;
+    if (p.review === "changesrequested") return { who: "you", why: "changesrequested" };
+    if (p.review === "approved") return { who: "you", why: "ready" };
+    return { who: "teammate", why: null };
+  };
+  const out: WorkItemInfo[] = [];
+  const claimed = new Set<string>();
+  for (const { summary: t } of tasks) {
+    const pull = pulls.find((p) => p.number === t.pull || p.head === t.branch);
+    const at = t.run?.ended ?? t.run?.started ?? t.created;
+    const unseen = (seen[t.id] ?? 0) < at && t.run != null && t.run.state !== "running";
+    const stage: WorkItemInfo["stage"] = t.landed
+      ? "landed"
+      : t.closed
+        ? "closed"
+        : pull?.state === "open" || unseen
+          ? "inreview"
+          : "inprogress";
+    const settled = stage === "landed" || stage === "closed";
+    claimed.add(t.branch);
+    out.push({
+      key: `branch:${t.branch}`,
+      title: t.title,
+      branch: t.branch,
+      base: t.base,
+      worktree: settled ? null : t.worktree,
+      task: t.id,
+      issue: t.issue,
+      pull: pull ? summary(pull) : null,
+      checks: checks(pull),
+      owner: t.run ? { kind: "agent", name: "Claude Code" } : { kind: "you" },
+      stage,
+      waiting_on: settled
+        ? null
+        : t.asks > 0
+          ? { who: "you", why: "question" }
+          : t.run?.state === "running"
+            ? { who: "agent", why: null }
+            : unseen
+              ? { who: "you", why: "unseen" }
+              : pull
+                ? pullWaiting(pull, false)
+                : null,
+      updated: Math.max(at, pull?.updated ?? 0),
+    });
+  }
+  for (const b of mockBranches()) {
+    if (claimed.has(b.name)) continue;
+    claimed.add(b.name);
+    const pull = pulls.find((p) => p.head === b.name);
+    const theirs = pull != null && pull.author !== me;
+    out.push({
+      key: `branch:${b.name}`,
+      title: pull?.title ?? b.commits.at(-1)?.subject ?? b.name,
+      branch: b.name,
+      base: b.base,
+      worktree: b.current ? repo.root : null,
+      task: null,
+      issue: null,
+      pull: pull ? summary(pull) : null,
+      checks: checks(pull),
+      owner: theirs ? { kind: "teammate", login: pull!.author } : { kind: "you" },
+      stage: pull?.state === "open" ? "inreview" : "inprogress",
+      waiting_on: pull ? pullWaiting(pull, theirs) : null,
+      updated: Math.max(b.updated, pull?.updated ?? 0),
+    });
+  }
+  for (const p of pulls) {
+    if (claimed.has(p.head)) continue;
+    const theirs = p.author !== me;
+    out.push({
+      key: `branch:${p.head}`,
+      title: p.title,
+      branch: p.head,
+      base: p.base,
+      worktree: null,
+      task: null,
+      issue: null,
+      pull: summary(p),
+      checks: checks(p),
+      owner: theirs ? { kind: "teammate", login: p.author } : { kind: "you" },
+      stage: p.state === "open" ? "inreview" : "inprogress",
+      waiting_on: pullWaiting(p, theirs),
+      updated: p.updated,
+    });
+  }
+  for (const { issue: i } of issues.filter(({ issue: i }) => i.open && i.assignees.includes(me))) {
+    if (out.some((w) => w.issue === i.number)) continue;
+    out.push({
+      key: `issue:${i.number}`,
+      title: i.title,
+      branch: null,
+      base: null,
+      worktree: null,
+      task: null,
+      issue: i.number,
+      pull: null,
+      checks: null,
+      owner: { kind: "you" },
+      stage: "planned",
+      waiting_on: null,
+      updated: i.updated,
+    });
+  }
+  return out.sort((a, b) => b.updated - a.updated || a.key.localeCompare(b.key));
+}
+
 async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise<unknown> {
   const f = await load();
   const n = args.number as number;
@@ -836,15 +974,10 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       return "Done";
     case "pulls":
       return f.pulls[args.filter as string] ?? [];
-    case "work_branches": {
-      // Your branches ahead of main, made up from the recorded graph's subjects.
-      const at = Math.floor(Date.now() / 1000);
-      const commit = (subject: string, ago: number) => ({ hash: `${subject.length}`.padEnd(40, "0"), short: "0000000", subject, author: "you", time: at - ago });
-      return [
-        { name: "feat/farewell", base: "main", current: false, commits: [commit("Add farewell()", 5400)], files: 1, additions: 6, deletions: 0, updated: at - 5400 },
-        { name: "docs/contributing", base: "main", current: false, commits: [commit("Add a CONTRIBUTING guide", 9000)], files: 1, additions: 48, deletions: 0, updated: at - 9000 },
-      ];
-    }
+    case "work_branches":
+      return mockBranches();
+    case "work_items":
+      return mockWorkItems(f.pulls.open ?? [], new Set((f.pulls.review ?? []).map((p: Pull) => p.number)), (args.seen ?? {}) as Record<string, number>);
     case "branch_patch":
       return `diff --git a/greet.py b/greet.py\n--- a/greet.py\n+++ b/greet.py\n@@ -3,0 +4,6 @@\n+\n+\n+def farewell(name):\n+    \"\"\"Say goodbye.\"\"\"\n+    return f\"Goodbye, {name}!\"\n+\n`;
     case "pull_detail":
