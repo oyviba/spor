@@ -929,6 +929,30 @@ button.busy::after {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+/* A select is as wide as its longest option (every branch name, "Claude
+ * Code (not installed)"), so the pickers give way before the send button
+ * is pushed out of the box. */
+.composer-footer > * {
+  flex-shrink: 0;
+}
+.composer-footer > .chip-select,
+.composer-footer > .chip-select-wrap {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: max-content;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-footer .chip-select-wrap > svg {
+  flex-shrink: 0;
+}
+.composer-footer .chip-select-wrap > .chip-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-overflow: ellipsis;
 }
 .chip-select,
 .chip-toggle,
@@ -948,6 +972,8 @@ button.busy::after {
 .chip-select {
   appearance: none;
   padding-right: 10px;
+  /* As wide as the chosen option, not the longest one, where supported. */
+  field-sizing: content;
 }
 .chip-select.bare {
   border: 0;
