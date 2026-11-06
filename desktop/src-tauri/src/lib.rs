@@ -462,6 +462,7 @@ pub fn run() {
             agents::task_detail,
             agents::task_patch,
             agents::create_task,
+            agents::hand_to_agent,
             agents::send_to_agent,
             agents::stop_agent,
             agents::land_task,

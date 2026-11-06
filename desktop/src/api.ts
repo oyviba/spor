@@ -194,6 +194,9 @@ export const api = {
   createTask: (prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
     call<TaskSummary>("create_task", { prompt, base, agent, mode }),
   /** A task on a GitHub issue; `prompt` is the issue's (editable) prompt. */
+  /** Hand one of your branches to an agent (#80, #82); ⌘Z takes it back. */
+  handToAgent: (branch: string, prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
+    call<TaskSummary>("hand_to_agent", { branch, prompt, base, agent, mode }),
   createIssueTask: (number: number, prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
     call<TaskSummary>("create_issue_task", { number, prompt, base, agent, mode }),
   /** Push the task's branch and open a pull request for it. */

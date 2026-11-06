@@ -602,6 +602,67 @@ button.busy::after {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The work page's header (#80): title, then the stage track and who it's
+   waiting on, on a second line. */
+.work-header {
+  height: auto;
+  min-height: 52px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.work-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.work-heading .task-title {
+  flex: none;
+}
+.work-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.work-action {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.stage-track {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+.stage-track li {
+  display: flex;
+  align-items: center;
+}
+.stage-track li + li::before {
+  content: "";
+  width: 14px;
+  height: 1px;
+  margin: 0 5px;
+  background: var(--border);
+}
+.stage-track li.done {
+  color: var(--fg-2);
+}
+.stage-track li.on {
+  color: var(--accent);
+  font-weight: 600;
+}
+.stage-track li.on.closed {
+  color: var(--muted);
+}
 .tabs {
   display: flex;
   gap: 2px;
@@ -1115,6 +1176,15 @@ button.busy::after {
   text-align: left;
   color: var(--fg-2);
   min-width: 0;
+}
+/* The work card's first line (#79): its stage, and who it waits on. */
+.work-stage {
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.work-stage .pill {
+  flex-shrink: 0;
 }
 .inspector-row > svg {
   margin-top: 2px;

@@ -1,6 +1,6 @@
 import { Activity, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
-import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary } from "./types";
+import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "./types";
 import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
@@ -44,6 +44,21 @@ import { PullsSection } from "./sections/pulls/PullsSection";
 import { ActionsSection } from "./sections/actions/ActionsSection";
 import { InboxSection, useInbox } from "./sections/inbox/InboxSection";
 import type { InboxItem } from "./sections/inbox/inbox";
+
+/** When you last looked at each task, by task id, as Work keeps it
+ * (`work.seen`, keyed `task:<id>`): whether a finished run is unseen. */
+function seenTasks(): Record<string, number> {
+  try {
+    const seen = JSON.parse(localStorage.getItem("spor.work.seen") ?? "{}") as Record<string, number>;
+    return Object.fromEntries(
+      Object.entries(seen)
+        .filter(([k]) => k.startsWith("task:"))
+        .map(([k, at]) => [k.slice(5), at]),
+    );
+  } catch {
+    return {};
+  }
+}
 
 interface Toast {
   id: number;
@@ -298,6 +313,16 @@ export function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useRepoChanges(reloadTasks, ["tasks", "refs"], [repo?.root], !!repo);
 
+  // Every work item, for the work card in each inspector. GitHub's part is
+  // cached in the backend, so this is cheap on every change.
+  const [work, setWork] = useState<WorkItemInfo[]>([]);
+  const reloadWork = useCallback(async () => {
+    const list = await api.workItems(seenTasks()).catch(() => null);
+    if (list) setWork((old) => (JSON.stringify(old) === JSON.stringify(list) ? old : list));
+  }, []);
+  useRepoChanges(reloadWork, ["work"], [repo?.root], !!repo);
+  useEffect(() => setWork([]), [repo?.root]);
+
   // What needs you in every repository of every workspace: the Inbox, and its badge.
   const everyRepo = [...new Set(workspaces.list.flatMap((w) => w.repos))];
   const inbox = useInbox(everyRepo, !!repo);
@@ -353,6 +378,8 @@ export function App() {
             refresh,
             tasks,
             reloadTasks,
+            work,
+            reloadWork,
             toast,
             fail,
             undo,
@@ -366,6 +393,7 @@ export function App() {
                 return false;
               } finally {
                 await refresh();
+                void reloadWork();
               }
             },
             switchBranch: async (run) => {
@@ -410,7 +438,7 @@ export function App() {
             confirm: (spec) => new Promise((resolve) => setDialog({ kind: "confirm", ...spec, resolve })),
           }
         : null,
-    [repo, state, refresh, tasks, toast, fail, undo, track, target, workspaces], // eslint-disable-line react-hooks/exhaustive-deps
+    [repo, state, refresh, tasks, work, toast, fail, undo, track, target, workspaces], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   /** Switch workspace, opening the repository last open there. */

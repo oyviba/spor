@@ -503,3 +503,104 @@ fn a_local_base_is_taken_as_is() {
     let task = f.tasks.create("Add a thing", "main").unwrap();
     assert_eq!((task.base.as_str(), task.from), ("main", None));
 }
+
+// ── Handing a branch to an agent (#80, #82) ──────────────────────────────────
+
+#[test]
+fn adopt_moves_the_checked_out_branch_and_its_work_into_a_folder() {
+    let f = fixture();
+    let root = f.repo.root().to_path_buf();
+    git(&root, &["checkout", "--quiet", "-b", "feat/greet"]);
+    work(&root, "app.txt", "one\nTWO\nthree\n", Some("Shout two"));
+    // Uncommitted: a change and a new file.
+    std::fs::write(root.join("app.txt"), "one\nTWO\nthree\nfour\n").unwrap();
+    std::fs::write(root.join("notes.txt"), "draft\n").unwrap();
+    std::fs::write(root.join("staged.txt"), "ready\n").unwrap();
+    git(&root, &["add", "staged.txt"]);
+
+    let (task, moved) = f
+        .tasks
+        .adopt("feat/greet", "Finish the greeting", "main")
+        .unwrap();
+    assert!(moved);
+    assert_eq!(task.branch, "feat/greet");
+    assert_eq!(task.base, "main");
+    assert!(!task.owns_branch());
+    // Your checkout is back on main, clean.
+    assert_eq!(f.repo.tracking().unwrap().branch.as_deref(), Some("main"));
+    assert!(f.repo.status().unwrap().is_empty());
+    // The folder has the branch and the work.
+    assert_eq!(
+        git(&task.worktree, &["branch", "--show-current"]).trim(),
+        "feat/greet"
+    );
+    assert_eq!(
+        std::fs::read_to_string(task.worktree.join("app.txt")).unwrap(),
+        "one\nTWO\nthree\nfour\n"
+    );
+    assert!(task.worktree.join("notes.txt").exists());
+    assert!(
+        git(&task.worktree, &["status", "--porcelain"]).contains("A  staged.txt"),
+        "what was staged is still staged"
+    );
+    assert!(
+        f.repo.stashes().is_empty(),
+        "the stash it moved through is gone"
+    );
+    assert_eq!(f.tasks.stats(&task).commits, 1);
+
+    // Once is enough.
+    assert!(f.tasks.adopt("feat/greet", "Again", "main").is_err());
+
+    // Taking it back: the branch and its (newer) work come home.
+    std::fs::write(task.worktree.join("notes.txt"), "draft, by the agent\n").unwrap();
+    f.tasks.give_back(&task, true).unwrap();
+    assert!(!task.worktree.exists());
+    assert!(f.tasks.get(&task.id).is_none());
+    assert_eq!(
+        f.repo.tracking().unwrap().branch.as_deref(),
+        Some("feat/greet")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("notes.txt")).unwrap(),
+        "draft, by the agent\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("app.txt")).unwrap(),
+        "one\nTWO\nthree\nfour\n"
+    );
+}
+
+#[test]
+fn adopt_leaves_a_branch_that_isnt_checked_out_where_it_is() {
+    let f = fixture();
+    let root = f.repo.root().to_path_buf();
+    git(&root, &["branch", "feat/later"]);
+    std::fs::write(root.join("mine.txt"), "not for the agent\n").unwrap();
+    let (task, moved) = f.tasks.adopt("feat/later", "Do it", "main").unwrap();
+    assert!(!moved);
+    assert!(root.join("mine.txt").exists(), "your checkout's work stays");
+    assert!(!task.worktree.join("mine.txt").exists());
+    assert!(
+        f.tasks.adopt("main", "Do it", "main").is_err(),
+        "not the base itself"
+    );
+}
+
+#[test]
+fn discarding_an_adopted_branch_keeps_the_branch() {
+    let f = fixture();
+    let root = f.repo.root().to_path_buf();
+    git(&root, &["branch", "feat/keep"]);
+    let (task, _) = f.tasks.adopt("feat/keep", "Try something", "main").unwrap();
+    work(&task.worktree, "app.txt", "agent\n", Some("Agent's try"));
+    let undo = f.tasks.discard(&task).unwrap();
+    assert!(!task.worktree.exists());
+    assert!(
+        f.repo.resolve("refs/heads/feat/keep").is_ok(),
+        "your branch stays"
+    );
+    // ⌘Z brings the folder back on the same branch.
+    f.tasks.restore(&undo).unwrap();
+    assert!(task.worktree.exists());
+}

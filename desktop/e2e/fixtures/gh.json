@@ -391,7 +391,7 @@
  "issues": [
   {
    "number": 7,
-   "title": "Say goodbye as well as hello",
+   "title": "greet() should take an optional title",
    "author": {
     "login": "grace"
    },
@@ -408,7 +408,8 @@
    ],
    "comments": [],
    "updatedAt": "2026-11-03T09:00:00Z",
-   "url": "https://github.com/demo/greeter/issues/7"
+   "url": "https://github.com/demo/greeter/issues/7",
+   "body": "So it can say \"Hello, Dr Ada!\". Keep the old call working."
   },
   {
    "number": 6,

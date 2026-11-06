@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, "..", "fixtures", "gh.json")
 STATE = os.environ.get("FAKE_GH_STATE")
 LOG = os.environ.get("FAKE_GH_LOG")
-EMPTY = {"comments": {}, "merged": [], "approved": [], "closed": [], "reruns": [], "cancelled": []}
+EMPTY = {"comments": {}, "merged": [], "approved": [], "closed": [], "reruns": [], "cancelled": [], "created": []}
 
 
 def load_state():
@@ -62,6 +62,7 @@ def options(argv):
                 "--rebase",
                 "--failed",
                 "--allow-escape-sequences",
+                "--draft",
             )
             opts[a[2:]] = argv[i + 1] if takes_value else True
             i += 1 if takes_value else 0
@@ -83,14 +84,21 @@ def out(data, opts):
     sys.stdout.write(done.stdout)
 
 
+def git(*args):
+    done = subprocess.run(["git", *args], capture_output=True, text=True)
+    return done.stdout if done.returncode == 0 else ""
+
+
 def pulls(fixtures, state):
-    """The fixture's pull requests, with what's been done to them."""
+    """The fixture's pull requests and the ones opened since (`pr create`),
+    with what's been done to them."""
     result = []
-    for p in copy.deepcopy(fixtures["pulls"]):
+    for p in copy.deepcopy(fixtures["pulls"]) + copy.deepcopy(state["created"]):
         n = str(p["number"])
         p["comments"] = p.get("comments", []) + state["comments"].get(n, [])
         if p["number"] in state["merged"]:
             p["state"] = "MERGED"
+            p["mergeCommit"] = p.get("mergeCommit") or {"oid": "c0ffee" + str(p["number"]).rjust(34, "0")}
         elif p["number"] in state["closed"]:
             p["state"] = "CLOSED"
         if p["number"] in state["approved"]:
@@ -150,7 +158,52 @@ def main():
     elif cmd == ["pr", "view"]:
         out(find(pulls(fixtures, state), "number", pos[2]), opts)
     elif cmd == ["pr", "diff"]:
-        sys.stdout.write(find(fixtures["pulls"], "number", pos[2]).get("diff", ""))
+        p = find(pulls(fixtures, state), "number", pos[2])
+        # One opened here: its branch's diff, from the repository gh runs in.
+        sys.stdout.write(p.get("diff") or git("diff", f'{p["baseRefName"]}...{p["headRefName"]}'))
+    elif cmd == ["pr", "create"]:
+        # A new pull request from a pushed branch: green checks, no reviews.
+        number = max(p["number"] for p in pulls(fixtures, state)) + 1
+        head, base = opts["head"], opts.get("base", "main")
+        url = f"https://github.com/demo/greeter/pull/{number}"
+        stat = git("diff", "--shortstat", f"{base}...{head}")
+        nums = [int(w) for w in stat.replace(",", " ").split() if w.isdigit()]
+        check = {
+            "__typename": "CheckRun",
+            "workflowName": "CI",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": f"{url}/checks",
+            "startedAt": "2026-11-04T12:00:00Z",
+            "completedAt": "2026-11-04T12:01:00Z",
+        }
+        state["created"].append(
+            {
+                "number": number,
+                "title": opts.get("title", head),
+                "author": {"login": fixtures["me"]},
+                "headRefName": head,
+                "baseRefName": base,
+                "state": "OPEN",
+                "isDraft": "draft" in opts,
+                "reviewDecision": "",
+                "statusCheckRollup": [{**check, "name": "lint"}, {**check, "name": "test"}],
+                "updatedAt": "2026-11-04T12:00:00Z",
+                "additions": nums[1] if len(nums) > 1 else 0,
+                "deletions": nums[2] if len(nums) > 2 else 0,
+                "url": url,
+                "body": opts.get("body", ""),
+                "mergeable": "MERGEABLE",
+                "changedFiles": nums[0] if nums else 0,
+                "commits": [{"oid": "c"}],
+                "reviews": [],
+                "comments": [],
+                "reviewRequests": [],
+                "mergeCommit": None,
+            }
+        )
+        save_state(state)
+        print(url)
     elif cmd == ["pr", "comment"]:
         state["comments"].setdefault(pos[2], []).append(
             {"author": {"login": fixtures["me"]}, "body": opts["body"], "createdAt": "2026-11-04T12:00:00Z"}
@@ -180,6 +233,8 @@ def main():
             owner, name = p["url"].split("/")[3:5]
             p["repository"] = {"name": name, "nameWithOwner": f"{owner}/{name}"}
         out(items, opts)
+    elif cmd == ["issue", "view"]:
+        out(find(fixtures.get("issues", []), "number", pos[2]), opts)
     elif cmd == ["issue", "list"]:
         items = [i for i in fixtures.get("issues", []) if i.get("state", "OPEN") == opts.get("state", "open").upper()]
         if opts.get("assignee") == "@me":

@@ -2,18 +2,16 @@ import { useState } from "react";
 import { useChanged } from "../../shared/hooks";
 import type { SetupInfo, TaskDetail, TaskPull } from "../../types";
 import { duration } from "./transcript";
-import { pullStatus } from "../pulls/PullsSection";
-import { StatusPill } from "../../shared/StatusPill";
+import { useShell } from "../../shared/app";
 import { Button } from "../../shared/Button";
+import { WorkCard } from "../../shared/WorkCard";
+import { findWork, itemFromTask } from "../../shared/work";
 import {
   AgentIcon,
   Alert,
   ArrowUp,
-  Branch,
   ChevronDown,
   Copy,
-  Folder,
-  IssueIcon,
   Merge,
   MessageSquare,
   PullRequest,
@@ -22,12 +20,10 @@ import {
   Trash,
 } from "../../shared/Icons";
 
-/** What the card does with the task's issue and pull request. */
+/** What the card does with the task's pull request. */
 export interface GithubActions {
   /** Its pull request, once it has one (#24, #47). */
   pull?: TaskPull;
-  onShowIssue: (n: number) => void;
-  onShowPull: (n: number) => void;
   onPublish: (draft: boolean, commitUncommitted: boolean) => unknown;
   /** Push to its PR; with `commitUncommitted`, uncommitted work goes too. */
   onPush: (commitUncommitted: boolean) => unknown;
@@ -35,7 +31,7 @@ export interface GithubActions {
   /** Send its PR's failed Actions jobs to the agent. */
   onSendFailure: () => unknown;
   onSettle: (commit: string) => unknown;
-  /** Squash and merge its PR on GitHub, then clean up as `onSettle` does. */
+  /** Land its PR (squash and merge on GitHub), then clean up as `onSettle` does. */
   onMerge: () => unknown;
   /** Mark its draft PR ready for review. */
   onReady: () => unknown;
@@ -46,7 +42,6 @@ export interface GithubActions {
 interface Props extends GithubActions {
   detail: TaskDetail;
   baseCheckedOut: boolean;
-  onOpenFolder: () => unknown;
   onCopy: (text: string, what: string) => void;
   onShowChanges: () => void;
   onLand: (merge: boolean, commitUncommitted: boolean) => unknown;
@@ -54,13 +49,15 @@ interface Props extends GithubActions {
   onAskRebase: () => void;
   /** Ask the agent to put back what it would undo on the base. */
   onAskRestore: () => void;
-  onShowBranch: () => void;
   onRerunSetup: () => unknown;
 }
 
-/** The task's details and landing actions, in a small floating card. */
+/** The task's details and landing actions, in a small floating card, under
+ * the work card that links its issue, branch, folder, PR and checks. */
 export function Inspector({ detail, ...p }: Props) {
+  const shell = useShell();
   const t = detail.task;
+  const item = findWork(shell.work, { task: t.id }) ?? itemFromTask(t, p.pull?.pull);
   const s = t.stats;
   const running = t.run?.state === "running";
   const [includeUncommitted, setIncludeUncommitted] = useState(true);
@@ -125,55 +122,29 @@ export function Inspector({ detail, ...p }: Props) {
         ? "It has uncommitted changes"
         : null;
 
-  // Where it came from and where it went, on GitHub.
-  const github = (t.issue != null || t.pull != null || pr) && (
+  // Work the agent did that its pull request doesn't have yet.
+  const unpushed = prOpen && (s.unpushed > 0 || s.uncommitted > 0) && (
     <div className="inspector-section">
-      {t.issue != null && (
-        <button className="inspector-row action" onClick={() => p.onShowIssue(t.issue!)} title="Show the issue">
-          <IssueIcon size={13} />
-          <span>
-            Issue <span className="num">#{t.issue}</span>
-          </span>
-        </button>
-      )}
-      {!pr && t.pull != null && (
-        <button className="inspector-row action" onClick={() => p.onShowPull(t.pull!)}>
-          <PullRequest size={13} />
-          <span>
-            Pull request <span className="num">#{t.pull}</span>
-          </span>
-        </button>
-      )}
-      {pr && (
-        <button className="inspector-row action" onClick={() => p.onShowPull(pr.number)} title={pr.title}>
-          <PullRequest size={13} />
-          <span className="num">#{pr.number}</span>
-          <span className="flex-1" />
-          <StatusPill status={pullStatus(pr)} />
-        </button>
-      )}
-      {prOpen && (s.unpushed > 0 || s.uncommitted > 0) && (
-        <div className="inspector-row warn">
-          <ArrowUp size={13} />
-          <span>
-            {[
-              s.unpushed > 0 && `${s.unpushed} ${s.unpushed === 1 ? "commit" : "commits"}`,
-              s.uncommitted > 0 && `${s.uncommitted} uncommitted ${s.uncommitted === 1 ? "file" : "files"}`,
-            ]
-              .filter(Boolean)
-              .join(" and ")}{" "}
-            not on #{pr.number} yet
-            <Button
-              className="link"
-              onClick={() => p.onPush(s.uncommitted > 0)}
-              disabled={running}
-              title={s.uncommitted > 0 ? "Commit what it left uncommitted, and push" : undefined}
-            >
-              {s.uncommitted > 0 ? "Commit and push" : "Push"}
-            </Button>
-          </span>
-        </div>
-      )}
+      <div className="inspector-row warn">
+        <ArrowUp size={13} />
+        <span>
+          {[
+            s.unpushed > 0 && `${s.unpushed} ${s.unpushed === 1 ? "commit" : "commits"}`,
+            s.uncommitted > 0 && `${s.uncommitted} uncommitted ${s.uncommitted === 1 ? "file" : "files"}`,
+          ]
+            .filter(Boolean)
+            .join(" and ")}{" "}
+          not on #{pr.number} yet
+          <Button
+            className="link"
+            onClick={() => p.onPush(s.uncommitted > 0)}
+            disabled={running}
+            title={s.uncommitted > 0 ? "Commit what it left uncommitted, and push" : undefined}
+          >
+            {s.uncommitted > 0 ? "Commit and push" : "Push"}
+          </Button>
+        </span>
+      </div>
     </div>
   );
 
@@ -187,21 +158,18 @@ export function Inspector({ detail, ...p }: Props) {
               Landed on <b>{t.base}</b> as <code>{t.landed.slice(0, 7)}</code>
             </span>
           ) : (
-            <span>Closed — its pull request wasn't merged</span>
+            <span>Closed — its pull request didn't land</span>
           )}
         </div>
-        {github}
+        <WorkCard item={item} from="work" actions={false} />
       </aside>
     );
   }
 
   return (
     <aside className="inspector">
+      <WorkCard item={item} from="work" actions={false} />
       <div className="inspector-section">
-        <button className="inspector-row action" onClick={p.onOpenFolder} title={t.worktree}>
-          <Folder size={13} />
-          <span className="truncate">{t.worktree.split("/").slice(-2).join("/")}</span>
-        </button>
         <button className="inspector-row action" onClick={() => p.onCopy(t.command, "Agent command")}>
           <Copy size={13} />
           <span>Copy agent command</span>
@@ -209,12 +177,11 @@ export function Inspector({ detail, ...p }: Props) {
         {detail.setup && <SetupRow setup={detail.setup} running={running} onRerun={p.onRerunSetup} />}
       </div>
       <div className="inspector-section">
-        <button className="inspector-row action" onClick={p.onShowBranch} title="Show it in History">
-          <Branch size={13} />
-          <span className="truncate">
-            <code>{t.branch}</code> <span className="muted">from {t.from ?? t.base}</span>
-          </span>
-        </button>
+        {t.from && (
+          <div className="inspector-row muted">
+            <span className="truncate">Started from {t.from}</span>
+          </div>
+        )}
         {s.base_moved && !done && (
           <div className="inspector-row warn">
             <Alert size={13} />
@@ -262,7 +229,7 @@ export function Inspector({ detail, ...p }: Props) {
           </span>
         </button>
       </div>
-      {github}
+      {unpushed}
       {lastRun && (
         <div className="inspector-section">
           <div className="inspector-row">
@@ -277,7 +244,7 @@ export function Inspector({ detail, ...p }: Props) {
       )}
       {merged && (
         <div className="inspector-actions">
-          <div className="inspector-note">Its pull request was merged. Its folder and branch can go.</div>
+          <div className="inspector-note">Its pull request landed. Its folder and branch can go.</div>
           <Button
             className="primary"
             disabled={running}
@@ -297,7 +264,7 @@ export function Inspector({ detail, ...p }: Props) {
             title="Mark it closed and remove its folder and branch (⌘Z undoes)"
             onClick={p.onClose}
           >
-            <Trash size={12} /> Close task
+            <Trash size={12} /> Clean up
           </Button>
         </div>
       )}
@@ -315,15 +282,15 @@ export function Inspector({ detail, ...p }: Props) {
             title={
               mergeBlocked ??
               (pr.checks === "failing"
-                ? "Its checks are failing — squash and merge on GitHub anyway, then clean up"
+                ? "Its checks are failing — land it anyway: squash and merge on GitHub, then clean up"
                 : pr.checks === "pending"
-                  ? "Its checks are still running — squash and merge on GitHub anyway, then clean up"
+                  ? "Its checks are still running — land it anyway: squash and merge on GitHub, then clean up"
                   : "Squash and merge on GitHub, then remove its folder and branch (⌘Z brings them back)")
             }
             onClick={() => (confirmMerge ? work("merge", p.onMerge) : setConfirmMerge(true))}
             onBlur={() => setConfirmMerge(false)}
           >
-            <Merge size={12} /> {confirmMerge ? `Squash and merge #${pr.number}?` : "Squash and merge"}
+            <Merge size={12} /> {confirmMerge ? `Land #${pr.number} on ${t.base}?` : `Land #${pr.number}`}
           </Button>
           {pr?.checks === "failing" && (
             <Button
@@ -364,12 +331,12 @@ export function Inspector({ detail, ...p }: Props) {
               title={publishBlocked ?? `Push ${t.branch} and open a pull request into ${t.base}`}
               onClick={() => work("publish", () => p.onPublish(false, includeUncommitted))}
             >
-              <PullRequest size={12} /> Open pull request
+              <PullRequest size={12} /> Publish
             </Button>
             <button
               className="ghost split-more"
               disabled={publishBlocked != null || working != null}
-              aria-label="More ways to open a pull request"
+              aria-label="More ways to publish"
               onClick={() => setPrMenu((v) => !v)}
             >
               <ChevronDown size={12} />
@@ -382,7 +349,7 @@ export function Inspector({ detail, ...p }: Props) {
                     work("publish", () => p.onPublish(true, includeUncommitted));
                   }}
                 >
-                  Open as a draft
+                  Publish as a draft
                 </button>
               </div>
             )}

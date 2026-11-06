@@ -33,7 +33,12 @@ backend), the end-to-end tests and the app's layout.
 
 You come to spor with a few questions, and the rail is ordered by them:
 what needs me, what's in flight, what's in my checkout, what happened. Each
-is a list in the sidebar, a page, and a details card:
+is a list in the sidebar, a page, and a details card. What you follow is a
+**work item** (a branch with its issue, task folder, agent, pull request and
+checks) moving from *Planned* to *Landed*, and every section uses the same
+words for it: [docs/concepts.md](docs/concepts.md). [docs/journeys.md](docs/journeys.md)
+has five journeys through it, each with a budget of how often it changes
+section, run as end-to-end tests.
 
 - **Inbox** (⌘1) — what needs you, across every repository of every
   workspace: an agent waiting on an answer, a finished run you haven't
@@ -52,8 +57,8 @@ is a list in the sidebar, a page, and a details card:
   task, an issue's, or a follow-up; they're kept in `.git/spor/attachments/`
   and the agent is told where to find them. Watch the conversation, answer its questions, steer it while it works, review its
   changes with line comments, send feedback, undo a run, then **Land** it
-  (one squashed commit, or a merge commit), open a pull request for it, or
-  discard it. A work item's issue, pull request and CI runs all open here,
+  (one squashed commit, or a merge commit), **Publish** it as a pull request
+  and land that, or **Discard** it. A work item's issue, pull request and CI runs all open here,
   wherever you click them from. [docs/agents.md](docs/agents.md) has the
   design
 - **Changes** (⌘3) — staged and unstaged files; click lines in a diff (shift-click
@@ -79,9 +84,9 @@ Below a divider, three browsers for GitHub, for what doesn't belong to a
 piece of work yet (an issue nobody has started, a run on `main`):
 
 - **Issues**, **Pull requests**, **Actions** (⌘5–⌘7) — through `gh`: an
-  issue and its comments (and *Start agent task* from it); a PR's
+  issue and its comments (and *Start with agent* from it); a PR's
   conversation, files and checks, with comments, line comments, approve,
-  merge, check out; a run's jobs and its log folded by step, re-run and
+  land, check out; a run's jobs and its log folded by step, re-run and
   cancel. Branch labels in the graph carry their open PR's number, review
   state and CI (`#42✓`)
 

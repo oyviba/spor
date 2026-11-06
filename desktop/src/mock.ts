@@ -335,6 +335,7 @@ const tasksChanged = () =>
   ["tasks-changed", "work-changed"].forEach((e) => listeners.get(e)?.forEach((fn) => fn()));
 const CHANGES_TASKS = new Set([
   "create_task",
+  "hand_to_agent",
   "send_to_agent",
   "stop_agent",
   "land_task",
@@ -525,6 +526,25 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         if (agent.kind !== "none") start(t, prompt, agent);
         return t.summary;
       }
+      case "hand_to_agent": {
+        // Your branch, in its own folder with an agent (#80, #82).
+        const prompt = (args.prompt as string).trim();
+        if (!prompt) throw "Say what the agent should do first";
+        const branch = args.branch as string;
+        if (tasks.some((x) => x.summary.branch === branch && !x.summary.landed && !x.summary.closed)) throw `${branch} is already a task`;
+        const sid = slug(branch.split("/").pop() ?? branch);
+        const t: MockTask = {
+          summary: { ...summary(sid, prompt, now(), startOf(args.base as string)), branch },
+          transcript: [],
+          runs: [],
+          patch: "",
+          script: [],
+        };
+        tasks.unshift(t);
+        const agent = args.agent as AgentChoice;
+        if (agent.kind !== "none") start(t, prompt, agent);
+        return t.summary;
+      }
       case "send_to_agent": {
         const t = find(id);
         start(t, (args.message as string | null) ?? t.summary.prompt, args.agent as AgentChoice);
@@ -644,7 +664,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           taskPulls[id].pull = { ...taskPulls[id].pull, state: "merged", review: "approved" };
           taskPulls[id].merge_commit = "c0ffee1d2e3f";
         }, 20000);
-        return `Opened ${args.draft ? "draft " : ""}pull request #${n}`;
+        return `Published ${id} as ${args.draft ? "a draft " : ""}pull request #${n}`;
       }
       case "push_task": {
         const t = find(id);

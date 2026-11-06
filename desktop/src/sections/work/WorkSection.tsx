@@ -10,9 +10,10 @@ import { EmptyState } from "../../shared/Layout";
 import { Sidebar } from "./Sidebar";
 import { BranchPage } from "./BranchPage";
 import { FromIssue } from "./FromIssue";
-import { PullPage } from "../pulls/PullsSection";
+import { PullView } from "./pull";
 import { NewTask } from "../agents/NewTask";
-import { TaskPage, type Tab } from "../agents/TaskPage";
+import { TaskView } from "./TaskView";
+import type { WorkTab } from "./WorkPage";
 import { choiceOf, useAgentSettings, type ComposerHandle } from "../agents/Composer";
 
 /** What the page shows: something to start, or one work item. */
@@ -51,7 +52,7 @@ export function WorkSection() {
   // The Changes tab: everything against the base, or one run's changes.
   const [source, setSource] = useState<"all" | number>("all");
   const [runPatch, setRunPatch] = useState<{ key: string; value: RunPatch } | null>(null);
-  const [tab, setTab] = useState<Tab>("conversation");
+  const [tab, setTab] = useState<WorkTab>("agent");
   const [settings, setSettings] = useAgentSettings();
   const [seen, setSeen] = useStored<Record<string, number>>("work.seen", {});
   const [settledOpen, setSettledOpen] = useStored("work.settled", false);
@@ -117,12 +118,12 @@ export function WorkSection() {
       for (const p of list)
         if (now.has(p.task) && !merged.current.has(p.task))
           toast(
-            `#${p.pull.number} ${p.pull.state === "merged" ? "merged" : "was closed"} — ${p.task} can be cleaned up`,
+            `#${p.pull.number} ${p.pull.state === "merged" ? "landed" : "was closed"} — ${p.task} can be cleaned up`,
             "ok",
             false,
             p.pull.state === "merged"
               ? { label: "Clean up", run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`) }
-              : { label: "Close task", run: () => close(p.task) },
+              : { label: "Clean up", run: () => close(p.task) },
           );
     merged.current = now;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -169,7 +170,7 @@ export function WorkSection() {
   useRepoChanges(refreshDetail, ["tasks", "refs"], [selectedId], !!selectedId);
   useChanged(() => {
     setDetail(null);
-    setTab("conversation");
+    setTab("agent");
     setFocus(null);
     setSource("all");
   }, [selectedId]);
@@ -296,7 +297,7 @@ export function WorkSection() {
     }
     return api
       .sendToAgent(id, text, choiceOf(settings), settings.mode)
-      .then(() => setTab("conversation"))
+      .then(() => setTab("agent"))
       .then(afterChange, fail);
   };
 
@@ -315,8 +316,6 @@ export function WorkSection() {
   const github = (id: string) => ({
     pull: pulls[id],
     // The work item's own issue and PR: show them, not the item again.
-    onShowIssue: (n: number) => shell.go({ section: "issues", number: n }, { browse: true }),
-    onShowPull: (n: number) => shell.go({ section: "pulls", number: n }, { browse: true }),
     onPublish: async (draft: boolean, commitUncommitted: boolean) =>
       (await undoesOk("Open the pull request anyway?")) &&
       shell
@@ -336,17 +335,17 @@ export function WorkSection() {
           pending: commitUncommitted ? "Committing and pushing…" : "Pushing…",
         })
         .then(afterChange),
-    // From prompt to merged in one place: merge on GitHub, then clean up
+    // From prompt to landed in one place: merge on GitHub, then clean up
     // at once (⌘Z brings its folder and branch back).
     onMerge: async () => {
       const pr = pulls[id]?.pull;
       if (!pr) return;
       const ok = await shell.act(() => api.pullAction(pr.number, "squash"), {
         undo: false,
-        pending: `Merging #${pr.number} on GitHub…`,
+        pending: `Landing #${pr.number} on GitHub…`,
       });
       if (!ok) return;
-      // Cleaned up here, so no "merged — can be cleaned up" note follows.
+      // Cleaned up here, so no "landed — can be cleaned up" note follows.
       merged.current?.add(id);
       const list = await api.taskPulls().catch(() => [] as TaskPull[]);
       await settle(id, list.find((p) => p.task === id)?.merge_commit ?? `#${pr.number}`);
@@ -429,11 +428,11 @@ export function WorkSection() {
             <NewTask repo={repo} settings={settings} onSettings={setSettings} onCreate={create} />
           )
         ) : view.kind === "pull" ? (
-          <PullPage number={view.number} />
+          <PullView number={view.number} from="work" />
         ) : view.kind === "branch" ? (
           selectedItem?.kind === "branch" ? (
             selectedItem.pull ? (
-              <PullPage number={selectedItem.pull.number} />
+              <PullView number={selectedItem.pull.number} from="work" />
             ) : (
               <BranchPage branch={selectedItem.branch} />
             )
@@ -443,7 +442,7 @@ export function WorkSection() {
             </EmptyState>
           )
         ) : shown ? (
-          <TaskPage
+          <TaskView
             ref={composer}
             repo={{ ...repo, branch: shell.state?.branch ?? repo.branch }}
             detail={shown}
@@ -532,9 +531,8 @@ export function WorkSection() {
             }
             onAskRebase={askRebase}
             onAskRestore={askRestore}
-            onOpenFolder={() => api.openFolder(shown.task.id).catch(fail)}
             onCopy={(text, what) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), fail)}
-            onShowBranch={() => shell.go({ section: "history", branch: shown.task.branch })}
+            onOpenFolder={() => api.openFolder(shown.task.id).catch(fail)}
             github={github(shown.task.id)}
           />
         ) : (
