@@ -1685,7 +1685,8 @@ mod tests {
 
     #[test]
     fn merge_refusals_say_what_to_do() {
-        let dirty = "X Pull request o/r#73 is not mergeable: the merge commit cannot be cleanly created.";
+        let dirty =
+            "X Pull request o/r#73 is not mergeable: the merge commit cannot be cleanly created.";
         assert!(merge_refusal(73, dirty).starts_with("#73 conflicts with its base branch"));
         let behind = "X Pull request o/r#5 is not mergeable: the head branch is not up to date with the base branch.";
         assert!(merge_refusal(5, behind).contains("behind"));
