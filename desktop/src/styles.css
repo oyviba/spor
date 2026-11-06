@@ -1116,6 +1116,15 @@ button.busy::after {
   color: var(--fg-2);
   min-width: 0;
 }
+/* The work card's first line (#79): its stage, and who it waits on. */
+.work-stage {
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.work-stage .pill {
+  flex-shrink: 0;
+}
 .inspector-row > svg {
   margin-top: 2px;
   flex-shrink: 0;

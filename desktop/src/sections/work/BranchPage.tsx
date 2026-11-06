@@ -7,7 +7,9 @@ import { Button } from "../../shared/Button";
 import { DetailsCard, PageHeader, Tabs } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
 import { StatusPill } from "../../shared/StatusPill";
-import { Branch, Commit, History, PullRequest } from "../../shared/Icons";
+import { Commit, PullRequest } from "../../shared/Icons";
+import { WorkCard } from "../../shared/WorkCard";
+import { findWork, itemFromBranch } from "../../shared/work";
 import { ago } from "../agents/transcript";
 
 type Tab = "commits" | "changes";
@@ -28,6 +30,7 @@ export function BranchPage({ branch }: { branch: WorkBranch }) {
   }, [tab, key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const now = Date.now();
+  const item = findWork(shell.work, { branch: branch.name }) ?? { ...itemFromBranch(branch.name), base: branch.base };
   const title = branch.commits[branch.commits.length - 1]?.subject ?? branch.name;
 
   return (
@@ -83,13 +86,8 @@ export function BranchPage({ branch }: { branch: WorkBranch }) {
           </div>
         )}
         <DetailsCard>
+          <WorkCard item={item} from="work" />
           <div className="inspector-section">
-            <div className="inspector-row">
-              <Branch size={13} />
-              <span className="truncate">
-                <code>{branch.name}</code> <span className="muted">→ {branch.base}</span>
-              </span>
-            </div>
             <div className="inspector-row">
               <span className="diffstat num">
                 <span className="add">+{branch.additions}</span> <span className="del">−{branch.deletions}</span>
@@ -98,10 +96,6 @@ export function BranchPage({ branch }: { branch: WorkBranch }) {
                 {branch.files} files · {branch.commits.length} commits
               </span>
             </div>
-            <button className="inspector-row action" onClick={() => shell.go({ section: "history", branch: branch.name })}>
-              <History size={13} />
-              <span>Show in History</span>
-            </button>
           </div>
           <div className="inspector-actions">
             {branch.commits.length > 0 && (

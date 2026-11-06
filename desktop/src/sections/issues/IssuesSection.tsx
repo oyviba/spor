@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Issue, IssueDetail, TaskSummary } from "../../types";
 import { useShell } from "../../shared/app";
+import { WorkCard } from "../../shared/WorkCard";
+import { findWork, itemFromIssue, itemFromTask } from "../../shared/work";
 import { useChanged, usePoll, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
@@ -11,7 +13,7 @@ import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
 import { isOpen } from "../agents/status";
 import { ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
-import { ArrowUp, Bot, Branch, External, MessageSquare, Tag, Users } from "../../shared/Icons";
+import { ArrowUp, Bot, External, MessageSquare, Tag, Users } from "../../shared/Icons";
 import { BasePicker, defaultStart } from "../../shared/BasePicker";
 
 type Filter = "assigned" | "yours" | "open" | "closed";
@@ -213,6 +215,10 @@ function IssueTimeline({ detail }: { detail: IssueDetail }) {
 function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: TaskSummary; onChanged: () => void }) {
   const shell = useShell();
   const i = detail.issue;
+  // Its work item: the task or branch started from it, else Planned.
+  const item =
+    findWork(shell.work, { task: task?.id, issue: i.number }) ??
+    (task ? itemFromTask(task) : itemFromIssue(i.number, i.title, i.open));
   const act = (action: "close" | "reopen") =>
     shell
       .act(() => api.issueAction(i.number, action), {
@@ -222,6 +228,7 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
       .then((ok) => ok && onChanged());
   return (
     <DetailsCard>
+      <WorkCard item={item} from="issues" />
       <div className="inspector-section">
         {i.labels.length > 0 && (
           <div className="inspector-row">
@@ -235,22 +242,6 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
             {i.assignees.length > 0 ? i.assignees.join(", ") : <span className="muted">No one assigned</span>}
           </span>
         </div>
-        {task && (
-          <button className="inspector-row action" onClick={() => shell.go({ section: "work", taskId: task.id })}>
-            <Bot size={13} />
-            <span className="truncate">
-              {task.landed ? "Landed by" : task.closed ? "Closed task:" : "Agent task:"} <b>{task.id}</b>
-            </span>
-          </button>
-        )}
-        {task?.pull != null && (
-          <button className="inspector-row action" onClick={() => shell.go({ section: "pulls", number: task.pull! }, { browse: true })}>
-            <Branch size={13} />
-            <span>
-              Pull request <span className="num">#{task.pull}</span>
-            </span>
-          </button>
-        )}
       </div>
       <div className="inspector-actions">
         <Button className="ghost" onClick={() => act(i.open ? "close" : "reopen")}>

@@ -3,7 +3,7 @@
 // section ("open this run in Actions").
 
 import { createContext, useContext } from "react";
-import type { RepoInfo, RepoState, TaskSummary } from "../types";
+import type { RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "../types";
 import type { MenuItem } from "./Overlay";
 
 export type SectionId = "inbox" | "changes" | "history" | "issues" | "pulls" | "actions" | "work";
@@ -32,6 +32,10 @@ export interface Shell {
   tasks: TaskSummary[];
   /** Re-read the tasks now (after changing one). */
   reloadTasks: () => Promise<void>;
+  /** Every work item in the repository (#78), for the work card in every
+   * inspector (#79). Reloaded when one may have changed, and after `act`. */
+  work: WorkItemInfo[];
+  reloadWork: () => Promise<void>;
   toast: (text: string, tone?: "ok" | "error", undo?: boolean, action?: ToastAction) => void;
   fail: (e: unknown) => void;
   /**

@@ -315,8 +315,6 @@ export function WorkSection() {
   const github = (id: string) => ({
     pull: pulls[id],
     // The work item's own issue and PR: show them, not the item again.
-    onShowIssue: (n: number) => shell.go({ section: "issues", number: n }, { browse: true }),
-    onShowPull: (n: number) => shell.go({ section: "pulls", number: n }, { browse: true }),
     onPublish: async (draft: boolean, commitUncommitted: boolean) =>
       (await undoesOk("Open the pull request anyway?")) &&
       shell
@@ -429,11 +427,11 @@ export function WorkSection() {
             <NewTask repo={repo} settings={settings} onSettings={setSettings} onCreate={create} />
           )
         ) : view.kind === "pull" ? (
-          <PullPage number={view.number} />
+          <PullPage number={view.number} from="work" />
         ) : view.kind === "branch" ? (
           selectedItem?.kind === "branch" ? (
             selectedItem.pull ? (
-              <PullPage number={selectedItem.pull.number} />
+              <PullPage number={selectedItem.pull.number} from="work" />
             ) : (
               <BranchPage branch={selectedItem.branch} />
             )
@@ -532,9 +530,7 @@ export function WorkSection() {
             }
             onAskRebase={askRebase}
             onAskRestore={askRestore}
-            onOpenFolder={() => api.openFolder(shown.task.id).catch(fail)}
             onCopy={(text, what) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), fail)}
-            onShowBranch={() => shell.go({ section: "history", branch: shown.task.branch })}
             github={github(shown.task.id)}
           />
         ) : (

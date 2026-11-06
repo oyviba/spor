@@ -207,7 +207,7 @@ try {
   await w.clickText(".task-row", "#12");
   await w.waitFor(".timeline");
   check((await w.text(".task-header")).includes("Checks failing"), "#12 says its checks are failing");
-  check((await w.text(".inspector")).includes("Agent task:"), "links #12 to the agent task on its branch");
+  check((await w.text(".inspector")).includes("Task:"), "the work card links #12 to the task on its branch");
   await w.fill(".composer-dock textarea", "Close — just the keyword-only nit left.");
   await w.clickText(".composer-dock button", "Comment");
   await w.until(`return $(".timeline").innerText.includes("keyword-only nit")`, "the comment");

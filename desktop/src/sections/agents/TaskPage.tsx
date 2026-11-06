@@ -36,9 +36,7 @@ interface Props {
   onDiscard: () => unknown;
   onAskRebase: () => void;
   onAskRestore: () => void;
-  onOpenFolder: () => unknown;
   onCopy: (text: string, what: string) => void;
-  onShowBranch: () => void;
   /** What Changes shows: everything, or run N's changes. */
   source: "all" | number;
   onSource: (s: "all" | number) => void;
@@ -143,14 +141,12 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
           <Inspector
             detail={p.detail}
             baseCheckedOut={p.repo.branch === t.base}
-            onOpenFolder={p.onOpenFolder}
             onCopy={p.onCopy}
             onShowChanges={() => p.onTab("changes")}
             onLand={p.onLand}
             onDiscard={p.onDiscard}
             onAskRebase={p.onAskRebase}
             onAskRestore={p.onAskRestore}
-            onShowBranch={p.onShowBranch}
             onRerunSetup={p.onRerunSetup}
             {...p.github}
           />

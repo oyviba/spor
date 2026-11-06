@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { LineComment, Pull, PullDetail, TaskSummary } from "../../types";
-import { useShell } from "../../shared/app";
+import { useShell, type SectionId } from "../../shared/app";
+import { WorkCard } from "../../shared/WorkCard";
+import { findWork, itemFromPull } from "../../shared/work";
 import { useChanged, usePoll, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
@@ -11,7 +13,7 @@ import { StatusPill, type Status } from "../../shared/StatusPill";
 import { CiIcon } from "../../shared/ci";
 import { ago } from "../agents/transcript";
 import { isOpen } from "../agents/status";
-import { Bot, Branch, Check, ChevronDown, External, MessageSquare, Play, X } from "../../shared/Icons";
+import { Bot, Check, ChevronDown, External, MessageSquare, Play, X } from "../../shared/Icons";
 import { choiceOf, useAgentSettings } from "../agents/Composer";
 import { catchUpPrompt } from "../agents/prompts";
 
@@ -129,7 +131,7 @@ export function PullsSection() {
 
 /** One pull request: its conversation, files and checks, with the
  * details card and a box to comment or approve. Pulls and Work show it. */
-export function PullPage({ number }: { number: number }) {
+export function PullPage({ number, from = "pulls" }: { number: number; from?: SectionId }) {
   const shell = useShell();
   const { fail, tasks } = shell;
   const [detail, setDetail] = useState<PullDetail | null>(null);
@@ -219,7 +221,7 @@ export function PullPage({ number }: { number: number }) {
               </div>
             </div>
           )}
-          <PullCard pr={pr} task={task} onChanged={loadDetail} />
+          <PullCard pr={pr} task={task} from={from} onChanged={loadDetail} />
         </div>
         {pr.pull.state !== "merged" && (
           <ReviewBox
@@ -304,8 +306,9 @@ function Checks({ pr }: { pr: PullDetail }) {
   );
 }
 
-function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary; onChanged: () => void }) {
+function PullCard({ pr, task, from, onChanged }: { pr: PullDetail; task?: TaskSummary; from: SectionId; onChanged: () => void }) {
   const shell = useShell();
+  const item = findWork(shell.work, { pull: pr.pull.number, branch: pr.pull.head }) ?? itemFromPull(pr.pull);
   const [menu, setMenu] = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null);
   useChanged(() => {
@@ -315,8 +318,6 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
   const p = pr.pull;
   const open = p.state === "open" || p.state === "draft";
   const conflicting = open && pr.mergeable === "conflicting";
-  const failing = pr.checks.filter((c) => c.status === "failure").length;
-  const passing = pr.checks.filter((c) => c.status === "success").length;
   const PENDING: Record<string, string> = {
     squash: `Landing #${p.number} on GitHub…`,
     merge: `Landing #${p.number} on GitHub…`,
@@ -360,13 +361,8 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
   };
   return (
     <DetailsCard>
+      <WorkCard item={item} from={from} />
       <div className="inspector-section">
-        <div className="inspector-row">
-          <Branch size={13} />
-          <span className="truncate">
-            <code>{p.head}</code> <span className="muted">→ {p.base}</span>
-          </span>
-        </div>
         <div className="inspector-row">
           <span className="diffstat num">
             <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
@@ -375,15 +371,6 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
             {pr.changed_files} files · {pr.commits} commits
           </span>
         </div>
-        {pr.checks.length > 0 && (
-          <div className={`inspector-row${failing ? " bad" : ""}`}>
-            <CiIcon status={failing ? "failure" : passing === pr.checks.length ? "success" : "running"} size={13} />
-            <span className="num">
-              {failing ? `${failing} failing · ` : ""}
-              {passing} of {pr.checks.length} checks passed
-            </span>
-          </div>
-        )}
         {conflicting && (
           <div className="inspector-row bad">
             <X size={13} />
@@ -404,14 +391,6 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
               )}
             </span>
           </div>
-        )}
-        {task && (
-          <button className="inspector-row action" onClick={() => shell.go({ section: "work", taskId: task.id })}>
-            <Bot size={13} />
-            <span className="truncate">
-              Agent task: <b>{task.title}</b>
-            </span>
-          </button>
         )}
       </div>
       <div className="inspector-actions">
