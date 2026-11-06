@@ -107,6 +107,9 @@ export interface TaskDetail {
   transcript: Item[];
   runs: RunInfo[];
   conflicts: string[];
+  /** Work that reached the base after the task started and landing it
+   * would take back out: lines per file, most first. */
+  undoes: { path: string; lines: number }[];
   /** The run "Undo this run" would take back. */
   undoable: number | null;
   /** Questions the agent is waiting on. */

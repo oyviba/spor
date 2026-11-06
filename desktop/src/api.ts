@@ -196,8 +196,9 @@ export const api = {
   /** Push the task's branch and open a pull request for it. */
   publishTask: (id: string, draft: boolean, commitUncommitted: boolean) =>
     call<string>("publish_task", { id, draft, commitUncommitted }),
-  /** Push the agent's new commits to the task's pull request. */
-  pushTask: (id: string) => call<string>("push_task", { id }),
+  /** Push the agent's new commits to the task's pull request; with
+   * `commitUncommitted`, what it left uncommitted is committed and goes too. */
+  pushTask: (id: string, commitUncommitted = false) => call<string>("push_task", { id, commitUncommitted }),
   /** Every open task's pull request (one `gh` call). */
   taskPulls: () => call<TaskPull[]>("task_pulls"),
   /** New review on the task's PR, written as a follow-up for its agent. */

@@ -406,6 +406,54 @@ impl Tasks {
         }
     }
 
+    /// What landing the task (or merging its pull request) would take away
+    /// from its base that came to the base after the task started: lines
+    /// added there since, that the result wouldn't have. That's almost
+    /// always files written back from an older copy after a rebase or a
+    /// merge, which quietly reverts other work. Lines that moved elsewhere
+    /// don't count. Per file, most lines first.
+    /// Nothing when the merge would conflict (that shows as conflicts) or
+    /// the branch's reflog doesn't say where it started.
+    pub fn undoes(&self, task: &Task) -> Vec<(String, usize)> {
+        if task.state != TaskState::Open || !task.worktree.exists() {
+            return Vec::new();
+        }
+        // Where the branch was created from, by its reflog.
+        let Some(start) = self.repo.first_logged(&task.branch) else {
+            return Vec::new();
+        };
+        let arrived: std::collections::HashSet<String> = self
+            .repo
+            .commits_in(&format!("{start}..{}", task.base))
+            .into_iter()
+            .collect();
+        if arrived.is_empty() {
+            return Vec::new();
+        }
+        let Some(tree) = task.repo().merged_tree(&task.base, "HEAD") else {
+            return Vec::new();
+        };
+        let touched = self.repo.changed_paths(&start, &task.base);
+        // A line that's somewhere else in the result moved; it didn't go.
+        let added = self.repo.added_lines(&task.base, &tree);
+        let mut undone: Vec<(String, usize)> = self
+            .repo
+            .removed_lines(&task.base, &tree, &touched)
+            .into_iter()
+            .filter_map(|(path, runs)| {
+                let n = self
+                    .repo
+                    .blame_runs(&task.base, &path, &runs)
+                    .iter()
+                    .filter(|l| arrived.contains(&l.hash) && !added.contains(l.text.trim()))
+                    .count();
+                (n > 0).then_some((path, n))
+            })
+            .collect();
+        undone.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        undone
+    }
+
     /// Everything the task changed since it left its base, uncommitted work
     /// and new files included.
     pub fn patch(&self, task: &Task) -> Result<String, String> {
@@ -484,8 +532,7 @@ impl Tasks {
             if !commit_uncommitted {
                 return Err(format!("{} has uncommitted changes", task.id));
             }
-            wt.stage_all()?;
-            wt.commit(&format!("Uncommitted work from {}", task.id))?;
+            commit_all(&wt, task)?;
         }
         if self
             .repo
@@ -579,8 +626,7 @@ impl Tasks {
             if !commit_uncommitted {
                 return Err(format!("{} has uncommitted changes", task.id));
             }
-            wt.stage_all()?;
-            wt.commit(&format!("Uncommitted work from {}", task.id))?;
+            commit_all(&wt, task)?;
         }
         if self
             .repo
@@ -589,7 +635,7 @@ impl Tasks {
         {
             return Err(format!("{} has no commits to publish", task.id));
         }
-        self.push(task, remote)?;
+        self.push(task, remote, false)?;
         let described = describe
             .then(|| crate::agent::describe_pull(self, task).ok())
             .flatten();
@@ -615,9 +661,15 @@ impl Tasks {
     /// Push the task's branch to `remote` (setting it as the upstream), so
     /// its pull request gets the agent's latest commits. A key passphrase
     /// or password comes up in the app, as for any other push.
-    pub fn push(&self, task: &Task, remote: &str) -> Result<(), String> {
+    /// Push the task's branch to `remote`. With `commit_uncommitted`,
+    /// uncommitted work in its folder is committed first, so it goes too.
+    pub fn push(&self, task: &Task, remote: &str, commit_uncommitted: bool) -> Result<(), String> {
         if task.state != TaskState::Open || !task.worktree.exists() {
             return Err(format!("{} has no folder to push from", task.id));
+        }
+        let wt = task.repo();
+        if commit_uncommitted && !wt.status()?.is_empty() {
+            commit_all(&wt, task)?;
         }
         crate::askpass::git_network(
             &task.worktree,
@@ -714,6 +766,12 @@ impl Tasks {
 }
 
 /// Lines in a file's contents, counting a last line without a newline.
+/// Commit everything in the task's folder, as work the agent left uncommitted.
+fn commit_all(wt: &Repo, task: &Task) -> Result<(), String> {
+    wt.stage_all()?;
+    wt.commit(&format!("Uncommitted work from {}", task.id))
+}
+
 fn bytecount_lines(bytes: &[u8]) -> usize {
     let newlines = bytes.iter().filter(|&&b| b == b'\n').count();
     newlines + usize::from(bytes.last().is_some_and(|&b| b != b'\n'))

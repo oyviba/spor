@@ -161,6 +161,16 @@ with the permission mode the user picked when starting the task.
   resolver. It goes back to its agent as a follow-up: "rebasing onto main
   conflicted in these files; resolve them and continue." Agents are good at
   this, and it's the step people least want to do.
+- **Don't undo the base.** A merge that doesn't conflict can still take
+  work back out: an agent that rebases or merges the base in, then writes
+  files back from the copy it started with, reverts everything that came
+  in meanwhile (that's how landing #81 undid the Inbox and five other
+  changes). `Tasks::undoes` finds it: the lines the trial merge would drop
+  from the base, blamed on the base, that came from commits made after the
+  branch was created (its reflog's first entry), leaving out lines that
+  moved elsewhere. The task's card says "Would undo 109 lines that reached
+  main after it started, in App.tsx…", with *Ask agent to put them back*,
+  and landing or opening a pull request asks first.
 - **Land in order.** Pick the tasks that are ready and spor lands them one
   at a time: rebase, run the checks, merge, next. It stops at the first
   failure and says which. It's a small local merge queue.
