@@ -307,8 +307,18 @@ fn publish_pushes_the_branch_before_opening_a_pull_request() {
     assert_eq!(f.tasks.stats(&task).unpushed, 0);
     work(&task.worktree, "new.txt", "newer\n", Some("Address review"));
     assert_eq!(f.tasks.stats(&task).unpushed, 1);
-    f.tasks.push(&task, "origin").unwrap();
+    f.tasks.push(&task, "origin", false).unwrap();
     assert_eq!(f.tasks.stats(&task).unpushed, 0);
+
+    // Work the agent left uncommitted goes too, when asked.
+    work(&task.worktree, "new.txt", "newest\n", None);
+    f.tasks.push(&task, "origin", true).unwrap();
+    let stats = f.tasks.stats(&task);
+    assert_eq!((stats.uncommitted, stats.unpushed), (0, 0));
+    assert_eq!(
+        subjects(&task.worktree)[0],
+        "Uncommitted work from add-thing"
+    );
 }
 
 #[test]
@@ -365,4 +375,61 @@ fn close_cleans_up_after_a_closed_pull_request_and_can_be_undone() {
     let back = f.tasks.get(&task.id).unwrap();
     assert_eq!(back.state, TaskState::Open);
     assert!(task.worktree.join("app.txt").exists());
+}
+
+#[test]
+fn undoes_reports_base_work_the_task_would_revert() {
+    let f = fixture();
+    let task = f.tasks.create("Rename things", "main").unwrap();
+    work(&task.worktree, "task.txt", "mine\n", Some("task work"));
+    // main gains lines after the task started, one of them like a diff header.
+    work(
+        f.repo.root(),
+        "app.txt",
+        "one\ntwo\nthree\nfour\n-- five\n",
+        Some("more on main"),
+    );
+    assert!(
+        f.tasks.undoes(&task).is_empty(),
+        "work beside main's undoes nothing"
+    );
+    // The agent merges main in, then writes back the copy it started from.
+    git(&task.worktree, &["merge", "--quiet", "--no-edit", "main"]);
+    work(
+        &task.worktree,
+        "app.txt",
+        "one\ntwo\nthree\n",
+        Some("rename"),
+    );
+    assert_eq!(f.tasks.undoes(&task), vec![("app.txt".to_string(), 2)]);
+}
+
+#[test]
+fn undoes_ignores_lines_that_were_there_when_the_task_started() {
+    let f = fixture();
+    let task = f.tasks.create("Drop two", "main").unwrap();
+    work(&task.worktree, "app.txt", "one\nthree\n", Some("drop two"));
+    work(
+        f.repo.root(),
+        "other.txt",
+        "new\n",
+        Some("unrelated on main"),
+    );
+    assert!(f.tasks.undoes(&task).is_empty());
+}
+
+#[test]
+fn undoes_ignores_base_work_the_task_moved() {
+    let f = fixture();
+    let task = f.tasks.create("Move app", "main").unwrap();
+    work(
+        f.repo.root(),
+        "app.txt",
+        "one\ntwo\nthree\nfour\n",
+        Some("more on main"),
+    );
+    git(&task.worktree, &["merge", "--quiet", "--no-edit", "main"]);
+    git(&task.worktree, &["mv", "app.txt", "moved.txt"]);
+    git(&task.worktree, &["commit", "--quiet", "-m", "move"]);
+    assert!(f.tasks.undoes(&task).is_empty());
 }

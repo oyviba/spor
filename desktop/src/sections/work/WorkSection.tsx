@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import type { LineComment, Pull, RunPatch, TaskDetail, TaskPull, TaskSummary, WorkBranch } from "../../types";
 import { activityAt, matches, moveTo, shelve, workItems, type Filter, type WorkItem } from "./items";
+import { isOpen } from "../agents/status";
+import { catchUpPrompt, restorePrompt } from "../agents/prompts";
 import { useChanged, usePoll, useRepoChanges, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { EmptyState } from "../../shared/Layout";
@@ -100,7 +102,7 @@ export function WorkSection() {
   // Open tasks' pull requests (one `gh` call), and a note when one merges.
   const [pulls, setPulls] = useState<Record<string, TaskPull>>({});
   const merged = useRef<Set<string> | null>(null);
-  const openTasks = tasks.filter((t) => !t.landed).length;
+  const openTasks = tasks.filter(isOpen).length;
   const refreshPulls = useCallback(async () => {
     let list: TaskPull[];
     try {
@@ -109,14 +111,18 @@ export function WorkSection() {
       return; // Not GitHub, or no `gh`: tasks just have no PRs.
     }
     setPulls(Object.fromEntries(list.map((p) => [p.task, p])));
-    const now = new Set(list.filter((p) => p.pull.state === "merged").map((p) => p.task));
+    const now = new Set(list.filter((p) => p.pull.state === "merged" || p.pull.state === "closed").map((p) => p.task));
     if (merged.current)
       for (const p of list)
         if (now.has(p.task) && !merged.current.has(p.task))
-          toast(`#${p.pull.number} merged — ${p.task} can be cleaned up`, "ok", false, {
-            label: "Clean up",
-            run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`),
-          });
+          toast(
+            `#${p.pull.number} ${p.pull.state === "merged" ? "merged" : "was closed"} — ${p.task} can be cleaned up`,
+            "ok",
+            false,
+            p.pull.state === "merged"
+              ? { label: "Clean up", run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`) }
+              : { label: "Close task", run: () => close(p.task) },
+          );
     merged.current = now;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   usePoll(refreshPulls, 30_000, [repo.root, openTasks], openTasks > 0);
@@ -201,7 +207,7 @@ export function WorkSection() {
   useEffect(() => {
     for (const [id, messages] of Object.entries(queue)) {
       const t = tasks.find((x) => x.id === id);
-      if (!t || t.landed) {
+      if (!t || !isOpen(t)) {
         if (!t && tasks.length > 0) setQueue(({ [id]: _, ...rest }) => rest);
         continue;
       }
@@ -298,11 +304,19 @@ export function WorkSection() {
       await refreshPulls();
     });
 
+  const close = (id: string) =>
+    shell.act(() => api.closeTask(id), { pending: "Cleaning up…" }).then(async () => {
+      await refreshTasks();
+      await refreshPulls();
+    });
+
   const github = (id: string) => ({
     pull: pulls[id],
-    onShowIssue: (n: number) => shell.go({ section: "issues", number: n }),
-    onShowPull: (n: number) => shell.go({ section: "pulls", number: n }),
-    onPublish: (draft: boolean, commitUncommitted: boolean) =>
+    // The work item's own issue and PR: show them, not the item again.
+    onShowIssue: (n: number) => shell.go({ section: "issues", number: n }, { browse: true }),
+    onShowPull: (n: number) => shell.go({ section: "pulls", number: n }, { browse: true }),
+    onPublish: async (draft: boolean, commitUncommitted: boolean) =>
+      (await undoesOk("Open the pull request anyway?")) &&
       shell
         .act(() => api.publishTask(id, draft, commitUncommitted), {
           undo: false,
@@ -313,23 +327,72 @@ export function WorkSection() {
           await refreshPulls();
           await refreshGithub();
         }),
-    onPush: () => shell.act(() => api.pushTask(id), { undo: false, pending: "Pushing…" }).then(afterChange),
+    onPush: (commitUncommitted: boolean) =>
+      shell
+        .act(() => api.pushTask(id, commitUncommitted), {
+          undo: false,
+          pending: commitUncommitted ? "Committing and pushing…" : "Pushing…",
+        })
+        .then(afterChange),
+    // From prompt to merged in one place: merge on GitHub, then clean up
+    // at once (⌘Z brings its folder and branch back).
+    onMerge: async () => {
+      const pr = pulls[id]?.pull;
+      if (!pr) return;
+      const ok = await shell.act(() => api.pullAction(pr.number, "squash"), {
+        undo: false,
+        pending: `Merging #${pr.number} on GitHub…`,
+      });
+      if (!ok) return;
+      // Cleaned up here, so no "merged — can be cleaned up" note follows.
+      merged.current?.add(id);
+      const list = await api.taskPulls().catch(() => [] as TaskPull[]);
+      await settle(id, list.find((p) => p.task === id)?.merge_commit ?? `#${pr.number}`);
+    },
+    onReady: () => {
+      const pr = pulls[id]?.pull;
+      if (!pr) return;
+      return shell
+        .act(() => api.pullAction(pr.number, "ready"), { undo: false, pending: "Marking it ready…" })
+        .then(() => Promise.all([refreshPulls(), refreshGithub()]));
+    },
     onSendReview: () =>
       api.reviewFeedback(id).then(async (text) => {
         await send(text);
         toast(shown?.task.run?.state === "running" ? "The review is queued for when the agent is done" : `Sent the review to ${id}`);
       }, fail),
+    onSendFailure: () =>
+      api.checkFeedback(id).then(async (text) => {
+        await send(text);
+        toast(shown?.task.run?.state === "running" ? "The failure is queued for when the agent is done" : `Sent the failure to ${id}`);
+      }, fail),
     onSettle: (commit: string) => settle(id, commit),
+    onClose: () => close(id),
   });
+
+  // Landing or publishing work that would take back what reached the base
+  // since (#81 did, by writing back old copies of files): say so first.
+  const undoesOk = async (title: string) => {
+    if (!shown || shown.undoes.length === 0) return true;
+    const lines = shown.undoes.reduce((n, u) => n + u.lines, 0);
+    return shell.confirm({
+      title,
+      detail:
+        `It would undo ${lines} ${lines === 1 ? "line" : "lines"} that reached ${shown.task.base} after it started, in ` +
+        `${shown.undoes.map((u) => u.path).join(", ")}. Usually that's files written back from an older copy; ` +
+        `“Ask agent to put them back” on its card asks for them back.`,
+      action: "Go ahead anyway",
+      danger: true,
+    });
+  };
+
+  const askRestore = () => {
+    if (shown) send(restorePrompt(shown.task.base, shown.undoes));
+  };
 
   const askRebase = () => {
     if (!shown) return;
-    const base = shown.task.base;
-    send(
-      `${base} has moved on and this branch now conflicts with it in ${shown.conflicts.join(", ")}. ` +
-        `Rebase onto ${base} (git rebase ${base}), resolve the conflicts keeping both sides' intent, ` +
-        `make sure it still builds and the tests pass, and commit.`,
-    );
+    send(catchUpPrompt(shown.task.base, shown.conflicts, shown.task.pull != null));
   };
 
   const taskComments = selectedId ? (comments[selectedId] ?? []) : [];
@@ -451,7 +514,8 @@ export function WorkSection() {
             }
             onSend={send}
             onStop={() => api.stopAgent(shown.task.id).then(afterChange, fail)}
-            onLand={(merge, commitUncommitted) =>
+            onLand={async (merge, commitUncommitted) =>
+              (await undoesOk(`Land on ${shown.task.base} anyway?`)) &&
               shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted), { pending: `Landing on ${shown.task.base}…` }).then(afterChange)
             }
             onDiscard={() =>
@@ -461,6 +525,7 @@ export function WorkSection() {
               })
             }
             onAskRebase={askRebase}
+            onAskRestore={askRestore}
             onOpenFolder={() => api.openFolder(shown.task.id).catch(fail)}
             onCopy={(text, what) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), fail)}
             onShowBranch={() => shell.go({ section: "history", branch: shown.task.branch })}
