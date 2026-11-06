@@ -3,7 +3,7 @@
 // section ("open this run in Actions").
 
 import { createContext, useContext } from "react";
-import type { RepoInfo, RepoState } from "../types";
+import type { RepoInfo, RepoState, TaskSummary } from "../types";
 import type { MenuItem } from "./Overlay";
 
 export type SectionId = "inbox" | "changes" | "history" | "issues" | "pulls" | "actions" | "agents";
@@ -28,13 +28,24 @@ export interface Shell {
   state: RepoState | null;
   /** Re-read the repository's state now (after a change). */
   refresh: () => Promise<void>;
+  /** Agent tasks, newest open first, reloaded when they change. */
+  tasks: TaskSummary[];
+  /** Re-read the tasks now (after changing one). */
+  reloadTasks: () => Promise<void>;
   toast: (text: string, tone?: "ok" | "error", undo?: boolean, action?: ToastAction) => void;
   fail: (e: unknown) => void;
   /**
-   * Run a change, then toast its message with Undo and refresh. Resolves to
-   * whether it worked.
+   * Run a change, then toast its message with Undo and refresh. A slow one
+   * shows a progress toast meanwhile. Resolves to whether it worked.
    */
-  act: (run: () => Promise<string | void>, opts?: { undo?: boolean }) => Promise<boolean>;
+  act: (
+    run: () => Promise<string | void>,
+    opts?: {
+      undo?: boolean;
+      /** Shown while it runs, if that takes more than a moment ("Pushing…"). */
+      pending?: string;
+    },
+  ) => Promise<boolean>;
   /**
    * Switch branches. When uncommitted changes are in the way, the error
    * toast offers to stash them and switch anyway.

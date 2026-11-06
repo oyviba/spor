@@ -36,8 +36,8 @@ try {
   await w.fill(".composer-dock textarea", "Keep the docstring short");
   check((await w.text(".hint-keys")).includes("⌘↩ steer"), "…and ⌘↩ steers");
   await w.key(".composer-dock textarea", "Enter", { ctrlKey: true });
-  await w.until(`return [...document.querySelectorAll(".bubble.steer")].some(b => b.innerText.includes("Keep the docstring short"))`, "the steer bubble");
-  await w.until(`return document.querySelector(".conversation").innerText.includes("Noted: Keep the docstring short")`, "the agent taking it", 15000);
+  await w.until(`return [...$$(".bubble.steer")].some(b => b.innerText.includes("Keep the docstring short"))`, "the steer bubble");
+  await w.until(`return $(".conversation").innerText.includes("Noted: Keep the docstring short")`, "the agent taking it", 15000);
   check(true, "a steered message goes into the running turn, and the agent takes it");
   check(!(await w.count(".queued-item")), "…without queueing it");
   await sleep(4500);
@@ -46,11 +46,11 @@ try {
   console.log("It asks before running the tests (#21)");
   await w.waitFor(".composer .ask-card", 30000);
   check((await w.text(".ask-card")).includes("python -m pytest -q"), "the question shows in the composer, with the command");
-  // The task list polls on its own clock; give it a beat to catch up.
-  await w.until(`return document.querySelector(".task-row .pill")?.innerText.includes("Needs you")`, "the Needs you pill", 5000);
+  // The task list reloads apart from the page; give it a beat to catch up.
+  await w.until(`return $(".task-row .pill")?.innerText.includes("Needs you")`, "the Needs you pill", 5000);
   check(true, "the task says it needs you");
   check((await w.text(".list-label.needs-you")) === "Needs you", "…and moves to the top of the list");
-  await w.until(`return document.querySelector('.rail-item[aria-label="Inbox"] .rail-badge.asking')?.textContent === "1"`, "the rail's count", 6000);
+  await w.until(`return $('.rail-item[aria-label="Inbox"] .rail-badge.asking')?.textContent === "1"`, "the rail's count", 6000);
   check(true, "the Inbox counts it in amber");
   await w.shot("2a-asking");
 
@@ -69,14 +69,14 @@ try {
   const transcript = await w.text(".conversation");
   check(transcript.includes("The tests pass."), "Allow lets it run the tests");
   await w.click(".run .fold");
-  await w.until(`return document.querySelector(".ask-line.allowed")?.innerText.includes("Allowed")`, "the answered question");
+  await w.until(`return $(".ask-line.allowed")?.innerText.includes("Allowed")`, "the answered question");
   check(true, "the transcript shows the question, allowed");
   check(!(await w.count(".ask-card")), "the question is gone from the composer");
 
   console.log("Review");
   await w.clickText(".tabs button", "Changes");
   await w.waitFor(".diff tr.add");
-  await w.js(`document.querySelectorAll(".diff tr.add .add-comment button")[1].click()`);
+  await w.js(`$$(".diff tr.add .add-comment button")[1].click()`);
   await w.fill(".comment-editor textarea", "Also add a farewell() like this one");
   await w.enter(".comment-editor textarea");
   await w.waitFor(".composer .chip");
@@ -98,8 +98,8 @@ try {
   const read = (f) => readFileSync(`${worktree}/${f}`, "utf8");
   await w.clickText(".run:nth-of-type(2) .run-actions .link", "Changes in this run");
   await w.waitFor(".source-bar select");
-  await w.until(`return document.querySelector(".source-bar select").value === "1" && document.querySelectorAll(".diff tr.add").length > 0`, "run 2's diff");
-  const added = await w.js(`return [...document.querySelectorAll(".diff tr.add")].map(r => r.innerText).join(" | ")`);
+  await w.until(`return $(".source-bar select").value === "1" && $$(".diff tr.add").length > 0`, "run 2's diff");
+  const added = await w.js(`return [...$$(".diff tr.add")].map(r => r.innerText).join(" | ")`);
   check(added.includes("def farewell") && !added.includes("title=None"), "Changes can show just one run's diff");
   await w.clickText(".tabs button", "Conversation");
   await w.waitFor(".run:nth-of-type(2) .run-actions");
@@ -111,7 +111,7 @@ try {
   check(existsSync(`${metaDir}/run-1.undone`), "the run is marked undone");
   await w.shot("4b-run-undone");
   await w.clickText(".toast .link", "Undo");
-  await w.until(`return !document.querySelector(".run.undone")`, "the redo");
+  await w.until(`return !$(".run.undone")`, "the redo");
   check(read("greet.py").includes("farewell") && !existsSync(`${metaDir}/run-1.undone`), "Undo on the toast brings the run back");
 
   console.log("Land");

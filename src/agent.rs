@@ -85,6 +85,86 @@ impl Mode {
     }
 }
 
+/// How hard Claude Code thinks: its `--effort`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl Effort {
+    pub const ALL: [Effort; 5] = [
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::XHigh,
+        Effort::Max,
+    ];
+
+    pub fn flag(self) -> &'static str {
+        match self {
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::XHigh => "xhigh",
+            Effort::Max => "max",
+        }
+    }
+
+    pub fn from_flag(flag: &str) -> Option<Effort> {
+        Effort::ALL.into_iter().find(|e| e.flag() == flag)
+    }
+}
+
+/// Which model Claude Code runs, and how hard it thinks. `None` leaves it
+/// to Claude Code (its settings, or its own default).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Model {
+    /// An alias (`opus`, `sonnet`, …) or a model's full name.
+    pub name: Option<String>,
+    pub effort: Option<Effort>,
+}
+
+impl Model {
+    /// A model from what someone picked: an empty name is the default, and
+    /// a name has to look like one (it goes on Claude's command line).
+    pub fn new(name: Option<&str>, effort: Option<Effort>) -> Result<Model, String> {
+        let name = name.map(str::trim).filter(|n| !n.is_empty());
+        if let Some(n) = name {
+            let ok = !n.starts_with('-')
+                && n.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-._[]:@/".contains(c));
+            if !ok {
+                return Err(format!("{n} isn't a model name"));
+            }
+        }
+        Ok(Model {
+            name: name.map(String::from),
+            effort,
+        })
+    }
+
+    /// In words, for the run's label: "Opus · high effort".
+    pub fn describe(&self) -> Option<String> {
+        let name = self.name.as_deref().map(|n| {
+            let mut c = n.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        });
+        let effort = self.effort.map(|e| format!("{} effort", e.flag()));
+        match (name, effort) {
+            (None, None) => None,
+            (Some(n), None) => Some(n),
+            (None, Some(e)) => Some(e),
+            (Some(n), Some(e)) => Some(format!("{n} · {e}")),
+        }
+    }
+}
+
 /// How much the agent may do without asking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Permissions {
@@ -126,6 +206,8 @@ pub struct Run {
     pub ended: Option<i64>,
     /// The agent's session, for sending follow-ups (Claude Code).
     pub session: Option<String>,
+    /// The model it ran (Claude Code).
+    pub model: Model,
     pub cost_usd: Option<f64>,
     /// Undone: its changes were taken back, and follow-ups resume from
     /// before it.
@@ -209,6 +291,8 @@ pub struct Runs {
     base: String,
     /// The main checkout, for setup scripts that copy from it.
     repo_root: PathBuf,
+    /// Images attached to prompts, which Claude may read.
+    attachments: PathBuf,
 }
 
 impl Runs {
@@ -219,6 +303,7 @@ impl Runs {
             worktree: task.worktree.clone(),
             base: task.base.clone(),
             repo_root: tasks.root().to_path_buf(),
+            attachments: tasks.attachments_dir(),
         }
     }
 
@@ -260,6 +345,19 @@ impl Runs {
         resume: Option<&str>,
         permissions: Permissions,
     ) -> Result<Run, String> {
+        self.start_with(task, kind, prompt, resume, permissions, &Model::default())
+    }
+
+    /// `start`, with Claude Code on `model`.
+    pub fn start_with(
+        &self,
+        task: &Task,
+        kind: &AgentKind,
+        prompt: &str,
+        resume: Option<&str>,
+        permissions: Permissions,
+        model: &Model,
+    ) -> Result<Run, String> {
         if self.latest().is_some_and(|r| r.state == RunState::Running) {
             return Err(format!("An agent is already working on {}", task.id));
         }
@@ -268,7 +366,10 @@ impl Runs {
         }
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         let index = self.count();
-        let (program, args) = command_for(kind, prompt, resume, permissions);
+        // Made up front, so an image attached while it works can be read.
+        let _ = std::fs::create_dir_all(&self.attachments);
+        let (program, args) =
+            command_for(kind, prompt, resume, permissions, model, &self.attachments);
         let log = self.file(index, "log");
         let exit = self.file(index, "exit");
         // What the folder was like before, for this run's diff and undo.
@@ -352,12 +453,18 @@ echo $code > "$SPOR_EXIT""#;
             ("kind", kind_name(kind)),
             ("hosted", hosted.to_string()),
             ("mode", permissions.mode.flag().to_string()),
+            ("model", model.name.clone().unwrap_or_default()),
+            (
+                "effort",
+                model.effort.map(Effort::flag).unwrap_or_default().into(),
+            ),
             ("prompt", prompt.to_string()),
             ("started", started.to_string()),
             ("pid", pid.to_string()),
         ];
         let text: String = meta
             .iter()
+            .filter(|(_, v)| !v.is_empty())
             .map(|(k, v)| format!("{k}\t{}\n", escape(v)))
             .collect();
         std::fs::write(self.file(index, "meta"), text).map_err(|e| e.to_string())?;
@@ -373,6 +480,7 @@ echo $code > "$SPOR_EXIT""#;
             started,
             ended: None,
             session: None,
+            model: model.clone(),
             cost_usd: None,
             undone: false,
         })
@@ -749,6 +857,12 @@ echo $code > "$SPOR_EXIT""#;
             started,
             ended,
             session,
+            model: Model {
+                name: self.meta(index, "model"),
+                effort: self
+                    .meta(index, "effort")
+                    .and_then(|e| Effort::from_flag(&e)),
+            },
             cost_usd,
             undone: self.file(index, "undone").exists(),
         })
@@ -778,6 +892,8 @@ fn command_for(
     prompt: &str,
     resume: Option<&str>,
     permissions: Permissions,
+    model: &Model,
+    attachments: &Path,
 ) -> (String, Vec<String>) {
     match kind {
         AgentKind::Claude => {
@@ -790,11 +906,19 @@ fn command_for(
             ]
             .map(String::from)
             .to_vec();
+            if let Some(name) = &model.name {
+                args.extend(["--model".into(), name.clone()]);
+            }
+            if let Some(effort) = model.effort {
+                args.extend(["--effort".into(), effort.flag().into()]);
+            }
             if let Some(session) = resume {
                 // A new session id for each follow-up, so the one resumed
                 // stays as it was: undoing this run resumes from there.
                 args.extend(["--resume".into(), session.into(), "--fork-session".into()]);
             }
+            // Images attached to prompts are named by their path there.
+            args.extend(["--add-dir".into(), attachments.display().to_string()]);
             // Publishing is always a person's call, from spor.
             args.extend(["--disallowedTools".into(), "Bash(git push:*)".into()]);
             args.extend(["-p".into(), prompt.into()]);
@@ -1086,6 +1210,104 @@ fn rule_words(tool: &str, content: Option<&str>) -> String {
     }
 }
 
+/// A pull request title and description for the task's work, written by
+/// Claude Code. It continues (a fork of) the task's session when there is
+/// one, so it knows why the work was done, not just what changed, and it
+/// can only read: look at the branch, not change it.
+pub fn describe_pull(tasks: &Tasks, task: &Task) -> Result<(String, String), String> {
+    let prompt = format!(
+        "Write the pull request for this branch's work: `{branch}` into `{base}`. \
+         Look at what it changes (`git log {base}..HEAD`, `git diff {base}...HEAD`) \
+         and, if this conversation has it, why.\n\n\
+         Reply with only the pull request: its title on the first line (under 72 \
+         characters, no prefix, no quotes), a blank line, then the description in \
+         GitHub markdown: what changed and why, and anything a reviewer should look \
+         at closely. Only say how it was tested if it was. Don't change any files.",
+        branch = task.branch,
+        base = task.base,
+    );
+    let mut args: Vec<String> = [
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "default",
+        "--allowedTools",
+        "Read,Grep,Glob,Bash(git log:*),Bash(git diff:*),Bash(git show:*)",
+        "--disallowedTools",
+        "Edit,Write,NotebookEdit,Bash(git push:*)",
+    ]
+    .map(String::from)
+    .to_vec();
+    if let Some(session) = Runs::of(tasks, task).session() {
+        args.extend(["--resume".into(), session, "--fork-session".into()]);
+    }
+    args.extend(["-p".into(), prompt]);
+    let mut child = Command::new("claude")
+        .args(&args)
+        .current_dir(&task.worktree)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Couldn't start claude: {e}"))?;
+    // Read stdout on a thread, so a long reply can't fill the pipe while
+    // we wait; give up after a few minutes rather than hang publishing.
+    let mut out = child.stdout.take().ok_or("claude has no output")?;
+    let reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = std::io::Read::read_to_string(&mut out, &mut s);
+        s
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(_) => break,
+            None if std::time::Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Claude took too long to describe the pull request".into());
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(200)),
+        }
+    }
+    let stdout = reader.join().unwrap_or_default();
+    let event = Json::parse(stdout.trim()).ok_or("Couldn't read Claude's reply")?;
+    if event.get("is_error").bool() == Some(true) {
+        return Err("Claude couldn't describe the pull request".into());
+    }
+    let result = event.get("result").str().unwrap_or("");
+    parse_pull_text(result).ok_or_else(|| "Claude's description had no title".into())
+}
+
+/// A reply of a title line, a blank line and a description, as (title,
+/// description). Tolerates a fence around it all, a `#` or `Title:` on
+/// the title, and quotes around it.
+fn parse_pull_text(reply: &str) -> Option<(String, String)> {
+    let mut text = reply.trim();
+    if let Some(inner) = text.strip_prefix("```") {
+        // Drop the fence's language tag, if any, and the closing fence.
+        let inner = inner.split_once('\n').map_or("", |(_, rest)| rest);
+        text = inner.trim_end().strip_suffix("```").unwrap_or(inner).trim();
+    }
+    let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
+    let mut title = first.trim().trim_start_matches('#').trim();
+    for prefix in ["Title:", "title:", "**Title:**"] {
+        title = title.strip_prefix(prefix).unwrap_or(title).trim();
+    }
+    let title = title
+        .trim_matches(|c| c == '"' || c == '`' || c == '*')
+        .trim();
+    if title.is_empty() {
+        return None;
+    }
+    let title = if title.chars().count() > 72 {
+        title.chars().take(71).chain(['…']).collect()
+    } else {
+        title.to_string()
+    };
+    Some((title, rest.trim().to_string()))
+}
+
 /// Is `program` on the PATH?
 pub fn available(program: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|paths| {
@@ -1144,6 +1366,29 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pull_text_is_a_title_line_then_the_description() {
+        let (title, body) =
+            parse_pull_text("Fix login on Safari\n\nThe cookie was `SameSite=None`.\n").unwrap();
+        assert_eq!(title, "Fix login on Safari");
+        assert_eq!(body, "The cookie was `SameSite=None`.");
+
+        let (title, body) =
+            parse_pull_text("```markdown\n# Title: \"Fix it\"\n\nBecause.\n```").unwrap();
+        assert_eq!(title, "Fix it");
+        assert_eq!(body, "Because.");
+
+        let (title, body) = parse_pull_text("Just a title").unwrap();
+        assert_eq!(title, "Just a title");
+        assert_eq!(body, "");
+
+        assert_eq!(parse_pull_text("  \n"), None);
+        assert_eq!(
+            parse_pull_text(&"x".repeat(100)).unwrap().0.chars().count(),
+            72
+        );
+    }
 
     #[test]
     fn suggested_rules_in_words() {
@@ -1227,16 +1472,50 @@ not json at all
             "Fix it",
             Some("s-1"),
             Permissions::commands(false),
+            &Model::new(Some("opus"), Some(Effort::High)).unwrap(),
+            Path::new("/r/.git/spor/attachments"),
         );
         assert_eq!(program, "claude");
+        assert!(args.windows(2).any(|w| w == ["--model", "opus"]));
+        assert!(args.windows(2).any(|w| w == ["--effort", "high"]));
         assert!(args
             .windows(2)
             .any(|w| w == ["--permission-mode", "acceptEdits"]));
         assert!(args.windows(2).any(|w| w == ["--resume", "s-1"]));
         assert!(args
             .windows(2)
+            .any(|w| w == ["--add-dir", "/r/.git/spor/attachments"]));
+        assert!(args
+            .windows(2)
             .any(|w| w == ["--disallowedTools", "Bash(git push:*)"]));
         assert_eq!(&args[args.len() - 2..], ["-p", "Fix it"]);
+    }
+
+    #[test]
+    fn claude_defaults_leave_the_model_to_claude() {
+        let (_, args) = command_for(
+            &AgentKind::Claude,
+            "Fix it",
+            None,
+            Permissions::commands(false),
+            &Model::new(Some("  "), None).unwrap(),
+            Path::new("/r/.git/spor/attachments"),
+        );
+        assert!(!args.iter().any(|a| a == "--model" || a == "--effort"));
+    }
+
+    #[test]
+    fn model_names_stay_names() {
+        assert!(Model::new(Some("claude-opus-5-5"), None).is_ok());
+        assert!(Model::new(Some("opus[1m]"), None).is_ok());
+        assert!(Model::new(Some("--dangerously-skip-permissions"), None).is_err());
+        assert!(Model::new(Some("opus; rm"), None).is_err());
+        assert_eq!(
+            Model::new(Some("opus"), Some(Effort::XHigh))
+                .unwrap()
+                .describe(),
+            Some("Opus · xhigh effort".into())
+        );
     }
 
     #[test]
@@ -1246,6 +1525,8 @@ not json at all
             "Don't",
             None,
             Permissions::commands(true),
+            &Model::default(),
+            Path::new("/r/.git/spor/attachments"),
         );
         assert_eq!(program, "sh");
         assert_eq!(args, ["-c", r"codex exec 'Don'\''t'"]);

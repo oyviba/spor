@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "./api";
-import type { BranchInfo, Credential, RepoInfo, RepoState } from "./types";
-import { usePoll, useStored } from "./shared/hooks";
+import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary } from "./types";
+import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
+import { Button } from "./shared/Button";
+import { RepoPanel } from "./shared/Layout";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
@@ -44,7 +46,8 @@ import type { InboxItem } from "./sections/inbox/inbox";
 interface Toast {
   id: number;
   text: string;
-  tone: "ok" | "error";
+  /** progress: something still going; it stays until that's done. */
+  tone: "ok" | "error" | "progress";
   undo?: boolean;
   action?: ToastAction;
 }
@@ -85,12 +88,16 @@ interface AppCommand {
 
 /** What can be done to the open repository, for the palette and shortcuts. */
 function repoCommands(shell: Shell): AppCommand[] {
-  const sync = (what: "fetch" | "pull" | "push") => () => shell.act(() => api.sync(what), { undo: what === "pull" });
+  const sync = (what: "fetch" | "pull" | "push") => () =>
+    shell.act(() => api.sync(what), {
+      undo: what === "pull",
+      pending: { fetch: "Fetching…", pull: "Pulling…", push: shell.state?.upstream ? "Pushing…" : "Publishing…" }[what],
+    });
   return [
     { id: "fetch", label: "Fetch", hint: "all remotes", group: "Git", run: sync("fetch") },
     { id: "pull", label: "Pull", hint: "with rebase", group: "Git", run: sync("pull") },
     { id: "push", label: shell.state?.upstream ? "Push" : "Publish branch", group: "Git", run: sync("push") },
-    { id: "stash", label: "Stash changes", group: "Git", run: () => shell.act(() => api.stash(null), { undo: false }) },
+    { id: "stash", label: "Stash changes", group: "Git", run: () => shell.act(() => api.stash(null), { undo: false, pending: "Stashing…" }) },
     {
       id: "pr",
       label: "Open pull request for this branch",
@@ -126,9 +133,11 @@ export function App() {
   );
   const [state, setState] = useState<RepoState | null>(null);
   const [section, setSection] = useStored<SectionId>("section", "agents");
+  const [reposShown, setReposShown] = useStored("repos.shown", true);
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "agents", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [badges, setBadges] = useState<{ changes: number; working: number }>({ changes: 0, working: 0 });
+  const [changed, setChanged] = useState(0);
+  const [tasks, setTasks] = useState<TaskSummary[]>([]);
   // Tasks known to be waiting, so a new question toasts once.
   const asking = useRef<Set<string> | null>(null);
 
@@ -141,6 +150,32 @@ export function App() {
     );
   }, []);
   const fail = useCallback((e: unknown) => toast(errorText(e), "error"), [toast]);
+  // Something slow under way: say so if it takes more than a moment, until
+  // it's done (the returned function). Quick ones never show.
+  const progress = useCallback((text: string) => {
+    const id = Date.now() + Math.random();
+    let shown = false;
+    const timer = setTimeout(() => {
+      shown = true;
+      setToasts((t) => [...t.slice(-2), { id, text, tone: "progress" }]);
+    }, 400);
+    return () => {
+      clearTimeout(timer);
+      if (shown) setToasts((t) => t.filter((x) => x.id !== id));
+    };
+  }, []);
+  /** Run `work` with a progress toast, then toast its message (or the error). */
+  const track = useCallback(
+    async <T,>(text: string, work: () => Promise<T>): Promise<T> => {
+      const done = progress(text);
+      try {
+        return await work();
+      } finally {
+        done();
+      }
+    },
+    [progress],
+  );
 
   useEffect(() => {
     api.currentRepo().then(setRepo, () => setRepo(null));
@@ -211,56 +246,60 @@ export function App() {
     else toast(`${upstream} has ${commits} to pull`, "ok", false, { label: "Pull", run: () => doPull() });
   };
   const doPull = () =>
-    api
-      .sync("pull")
+    track("Pulling…", () => api.sync("pull"))
       .then((m) => toast(m, "ok", true), (e) => toast(errorText(e), "error"))
       .finally(() => refresh());
-  usePoll(refresh, 2000, [repo?.root], !!repo);
+  useRepoChanges(refresh, ["refs", "index"], [repo?.root], !!repo);
 
-  // Rail counts: files changed, agents working.
-  usePoll(
+  // The rail's count of files changed.
+  useRepoChanges(
     async () => {
-      const [files, tasks] = await Promise.all([api.status(), api.listTasks()]);
-      const waiting = tasks.filter((t) => t.asks > 0);
-      setBadges({
-        changes: new Set(files.map((f) => f.path)).size,
-        working: tasks.filter((t) => t.run?.state === "running").length,
-      });
-      if (asking.current) {
-        for (const t of waiting)
-          if (!asking.current.has(t.id) && !viewing(t.id))
-            toast(`${t.title} is waiting for you`, "ok", false, {
-              label: "Answer",
-              run: () => {
-                setSection("agents");
-                setTarget((old) => ({ section: "agents", taskId: t.id, seq: old.seq + 1 }));
-              },
-            });
-      }
-      asking.current = new Set(waiting.map((t) => t.id));
+      const files = await api.status();
+      setChanged(new Set(files.map((f) => f.path)).size);
     },
-    2000,
-    [repo?.root, state?.index],
+    ["index", "worktree"],
+    [repo?.root],
     !!repo,
   );
+
+  // Agent tasks, loaded here once for the rail, Agents and Issues: a task's
+  // commits are refs, the rest is in `.git/spor/tasks`.
+  const reloadTasks = useCallback(async () => {
+    const list = await api.listTasks();
+    setTasks(list);
+    const waiting = list.filter((t) => t.asks > 0);
+    if (asking.current) {
+      for (const t of waiting)
+        if (!asking.current.has(t.id) && !viewing(t.id))
+          toast(`${t.title} is waiting for you`, "ok", false, {
+            label: "Answer",
+            run: () => {
+              setSection("agents");
+              setTarget((old) => ({ section: "agents", taskId: t.id, seq: old.seq + 1 }));
+            },
+          });
+    }
+    asking.current = new Set(waiting.map((t) => t.id));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useRepoChanges(reloadTasks, ["tasks", "refs"], [repo?.root], !!repo);
+  const working = tasks.filter((t) => t.run?.state === "running").length;
 
   // What needs you in every repository of every workspace: the Inbox, and its badge.
   const everyRepo = [...new Set(workspaces.list.flatMap((w) => w.repos))];
   const inbox = useInbox(everyRepo, !!repo);
 
   const undo = useCallback(() => {
-    api
-      .undo()
+    track("Undoing…", api.undo)
       .then(async (msg) => {
         toast(msg);
         await refresh();
       })
       .catch(fail);
-  }, [toast, fail, refresh]);
+  }, [toast, fail, refresh, track]);
 
   /** Resolves to whether it opened. */
   const openRepo = (path: string) =>
-    api.openRepo(path).then(
+    track(`Opening ${path.split("/").pop()}…`, () => api.openRepo(path)).then(
       (r) => {
         lastState.current = null;
         setRepo(r);
@@ -290,12 +329,14 @@ export function App() {
             repo,
             state,
             refresh,
+            tasks,
+            reloadTasks,
             toast,
             fail,
             undo,
             act: async (run, opts) => {
               try {
-                const msg = await run();
+                const msg = await track(opts?.pending ?? "Working…", run);
                 if (msg) toast(msg, "ok", opts?.undo ?? true);
                 return true;
               } catch (e) {
@@ -307,7 +348,7 @@ export function App() {
             },
             switchBranch: async (run) => {
               try {
-                toast(await run(false), "ok", true);
+                toast(await track("Switching…", () => run(false)), "ok", true);
                 return true;
               } catch (e) {
                 const text = errorText(e);
@@ -318,7 +359,7 @@ export function App() {
                 toast(text.slice(9), "error", false, {
                   label: "Stash and switch",
                   run: () =>
-                    run(true)
+                    track("Stashing and switching…", () => run(true))
                       .then((msg) => toast(msg, "ok", true), fail)
                       .finally(refresh),
                 });
@@ -346,7 +387,7 @@ export function App() {
             confirm: (spec) => new Promise((resolve) => setDialog({ kind: "confirm", ...spec, resolve })),
           }
         : null,
-    [repo, state, refresh, toast, fail, undo, target, workspaces], // eslint-disable-line react-hooks/exhaustive-deps
+    [repo, state, refresh, tasks, toast, fail, undo, track, target, workspaces], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   /** Switch workspace, opening the repository last open there. */
@@ -433,6 +474,14 @@ export function App() {
     { id: "palette", label: "Command palette", group: "App", keys: "Mod+K", whileTyping: true, run: () => openPalette() },
     { id: "settings", label: "Settings", group: "App", keys: "Mod+,", whileTyping: true, run: () => setSettingsPage("appearance") },
     { id: "shortcuts", label: "Keyboard shortcuts", group: "App", keys: "Mod+/", whileTyping: true, run: () => setSettingsPage("shortcuts") },
+    {
+      id: "repos",
+      label: reposShown ? "Hide repositories" : "Show repositories",
+      group: "App",
+      keys: "Mod+Shift+E",
+      whileTyping: true,
+      run: () => setReposShown((v) => !v),
+    },
     // Not while typing: there ⌘Z undoes the typing.
     { id: "undo", label: state?.undo ? `Undo: ${state.undo}` : "Undo", group: "App", keys: "Mod+Z", run: () => undo() },
     {
@@ -615,18 +664,12 @@ export function App() {
 
   return (
     <ShellContext.Provider value={shell}>
-      <div className="app">
+      <div className={`app${reposShown ? " with-repos" : ""}`}>
         <nav className="rail" aria-label="Sections">
           {workspaceRail}
           {SECTIONS.map((s) => {
             const count =
-              s.id === "inbox"
-                ? inbox.items.length
-                : s.id === "changes"
-                  ? badges.changes
-                  : s.id === "agents"
-                    ? badges.working
-                    : 0;
+              s.id === "inbox" ? inbox.items.length : s.id === "changes" ? changed : s.id === "agents" ? working : 0;
             const tone = s.id === "inbox" ? " asking" : s.id === "agents" ? " live" : "";
             return (
               <button
@@ -645,22 +688,47 @@ export function App() {
           <span className="flex-1" />
           {settingsButton}
         </nav>
+        {reposShown && <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed} />}
         <div className="section">
           {state?.operation && <OperationBanner state={state} />}
           <div className="section-body">
-            {section === "inbox" && <InboxSection inbox={inbox} onOpen={openItem} />}
-            {section === "agents" && <AgentsSection />}
-            {section === "history" && <HistorySection />}
-            {section === "changes" && <ChangesSection />}
-            {section === "issues" && <IssuesSection />}
-            {section === "pulls" && <PullsSection />}
-            {section === "actions" && <ActionsSection />}
+            <Sections key={repo.root} section={section} inbox={<InboxSection inbox={inbox} onOpen={openItem} />} />
           </div>
         </div>
         <Toasts toasts={toasts} onUndo={undo} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
         {overlays}
       </div>
     </ShellContext.Provider>
+  );
+}
+
+const SECTION_VIEWS: Record<Exclude<SectionId, "inbox">, () => React.ReactNode> = {
+  changes: ChangesSection,
+  history: HistorySection,
+  issues: IssuesSection,
+  pulls: PullsSection,
+  actions: ActionsSection,
+  agents: AgentsSection,
+};
+
+/** The sections opened so far, kept mounted so going back to one shows it
+ * as it was at once, and then brings it up to date. A hidden one keeps its
+ * state but not its effects: it doesn't poll, watch or take keys. */
+function Sections({ section, inbox }: { section: SectionId; inbox: React.ReactNode }) {
+  const [opened, setOpened] = useState<SectionId[]>([section]);
+  if (!opened.includes(section)) setOpened([...opened, section]);
+  return (
+    <>
+      <KeepScroll shown={section} />
+      {SECTIONS.filter((s) => opened.includes(s.id)).map((s) => {
+        const View = s.id === "inbox" ? null : SECTION_VIEWS[s.id];
+        return (
+          <Activity key={s.id} mode={s.id === section ? "visible" : "hidden"}>
+            {View ? <View /> : inbox}
+          </Activity>
+        );
+      })}
+    </>
   );
 }
 
@@ -688,22 +756,28 @@ function OperationBanner({ state }: { state: RepoState }) {
           Resolve in Changes
         </button>
       ) : (
-        <button className="primary small" onClick={() => shell.act(api.continueOperation, { undo: false })}>
+        <Button
+          className="primary small"
+          onClick={() => shell.act(api.continueOperation, { undo: false, pending: `Continuing the ${what.toLowerCase()}…` })}
+        >
           Continue {what.toLowerCase()}
-        </button>
+        </Button>
       )}
       {state.operation !== "merge" && (
-        <button
+        <Button
           className="ghost small"
           title="Leave out the commit it stopped on"
-          onClick={() => shell.act(api.skipOperation, { undo: false })}
+          onClick={() => shell.act(api.skipOperation, { undo: false, pending: "Skipping the commit…" })}
         >
           Skip commit
-        </button>
+        </Button>
       )}
-      <button className="ghost small" onClick={() => shell.act(api.abortOperation, { undo: false })}>
+      <Button
+        className="ghost small"
+        onClick={() => shell.act(api.abortOperation, { undo: false, pending: `Aborting the ${what.toLowerCase()}…` })}
+      >
         Abort
-      </button>
+      </Button>
     </div>
   );
 }
@@ -713,6 +787,7 @@ function Toasts({ toasts, onUndo, onClose }: { toasts: Toast[]; onUndo: () => vo
     <div className="toasts" role="status" aria-live="polite">
       {toasts.map((t) => (
         <div key={t.id} className={`toast ${t.tone}`}>
+          {t.tone === "progress" && <span className="spinner" aria-hidden />}
           <span>{t.text}</span>
           {t.action && (
             <button
@@ -736,9 +811,11 @@ function Toasts({ toasts, onUndo, onClose }: { toasts: Toast[]; onUndo: () => vo
               Undo <kbd>⌘Z</kbd>
             </button>
           )}
-          <button className="icon-button tiny" onClick={() => onClose(t.id)} aria-label="Dismiss">
-            <X size={11} />
-          </button>
+          {t.tone !== "progress" && (
+            <button className="icon-button tiny" onClick={() => onClose(t.id)} aria-label="Dismiss">
+              <X size={11} />
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -754,16 +831,23 @@ function OpenRepo({
 }: {
   workspace: string;
   recent: string[];
-  onOpen: (path: string) => void;
+  onOpen: (path: string) => Promise<unknown>;
   onForget: (path: string) => void;
   toasts: Toast[];
 }) {
+  // The one being opened: it shows busy, and nothing else opens meanwhile.
+  const [opening, setOpening] = useState<string | null>(null);
+  const open = (path: string) => {
+    if (opening || !path.trim()) return;
+    setOpening(path);
+    onOpen(path).finally(() => setOpening(null));
+  };
   return (
     <div className="open-repo">
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onOpen(new FormData(e.currentTarget).get("path") as string);
+          open(new FormData(e.currentTarget).get("path") as string);
         }}
       >
         <h1>Open a repository</h1>
@@ -772,17 +856,25 @@ function OpenRepo({
           <Branch size={12} /> Spor shows its history, changes, issues, pull requests, Actions and agent tasks.
         </p>
         <input name="path" autoFocus placeholder="~/code/my-project" />
-        <button className="primary" type="submit">
+        <Button className="primary" type="submit" busy={opening != null && !recent.includes(opening)}>
           Open
-        </button>
+        </Button>
         {recent.length > 0 && (
           <div className="recent-repos">
             <div className="list-label">In {workspace}</div>
             {recent.map((r) => (
               <div key={r} className="recent-row">
-                <button type="button" className="recent-open" onClick={() => onOpen(r)} title={r}>
+                <button
+                  type="button"
+                  className={`recent-open${opening === r ? " opening" : ""}`}
+                  onClick={() => open(r)}
+                  disabled={opening != null}
+                  aria-busy={opening === r || undefined}
+                  title={r}
+                >
                   <span className="repo-name">{r.split("/").pop()}</span>
                   <span className="muted small-text truncate">{r}</span>
+                  {opening === r && <span className="spinner" aria-hidden />}
                 </button>
                 <button type="button" className="icon-button tiny" title={`Remove from ${workspace}`} onClick={() => onForget(r)}>
                   <X size={11} />
@@ -795,7 +887,7 @@ function OpenRepo({
       <div className="toasts">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.tone}`}>
-            {t.text}
+            <span>{t.text}</span>
           </div>
         ))}
       </div>

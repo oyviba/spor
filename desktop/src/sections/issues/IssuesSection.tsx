@@ -1,13 +1,16 @@
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Issue, IssueDetail, TaskSummary } from "../../types";
 import { useShell } from "../../shared/app";
-import { usePoll, useStored } from "../../shared/hooks";
-import { DetailsCard, EmptyState, PageHeader, SidebarHeader } from "../../shared/Layout";
+import { useChanged, usePoll, useStored } from "../../shared/hooks";
+import { Button } from "../../shared/Button";
+import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { Markdown } from "../../shared/Markdown";
+import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
-import { ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
+import { isOpen } from "../agents/status";
+import { ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
 import { ArrowUp, Bot, Branch, External, MessageSquare, Tag, Users } from "../../shared/Icons";
 
 type Filter = "assigned" | "yours" | "open" | "closed";
@@ -30,20 +33,26 @@ export function issueStatus(issue: Issue, task?: TaskSummary): Status {
  * whose pull request closes it (#47). */
 export function IssuesSection() {
   const shell = useShell();
-  const { fail } = shell;
+  const { fail, tasks } = shell;
   const [filter, setFilter] = useStored<Filter>("issues.filter", "assigned");
   const [issues, setIssues] = useState<Issue[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useStored<number | null>("issues.selected", null);
   const [detail, setDetail] = useState<IssueDetail | null>(null);
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
 
+  // The filter shown: an answer for one picked before it is dropped.
+  const wanted = useRef(filter);
+  wanted.current = filter;
   usePoll(
     async () => {
+      const asked = filter;
       try {
-        setIssues(await api.issues(filter));
+        const list = await api.issues(asked);
+        if (wanted.current !== asked) return;
+        setIssues(list);
         setError(null);
       } catch (e) {
+        if (wanted.current !== asked) return;
         setError(errorText(e));
         setIssues([]);
       }
@@ -51,10 +60,9 @@ export function IssuesSection() {
     60_000,
     [filter],
   );
-  usePoll(async () => setTasks(await api.listTasks()), 5000, [shell.repo.root]);
-  useEffect(() => {
+  useChanged(() => {
     if (shell.target.section === "issues" && shell.target.number) setSelected(shell.target.number);
-  }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shell.target.seq]);
 
   const loadDetail = async () => {
     if (selected == null) return;
@@ -65,11 +73,11 @@ export function IssuesSection() {
     }
   };
   usePoll(loadDetail, 60_000, [selected], selected != null && !error);
-  useEffect(() => setDetail(null), [selected]);
+  useChanged(() => setDetail(null), [selected]);
 
   // The newest task on an issue: an open one, else the last that landed.
   const taskFor = (n: number) =>
-    tasks.find((t) => t.issue === n && !t.landed) ?? tasks.find((t) => t.issue === n);
+    tasks.find((t) => t.issue === n && isOpen(t)) ?? tasks.find((t) => t.issue === n);
   const shown = detail?.issue.number === selected ? detail : null;
   const task = shown ? taskFor(shown.issue.number) : undefined;
 
@@ -79,7 +87,15 @@ export function IssuesSection() {
         <SidebarHeader />
         <div className="segmented">
           {FILTERS.map((f) => (
-            <button key={f.id} aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>
+            <button
+              key={f.id}
+              aria-pressed={filter === f.id}
+              onClick={() => {
+                if (f.id === filter) return;
+                setIssues(null);
+                setFilter(f.id);
+              }}
+            >
               {f.label}
             </button>
           ))}
@@ -87,7 +103,9 @@ export function IssuesSection() {
         <div className="task-list">
           {error ? (
             <div className="sidebar-empty">{error}</div>
-          ) : issues == null ? null : issues.length === 0 ? (
+          ) : issues == null ? (
+            <ListLoading what="issues" />
+          ) : issues.length === 0 ? (
             <div className="sidebar-empty">
               {filter === "assigned" ? "Nothing assigned to you." : "No issues here."}
             </div>
@@ -114,7 +132,7 @@ export function IssuesSection() {
                         <MessageSquare size={10} /> {i.comments}
                       </span>
                     )}
-                    <StatusPill status={issueStatus(i, t && !t.landed ? t : undefined)} />
+                    <StatusPill status={issueStatus(i, t && isOpen(t) ? t : undefined)} />
                   </div>
                 </button>
               );
@@ -137,7 +155,7 @@ export function IssuesSection() {
                   <h2 title={shown.issue.title}>
                     {shown.issue.title} <span className="muted num">#{shown.issue.number}</span>
                   </h2>
-                  <StatusPill status={issueStatus(shown.issue, task && !task.landed ? task : undefined)} />
+                  <StatusPill status={issueStatus(shown.issue, task && isOpen(task) ? task : undefined)} />
                 </>
               }
             />
@@ -149,7 +167,7 @@ export function IssuesSection() {
               </div>
               <IssueCard detail={shown} task={task} onChanged={loadDetail} />
             </div>
-            {shown.issue.open && !(task && !task.landed) && (
+            {shown.issue.open && !(task && isOpen(task)) && (
               <StartTask
                 key={shown.issue.number}
                 detail={shown}
@@ -195,7 +213,12 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
   const shell = useShell();
   const i = detail.issue;
   const act = (action: "close" | "reopen") =>
-    shell.act(() => api.issueAction(i.number, action), { undo: false }).then((ok) => ok && onChanged());
+    shell
+      .act(() => api.issueAction(i.number, action), {
+        undo: false,
+        pending: action === "close" ? `Closing #${i.number}…` : `Reopening #${i.number}…`,
+      })
+      .then((ok) => ok && onChanged());
   return (
     <DetailsCard>
       <div className="inspector-section">
@@ -215,7 +238,7 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
           <button className="inspector-row action" onClick={() => shell.go({ section: "agents", taskId: task.id })}>
             <Bot size={13} />
             <span className="truncate">
-              {task.landed ? "Landed by" : "Agent task:"} <b>{task.id}</b>
+              {task.landed ? "Landed by" : task.closed ? "Closed task:" : "Agent task:"} <b>{task.id}</b>
             </span>
           </button>
         )}
@@ -229,12 +252,12 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
         )}
       </div>
       <div className="inspector-actions">
-        <button className="ghost" onClick={() => act(i.open ? "close" : "reopen")}>
+        <Button className="ghost" onClick={() => act(i.open ? "close" : "reopen")}>
           {i.open ? "Close issue" : "Reopen"}
-        </button>
-        <button className="icon-button" title="Open on GitHub" onClick={() => api.openUrl(i.url).catch(shell.fail)}>
+        </Button>
+        <Button className="icon-button" title="Open on GitHub" onClick={() => api.openUrl(i.url).catch(shell.fail)}>
           <External size={13} />
-        </button>
+        </Button>
       </div>
     </DetailsCard>
   );
@@ -250,13 +273,20 @@ function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: 
   const [base, setBase] = useState(repo.default_base ?? repo.branch ?? repo.branches[0] ?? "main");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const attachments = useAttachments(shell.fail);
   const verb = settings.agent === "none" ? "Create task" : "Start agent task";
 
   const start = async () => {
-    if (busy || !prompt.trim()) return;
+    if (busy || !prompt.trim() || attachments.saving) return;
     setBusy(true);
     try {
-      const t = await api.createIssueTask(detail.issue.number, prompt, base, choiceOf(settings), settings.mode);
+      const t = await api.createIssueTask(
+        detail.issue.number,
+        withImages(prompt, attachments.images),
+        base,
+        choiceOf(settings),
+        settings.mode,
+      );
       shell.toast(`Started ${t.id} on #${detail.issue.number}`);
       onStarted(t);
     } catch (e) {
@@ -269,7 +299,8 @@ function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: 
   return (
     <div className="composer-dock">
       <div className="column">
-        <div className="composer">
+        <div className={`composer${attachments.dragging ? " dropping" : ""}`} {...attachments.handlers}>
+          <AttachmentStrip images={attachments.images} onRemove={attachments.remove} />
           {open ? (
             <textarea
               rows={8}
@@ -314,12 +345,16 @@ function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: 
               <option value="none">No agent — I'll run one</option>
             </select>
             {settings.agent === "claude" && (
-              <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
+              <>
+                <ModelPicker settings={settings} onSettings={setSettings} />
+                <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
+              </>
             )}
             <span className="flex-1" />
-            <button className="primary" disabled={busy || !prompt.trim()} onClick={start}>
+            <AttachButton onFiles={attachments.add} />
+            <Button className="primary" disabled={!prompt.trim() || attachments.saving} busy={busy} onClick={start}>
               <ArrowUp size={12} /> {verb}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

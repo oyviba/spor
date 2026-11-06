@@ -1,19 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Job, LogLine, Run, RunDetail, TaskSummary } from "../../types";
+import { Button } from "../../shared/Button";
 import { useShell } from "../../shared/app";
-import { useNow, usePoll, useStored } from "../../shared/hooks";
-import { DetailsCard, EmptyState, PageHeader, SidebarHeader } from "../../shared/Layout";
+import { useChanged, useNow, usePoll, useStored } from "../../shared/hooks";
+import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { StatusPill } from "../../shared/StatusPill";
 import { CiIcon, ciStatus, elapsed } from "../../shared/ci";
 import { ago } from "../agents/transcript";
 import { choiceOf, useAgentSettings } from "../agents/Composer";
+import { isOpen } from "../agents/status";
 import { Bot, Branch, Chevron, Commit, External, Refresh, Square } from "../../shared/Icons";
 
 /** GitHub Actions: runs, their jobs and logs; re-run and cancel. */
 export function ActionsSection() {
   const shell = useShell();
-  const { fail, state } = shell;
+  const { fail, state, tasks } = shell;
   const [workflow, setWorkflow] = useStored<string>("actions.workflow", "");
   const [mine, setMine] = useStored("actions.mine", false);
   const [workflows, setWorkflows] = useState<string[]>([]);
@@ -22,19 +24,27 @@ export function ActionsSection() {
   const [selected, setSelected] = useStored<number | null>("actions.selected", null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [jobId, setJobId] = useState<number | null>(null);
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
   // Bumped after a re-run or cancel: reload the list and the run now.
   const [nonce, setNonce] = useState(0);
   const now = useNow(1000, runs?.some((r) => r.status === "running" || r.status === "queued") ?? false);
 
   const branch = mine ? (state?.branch ?? null) : null;
   const anyLive = runs?.some((r) => r.status === "running" || r.status === "queued") ?? false;
+  // The filter shown: an answer for one picked before it is dropped.
+  const filterKey = `${workflow}\n${branch}`;
+  const wanted = useRef(filterKey);
+  wanted.current = filterKey;
+  useChanged(() => setRuns(null), [filterKey]);
   usePoll(
     async () => {
+      const asked = filterKey;
       try {
-        setRuns(await api.runs(branch, workflow || null));
+        const list = await api.runs(branch, workflow || null);
+        if (wanted.current !== asked) return;
+        setRuns(list);
         setError(null);
       } catch (e) {
+        if (wanted.current !== asked) return;
         setError(errorText(e));
         setRuns([]);
       }
@@ -44,17 +54,16 @@ export function ActionsSection() {
   );
   useEffect(() => {
     api.workflows().then(setWorkflows, () => {});
-    api.listTasks().then(setTasks, () => {});
   }, []);
 
   // Sent here from a PR's checks: that run, and that job.
-  useEffect(() => {
+  useChanged(() => {
     const t = shell.target;
     if (t.section === "actions" && t.runId) {
       setSelected(t.runId);
       if (t.jobId) setJobId(t.jobId);
     }
-  }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shell.target.seq]);
 
   const live = detail?.run.status === "running" || detail?.run.status === "queued";
   usePoll(
@@ -73,13 +82,11 @@ export function ActionsSection() {
     [selected, nonce],
     selected != null && !error,
   );
-  useEffect(() => {
-    setDetail(null);
-  }, [selected]);
+  useChanged(() => setDetail(null), [selected]);
 
   const run = detail?.run.id === selected ? detail : null;
   const job = run?.jobs.find((j) => j.id === jobId) ?? null;
-  const task = run ? tasks.find((t) => t.branch === run.run.branch && !t.landed) : undefined;
+  const task = run ? tasks.find((t) => t.branch === run.run.branch && isOpen(t)) : undefined;
 
   return (
     <>
@@ -99,7 +106,9 @@ export function ActionsSection() {
         <div className="task-list">
           {error ? (
             <div className="sidebar-empty">{error}</div>
-          ) : runs == null ? null : runs.length === 0 ? (
+          ) : runs == null ? (
+            <ListLoading what="runs" />
+          ) : runs.length === 0 ? (
             <div className="sidebar-empty">No runs.</div>
           ) : (
             runs.map((r) => (
@@ -259,28 +268,26 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
   const live = r.status === "running" || r.status === "queued";
   const failed = run.jobs.some((j) => j.status === "failure");
   const act = (a: "rerun" | "rerun_failed" | "cancel") =>
-    shell.act(() => api.runAction(r.id, a), { undo: false }).then(onChanged);
+    shell
+      .act(() => api.runAction(r.id, a), {
+        undo: false,
+        pending: a === "cancel" ? "Cancelling the run…" : "Starting the re-run…",
+      })
+      .then(onChanged);
 
-  // A failed run on an agent's branch: hand the failure to that agent.
+  // A failed run on an agent's branch: hand the failed job (its failing
+  // step and the end of its log) to that agent.
   const sendToAgent = async () => {
     if (!task) return;
     const failedJob = job?.status === "failure" ? job : run.jobs.find((j) => j.status === "failure");
-    let excerpt = "";
-    if (failedJob) {
-      const lines = await api.jobLog(failedJob.id).catch(() => []);
-      const bad = sections(lines).filter((s) => s.failed);
-      excerpt = bad
-        .map((s) => `${s.title}\n${s.lines.slice(-60).map((l) => l.text).join("\n")}`)
-        .join("\n\n")
-        .slice(-6000);
-    }
-    const message =
-      `CI failed: ${r.workflow} #${r.number}${failedJob ? `, job “${failedJob.name}”` : ""}.` +
-      (excerpt ? `\n\nThe failing part of the log:\n\`\`\`\n${excerpt}\n\`\`\`` : "") +
-      `\n\nFind the cause, fix it, check it passes locally, and commit.`;
+    if (!failedJob) return;
     const ok = await shell.act(
-      () => api.sendToAgent(task.id, message, choiceOf(settings), settings.mode).then(() => `Sent the failure to ${task.id}`),
-      { undo: false },
+      () =>
+        api
+          .jobFeedback(r.id, failedJob.id)
+          .then((message) => api.sendToAgent(task.id, message, choiceOf(settings), settings.mode))
+          .then(() => `Sent the failure to ${task.id}`),
+      { undo: false, pending: "Sending the failure…" },
     );
     if (ok) shell.go({ section: "agents", taskId: task.id });
   };
@@ -315,29 +322,29 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
       </div>
       <div className="inspector-actions">
         {task && failed && !live && (
-          <button className="primary" onClick={sendToAgent} title="Send the failing log to the agent working on this branch">
+          <Button className="primary" onClick={sendToAgent} title="Send the failing log to the agent working on this branch">
             <Bot size={12} /> Send failure to agent
-          </button>
+          </Button>
         )}
         {live ? (
-          <button className="ghost" onClick={() => act("cancel")}>
+          <Button className="ghost" onClick={() => act("cancel")}>
             <Square size={10} /> Cancel
-          </button>
+          </Button>
         ) : (
           <>
             {failed && (
-              <button className={task ? "ghost" : "primary"} onClick={() => act("rerun_failed")}>
+              <Button className={task ? "ghost" : "primary"} onClick={() => act("rerun_failed")}>
                 Re-run failed
-              </button>
+              </Button>
             )}
-            <button className="ghost" onClick={() => act("rerun")}>
+            <Button className="ghost" onClick={() => act("rerun")}>
               Re-run all
-            </button>
+            </Button>
           </>
         )}
-        <button className="icon-button" title="Open on GitHub" onClick={() => api.openUrl(r.url).catch(shell.fail)}>
+        <Button className="icon-button" title="Open on GitHub" onClick={() => api.openUrl(r.url).catch(shell.fail)}>
           <External size={13} />
-        </button>
+        </Button>
       </div>
     </DetailsCard>
   );

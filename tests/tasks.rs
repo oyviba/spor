@@ -252,7 +252,7 @@ fn issue_tasks_are_named_after_the_issue_and_close_it_when_landed() {
     assert_eq!(task.branch, "agent/7-login-fails-safari");
     assert_eq!(task.issue, Some(7));
     assert_eq!(f.tasks.get(&task.id).unwrap().issue, Some(7));
-    assert!(task.pull_request_body().starts_with("Closes #7"));
+    assert!(task.pull_request_body(None).starts_with("Closes #7"));
 
     work(&task.worktree, "app.txt", "fixed\n", Some("Fix it"));
     f.tasks.land(&task, LandMode::Squash, false).unwrap();
@@ -277,16 +277,25 @@ fn publish_pushes_the_branch_before_opening_a_pull_request() {
     );
     let task = f.tasks.create("Add a thing", "main").unwrap();
 
-    let err = f.tasks.publish(&task, "origin", false, false).unwrap_err();
+    let err = f
+        .tasks
+        .publish(&task, "origin", false, false, false)
+        .unwrap_err();
     assert!(err.contains("no commits"), "{err}");
 
     work(&task.worktree, "new.txt", "new\n", None);
-    let err = f.tasks.publish(&task, "origin", false, false).unwrap_err();
+    let err = f
+        .tasks
+        .publish(&task, "origin", false, false, false)
+        .unwrap_err();
     assert!(err.contains("uncommitted"), "{err}");
 
     // The push works; opening the PR can't (the remote isn't GitHub), and
     // then the task has no PR.
-    let err = f.tasks.publish(&task, "origin", true, true).unwrap_err();
+    let err = f
+        .tasks
+        .publish(&task, "origin", true, true, false)
+        .unwrap_err();
     assert!(err.contains("GitHub"), "{err}");
     git(
         &remote,
@@ -327,5 +336,33 @@ fn settle_cleans_up_after_a_merged_pull_request_and_can_be_undone() {
     let back = f.tasks.get(&task.id).unwrap();
     assert_eq!(back.state, TaskState::Open);
     assert_eq!(back.pull, Some(12));
+    assert!(task.worktree.join("app.txt").exists());
+}
+
+#[test]
+fn close_cleans_up_after_a_closed_pull_request_and_can_be_undone() {
+    let f = fixture();
+    let task = f.tasks.create("Closed elsewhere", "main").unwrap();
+    work(&task.worktree, "app.txt", "done\n", Some("Do it"));
+    f.tasks.link_pull(&task, 13).unwrap();
+    let task = f.tasks.get(&task.id).unwrap();
+
+    let undo = f.tasks.close(&task).unwrap();
+    assert!(!task.worktree.exists());
+    assert!(f.repo.resolve("refs/heads/agent/closed-elsewhere").is_err());
+    let closed = f.tasks.get(&task.id).unwrap();
+    assert_eq!(closed.state, TaskState::Closed);
+    assert_eq!(closed.pull, Some(13));
+    let err = f.tasks.close(&closed).unwrap_err();
+    assert!(err.contains("already settled"), "{err}");
+
+    // Closed tasks sort after open ones.
+    let open = f.tasks.create("Still going", "main").unwrap();
+    let ids: Vec<String> = f.tasks.list().into_iter().map(|t| t.id).collect();
+    assert_eq!(ids, [open.id.clone(), task.id.clone()]);
+
+    f.tasks.restore(&undo).unwrap();
+    let back = f.tasks.get(&task.id).unwrap();
+    assert_eq!(back.state, TaskState::Open);
     assert!(task.worktree.join("app.txt").exists());
 }

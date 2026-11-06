@@ -2,10 +2,12 @@
 // shows the current and incoming sides; pick one, both, or both the other
 // way round, then Save and mark resolved.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useChanged } from "../../shared/hooks";
 import { api, errorText } from "../../api";
 import type { ConflictPart } from "../../types";
 import { Check } from "../../shared/Icons";
+import { Button } from "../../shared/Button";
 
 type Choice = "ours" | "theirs" | "both" | "both_theirs_first";
 
@@ -18,13 +20,13 @@ export function ConflictRegions({
 }: {
   path: string;
   operation: string | null;
-  onSave: (choices: Choice[]) => void;
+  onSave: (choices: Choice[]) => unknown;
 }) {
   const [parts, setParts] = useState<ConflictPart[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [choices, setChoices] = useState<(Choice | null)[]>([]);
 
-  useEffect(() => {
+  useChanged(() => {
     setParts(null);
     setError(null);
     api.conflictRegions(path).then(
@@ -68,9 +70,9 @@ export function ConflictRegions({
         <button className="ghost small" onClick={() => setChoices(choices.map(() => "theirs"))}>
           All {sides.theirs.toLowerCase()}
         </button>
-        <button className="primary small" disabled={picked < n} onClick={() => onSave(choices as Choice[])}>
+        <Button className="primary small" disabled={picked < n} onClick={() => onSave(choices as Choice[])}>
           <Check size={12} /> Save and mark resolved
-        </button>
+        </Button>
       </div>
       {parts.map((part, i) => {
         if (part.kind === "text") return <Context key={i} text={part.text} first={i === 0} last={i === parts.length - 1} />;

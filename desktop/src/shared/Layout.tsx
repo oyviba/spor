@@ -4,8 +4,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { RepoHead } from "../types";
-import { useShell } from "./app";
-import { Branch } from "./Icons";
+import { useRepoChanges } from "./hooks";
+import { useShell, type Shell } from "./app";
+import { Branch, Folder, Plus } from "./Icons";
 
 /** The top of every sidebar: the repository (click to switch to a recent
  * one or open another) and the section's own buttons. */
@@ -61,7 +62,8 @@ export function SidebarHeader({ children }: { children?: React.ReactNode }) {
 /** The workspace's repositories with their branch and state: click to
  * switch, right-click to move one to another workspace or remove it. */
 function RepoSwitcher({ onClose, onOpenOther }: { onClose: () => void; onOpenOther: () => void }) {
-  const { repo, recent, openRepo, forgetRepo, menu, workspaceName, otherWorkspaces, moveRepo } = useShell();
+  const shell = useShell();
+  const { repo, recent, openRepo, menu, workspaceName } = shell;
   const [heads, setHeads] = useState<Map<string, RepoHead>>(new Map());
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -81,7 +83,7 @@ function RepoSwitcher({ onClose, onOpenOther }: { onClose: () => void; onOpenOth
       window.removeEventListener("keydown", key);
     };
   }, [onClose]);
-  const sorted = [...recent].sort((a, b) => (a.split("/").pop() ?? a).localeCompare(b.split("/").pop() ?? b));
+  const sorted = byName(recent);
   return (
     <div className="repo-switcher" ref={ref} role="dialog" aria-label={`Repositories in ${workspaceName}`}>
       <div className="list-label">{workspaceName}</div>
@@ -97,13 +99,7 @@ function RepoSwitcher({ onClose, onOpenOther }: { onClose: () => void; onOpenOth
               onClose();
               if (!here) openRepo(path);
             }}
-            onContextMenu={(e) =>
-              menu(e, [
-                ...otherWorkspaces.map((w) => ({ label: `Move to ${w.name}`, run: () => moveRepo(path, w.id) })),
-                { label: "Copy path", separator: otherWorkspaces.length > 0, run: () => navigator.clipboard.writeText(path) },
-                { label: `Remove from ${workspaceName}`, danger: true, separator: true, disabled: here, run: () => forgetRepo(path) },
-              ])
-            }
+            onContextMenu={(e) => menu(e, repoMenu(shell, path))}
           >
             <span className="repo-switch-name truncate">{path.split("/").pop()}</span>
             {h?.exists === false ? (
@@ -132,6 +128,98 @@ function RepoSwitcher({ onClose, onOpenOther }: { onClose: () => void; onOpenOth
         Open another repository…
       </button>
     </div>
+  );
+}
+
+const byName = (paths: string[]) =>
+  [...paths].sort((a, b) => (a.split("/").pop() ?? a).localeCompare(b.split("/").pop() ?? b));
+
+/** Right-click on a repository in the switcher or the panel. */
+function repoMenu(shell: Shell, path: string) {
+  const { repo, otherWorkspaces, moveRepo, workspaceName, forgetRepo } = shell;
+  return [
+    ...otherWorkspaces.map((w) => ({ label: `Move to ${w.name}`, run: () => moveRepo(path, w.id) })),
+    { label: "Copy path", separator: otherWorkspaces.length > 0, run: () => navigator.clipboard.writeText(path) },
+    { label: `Remove from ${workspaceName}`, danger: true, separator: true, disabled: path === repo.root, run: () => forgetRepo(path) },
+  ];
+}
+
+/** The workspace's repositories in a column beside the rail, the open one
+ * marked, so which one you're in is plain from any section (⌘⇧E hides it).
+ * The open one is live; the others are read on opening, when a ref moves
+ * here, on coming back to the window and every 30 s. */
+export function RepoPanel({ color, changed }: { color: string; changed: number }) {
+  const shell = useShell();
+  const { repo, state, recent, openRepo, menu, workspaceName } = shell;
+  const [heads, setHeads] = useState<Map<string, RepoHead>>(new Map());
+  const load = () =>
+    api.repoHeads(recent).then((list) => setHeads(new Map(list.map((h) => [h.path, h]))), () => undefined);
+  const paths = recent.join("\n");
+  useRepoChanges(load, ["refs"], [paths, repo.root]);
+  useEffect(() => {
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, [paths]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openOther = async () => {
+    const r = await shell.prompt({ title: "Open a repository", placeholder: "Path to a repository", action: "Open" });
+    if (r?.value.trim()) openRepo(r.value.trim());
+  };
+  return (
+    <aside className="repo-panel" aria-label={`Repositories in ${workspaceName}`} style={{ "--ws": color } as React.CSSProperties}>
+      <div className="repo-panel-top">
+        <span className="repo-panel-workspace truncate">{workspaceName}</span>
+        <button className="icon-button tiny" title="Open another repository" aria-label="Open another repository" onClick={openOther}>
+          <Plus size={14} />
+        </button>
+      </div>
+      <div className="repo-panel-list">
+        {byName(recent).map((path) => {
+          const here = path === repo.root;
+          const h: RepoHead | undefined = here
+            ? {
+                path,
+                exists: true,
+                branch: state?.branch ?? repo.branch ?? null,
+                ahead: state?.ahead ?? 0,
+                behind: state?.behind ?? 0,
+                changes: changed,
+              }
+            : heads.get(path);
+          const missing = h?.exists === false;
+          return (
+            <button
+              key={path}
+              className={`repo-panel-row${here ? " current" : ""}${missing ? " missing" : ""}`}
+              title={missing ? `${path} — not found` : path}
+              aria-current={here ? "true" : undefined}
+              onClick={() => !here && openRepo(path)}
+              onContextMenu={(e) => menu(e, repoMenu(shell, path))}
+            >
+              <Folder size={14} />
+              <span className="repo-panel-text">
+                <span className="repo-panel-name truncate">{path.split("/").pop()}</span>
+                <span className="repo-panel-branch truncate">
+                  {missing ? (
+                    "not found"
+                  ) : (
+                    <>
+                      <Branch size={10} /> {h ? (h.branch ?? "detached HEAD") : "…"}
+                    </>
+                  )}
+                </span>
+              </span>
+              {h && !missing && (
+                <span className="repo-panel-counts">
+                  {h.changes > 0 && <span className="num small-text dirty" title={`${h.changes} changed files`}>{h.changes}</span>}
+                  {h.behind > 0 && <span className="num small-text behind" title={`${h.behind} to pull`}>↓{h.behind}</span>}
+                  {h.ahead > 0 && <span className="num small-text muted" title={`${h.ahead} to push`}>↑{h.ahead}</span>}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </aside>
   );
 }
 
@@ -167,6 +255,16 @@ export function Tabs<T extends string>({
 /** The floating card on the right of a page. */
 export function DetailsCard({ children }: { children: React.ReactNode }) {
   return <aside className="inspector">{children}</aside>;
+}
+
+/** A list on its way (from GitHub, say): shown after a beat, so a quick
+ * load doesn't flash it. */
+export function ListLoading({ what }: { what: string }) {
+  return (
+    <div className="sidebar-empty loading" role="status">
+      <span className="spinner" aria-hidden /> Loading {what}…
+    </div>
+  );
 }
 
 export function EmptyState({ title, children }: { title: string; children?: React.ReactNode }) {

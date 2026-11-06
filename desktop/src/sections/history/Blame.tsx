@@ -2,11 +2,11 @@
 // the working tree. Lines from the same commit are grouped; the gutter
 // shows the commit once per group, and clicking it opens it in the graph.
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { api, errorText } from "../../api";
 import type { BlameRow } from "../../types";
 import { ago } from "../agents/transcript";
-import { useNow } from "../../shared/hooks";
+import { useChanged, useNow } from "../../shared/hooks";
 
 interface Props {
   path: string;
@@ -22,7 +22,7 @@ export function Blame({ path, rev, onShowCommit, onFileHistory }: Props) {
   const [hover, setHover] = useState<string | null>(null);
   const now = useNow(60_000);
 
-  useEffect(() => {
+  useChanged(() => {
     setRows(null);
     setError(null);
     api.blame(path, rev).then(setRows, (e) => setError(errorText(e)));

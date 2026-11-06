@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { LineComment, RunPatch, TaskDetail, TaskPull, TaskSummary } from "../../types";
-import { activityAt } from "./status";
-import { usePoll, useStored } from "../../shared/hooks";
+import { activityAt, isOpen } from "./status";
+import { catchUpPrompt } from "./prompts";
+import { useChanged, usePoll, useRepoChanges, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { Sidebar } from "./Sidebar";
 import { NewTask } from "./NewTask";
@@ -16,7 +17,9 @@ type View = { kind: "new" } | { kind: "task"; id: string };
 export function AgentsSection() {
   const shell = useShell();
   const { repo, fail, toast } = shell;
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  // The shell's list, with the open task's row kept in step with its detail.
+  const [tasks, setTasks] = useState<TaskSummary[]>(shell.tasks);
+  useEffect(() => setTasks(shell.tasks), [shell.tasks]);
   const [view, setView] = useStored<View>("agents.view", { kind: "new" });
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
@@ -36,19 +39,16 @@ export function AgentsSection() {
   const selectedId = view.kind === "task" ? view.id : null;
 
   // Another section sent us to a task.
-  useEffect(() => {
+  useChanged(() => {
     if (shell.target.section === "agents" && shell.target.taskId) setView({ kind: "task", id: shell.target.taskId });
-  }, [shell.target.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shell.target.seq]);
 
-  const refreshTasks = useCallback(async () => {
-    setTasks(await api.listTasks());
-  }, []);
-  usePoll(refreshTasks, 1500, [repo.root]);
+  const refreshTasks = shell.reloadTasks;
 
   // Open tasks' pull requests (one `gh` call), and a note when one merges.
   const [pulls, setPulls] = useState<Record<string, TaskPull>>({});
   const merged = useRef<Set<string> | null>(null);
-  const openTasks = tasks.filter((t) => !t.landed).length;
+  const openTasks = tasks.filter(isOpen).length;
   const refreshPulls = useCallback(async () => {
     let list: TaskPull[];
     try {
@@ -57,34 +57,36 @@ export function AgentsSection() {
       return; // Not GitHub, or no `gh`: tasks just have no PRs.
     }
     setPulls(Object.fromEntries(list.map((p) => [p.task, p])));
-    const now = new Set(list.filter((p) => p.pull.state === "merged").map((p) => p.task));
+    const now = new Set(list.filter((p) => p.pull.state === "merged" || p.pull.state === "closed").map((p) => p.task));
     if (merged.current)
       for (const p of list)
         if (now.has(p.task) && !merged.current.has(p.task))
-          toast(`#${p.pull.number} merged — ${p.task} can be cleaned up`, "ok", false, {
-            label: "Clean up",
-            run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`),
-          });
+          toast(
+            `#${p.pull.number} ${p.pull.state === "merged" ? "merged" : "was closed"} — ${p.task} can be cleaned up`,
+            "ok",
+            false,
+            p.pull.state === "merged"
+              ? { label: "Clean up", run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`) }
+              : { label: "Close task", run: () => close(p.task) },
+          );
     merged.current = now;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   usePoll(refreshPulls, 30_000, [repo.root, openTasks], openTasks > 0);
 
-  const selected = tasks.find((t) => t.id === selectedId);
-  const running = selected?.run?.state === "running";
   const refreshDetail = useCallback(async () => {
     if (!selectedId) return;
     try {
       const d = await api.taskDetail(selectedId);
       setDetail((old) => (old?.task.id !== d.task.id || JSON.stringify(old) !== JSON.stringify(d) ? d : old));
-      // The open task polls faster than the list; keep its row in step.
+      // Keep its row in step with the detail.
       setTasks((ts) => ts.map((t) => (t.id === d.task.id ? d.task : t)));
     } catch (e) {
       // The task was landed or discarded elsewhere.
       if (String(e).startsWith("No task")) setView({ kind: "new" });
     }
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
-  usePoll(refreshDetail, running ? 1000 : 3000, [selectedId], !!selectedId);
-  useEffect(() => {
+  useRepoChanges(refreshDetail, ["tasks", "refs"], [selectedId], !!selectedId);
+  useChanged(() => {
     setDetail(null);
     setTab("conversation");
     setFocus(null);
@@ -124,7 +126,7 @@ export function AgentsSection() {
   useEffect(() => {
     for (const [id, messages] of Object.entries(queue)) {
       const t = tasks.find((x) => x.id === id);
-      if (!t || t.landed) {
+      if (!t || !isOpen(t)) {
         if (!t && tasks.length > 0) setQueue(({ [id]: _, ...rest }) => rest);
         continue;
       }
@@ -184,14 +186,20 @@ export function AgentsSection() {
       setQueue((q) => ({ ...q, [id]: [...(q[id] ?? []), text] }));
       return;
     }
-    api
+    return api
       .sendToAgent(id, text, choiceOf(settings), settings.mode)
       .then(() => setTab("conversation"))
       .then(afterChange, fail);
   };
 
   const settle = (id: string, commit: string) =>
-    shell.act(() => api.settleTask(id, commit)).then(async () => {
+    shell.act(() => api.settleTask(id, commit), { pending: "Cleaning up…" }).then(async () => {
+      await refreshTasks();
+      await refreshPulls();
+    });
+
+  const close = (id: string) =>
+    shell.act(() => api.closeTask(id), { pending: "Cleaning up…" }).then(async () => {
       await refreshTasks();
       await refreshPulls();
     });
@@ -202,28 +210,32 @@ export function AgentsSection() {
     onShowPull: (n: number) => shell.go({ section: "pulls", number: n }),
     onPublish: (draft: boolean, commitUncommitted: boolean) =>
       shell
-        .act(() => api.publishTask(id, draft, commitUncommitted), { undo: false })
+        .act(() => api.publishTask(id, draft, commitUncommitted), {
+          undo: false,
+          pending: draft ? "Pushing and opening a draft pull request…" : "Pushing and opening a pull request…",
+        })
         .then(async () => {
           await afterChange();
           await refreshPulls();
         }),
-    onPush: () => shell.act(() => api.pushTask(id), { undo: false }).then(afterChange),
+    onPush: () => shell.act(() => api.pushTask(id), { undo: false, pending: "Pushing…" }).then(afterChange),
     onSendReview: () =>
-      api.reviewFeedback(id).then((text) => {
-        send(text);
+      api.reviewFeedback(id).then(async (text) => {
+        await send(text);
         toast(shown?.task.run?.state === "running" ? "The review is queued for when the agent is done" : `Sent the review to ${id}`);
       }, fail),
+    onSendFailure: () =>
+      api.checkFeedback(id).then(async (text) => {
+        await send(text);
+        toast(shown?.task.run?.state === "running" ? "The failure is queued for when the agent is done" : `Sent the failure to ${id}`);
+      }, fail),
     onSettle: (commit: string) => settle(id, commit),
+    onClose: () => close(id),
   });
 
   const askRebase = () => {
     if (!shown) return;
-    const base = shown.task.base;
-    send(
-      `${base} has moved on and this branch now conflicts with it in ${shown.conflicts.join(", ")}. ` +
-        `Rebase onto ${base} (git rebase ${base}), resolve the conflicts keeping both sides' intent, ` +
-        `make sure it still builds and the tests pass, and commit.`,
-    );
+    send(catchUpPrompt(shown.task.base, shown.conflicts, shown.task.pull != null));
   };
 
   const taskComments = selectedId ? (comments[selectedId] ?? []) : [];
@@ -267,7 +279,7 @@ export function AgentsSection() {
               setSource(index);
               setTab("changes");
             }}
-            onUndoRun={() => shell.act(() => api.undoRun(shown.task.id)).then(afterChange)}
+            onUndoRun={() => shell.act(() => api.undoRun(shown.task.id), { pending: "Undoing the run…" }).then(afterChange)}
             onAnswer={(ask, allow, message) =>
               api.answerAsk(shown.task.id, ask.id, allow, message ?? "").then(afterChange, fail)
             }
@@ -285,7 +297,7 @@ export function AgentsSection() {
             }
             onSteer={(text) => {
               setComments((c) => ({ ...c, [shown.task.id]: [] }));
-              api.steer(shown.task.id, text).then(afterChange, fail);
+              return api.steer(shown.task.id, text).then(afterChange, fail);
             }}
             onLiveMode={(mode) =>
               api.setMode(shown.task.id, mode).then(() => toast(`The agent is now in ${mode === "acceptEdits" ? "auto-accept edits" : mode} mode`), fail)
@@ -319,10 +331,10 @@ export function AgentsSection() {
             onSend={send}
             onStop={() => api.stopAgent(shown.task.id).then(afterChange, fail)}
             onLand={(merge, commitUncommitted) =>
-              shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted)).then(afterChange)
+              shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted), { pending: `Landing on ${shown.task.base}…` }).then(afterChange)
             }
             onDiscard={() =>
-              shell.act(() => api.discardTask(shown.task.id)).then((ok) => {
+              shell.act(() => api.discardTask(shown.task.id), { pending: "Discarding…" }).then((ok) => {
                 if (ok) setView({ kind: "new" });
                 return refreshTasks();
               })

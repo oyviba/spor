@@ -104,6 +104,9 @@ export const Gear = (p: P) => (
     <circle cx="12" cy="12" r="3" />
   </Svg>
 );
+export const ImageIcon = (p: P) => (
+  <Svg {...p}><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" /></Svg>
+);
 export const Minus = (p: P) => <Svg {...p}><path d="M5 12h14" /></Svg>;
 export const CornerDownRight = (p: P) => <Svg {...p}><path d="m15 10 5 5-5 5" /><path d="M4 4v7a4 4 0 0 0 4 4h12" /></Svg>;
 export const Tag = (p: P) => (
