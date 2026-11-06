@@ -6,7 +6,7 @@ import { pullStatus } from "../pulls/PullsSection";
 import { useNow } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { StatusPill, type Status } from "../../shared/StatusPill";
-import { AgentIcon, Branch, Chevron, Plus, PullRequest, Users } from "../../shared/Icons";
+import { AgentIcon, Archive, Branch, Chevron, Plus, PullRequest, Users } from "../../shared/Icons";
 import { SidebarHeader } from "../../shared/Layout";
 
 const FILTERS: { id: Filter; label: string }[] = [
@@ -30,6 +30,8 @@ interface Props {
   onMove: (item: WorkItem, top: boolean) => void;
   /** The New… menu, at the button. */
   onNew: (at: { clientX: number; clientY: number }) => void;
+  /** Delete the run checkpoints of tasks that are done, and discarded tasks' transcripts. */
+  onCleanUp: () => void;
 }
 
 /** Every work item in the repository, in shelves: what needs you, what's
@@ -158,6 +160,16 @@ export function Sidebar(p: Props) {
                 <Chevron size={12} className={`chev${p.settledOpen ? " open" : ""}`} />
               </button>
               {p.settledOpen && p.shelves.settled.map(row)}
+              {p.settledOpen && (
+                <button
+                  className="link small-text shelf-action"
+                  onClick={p.onCleanUp}
+                  title="Delete the run checkpoints of tasks that are done, and discarded tasks' transcripts. Undo can't bring them back afterwards. Opening the repository does this too."
+                >
+                  <Archive size={12} />
+                  Clean up old tasks
+                </button>
+              )}
             </div>
           </div>
         )}

@@ -1,11 +1,14 @@
 //! Agent tasks: a prompt with its own branch and folder (`spor::tasks`),
-//! and the agents that work on it (`spor::agent`), including the rules for
-//! picking the agent and wrapping follow-ups.
+//! and the agents that work on it (`spor::agent`, which has the rules for
+//! picking the agent and wrapping follow-ups).
 
 use crate::undo::Undo;
 use crate::{first_line, App};
 use serde::{Deserialize, Serialize};
-use spor::agent::{self, AgentKind, Effort, Entry, Mode, Model, Permissions, Run, RunState, Runs};
+use spor::agent::{
+    self, AgentKind, Effort, Entry, Mode, Model, Permissions, Run, RunState, Runs, Setup,
+    SetupState,
+};
 use spor::tasks::{LandMode, Task, TaskState, TaskStats, Tasks};
 use tauri::State;
 
@@ -125,6 +128,8 @@ pub(crate) struct TaskSummary {
     issue: Option<u64>,
     /// The pull request it was published as.
     pull: Option<u64>,
+    /// Follow-ups waiting for the agent to finish (#22), kept with the task.
+    queued: Vec<String>,
 }
 
 fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
@@ -152,6 +157,7 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
         asks: runs.asks().len(),
         issue: task.issue,
         pull: task.pull,
+        queued: runs.queued(),
     }
 }
 
@@ -268,6 +274,10 @@ pub(crate) struct TaskDetail {
     undoes: Vec<Undone>,
     /// The run "Undo this run" would take back, if any.
     undoable: Option<usize>,
+    /// The runs "Undo from here" can start at.
+    undoable_from: Vec<usize>,
+    /// The folder's setup script and how it went (#23).
+    setup: Option<SetupInfo>,
     /// Questions the agent is waiting on.
     asks: Vec<AskInfo>,
     /// The running agent can be answered, steered and interrupted.
@@ -278,6 +288,31 @@ pub(crate) struct TaskDetail {
 pub(crate) struct Undone {
     path: String,
     lines: usize,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SetupInfo {
+    script: String,
+    /// "running", "worked", "failed", "skipped", "due"; None: not run yet.
+    state: Option<&'static str>,
+    code: Option<i32>,
+}
+
+fn setup_info(setup: Setup) -> Option<SetupInfo> {
+    let script = setup.script?.display().to_string();
+    let (state, code) = match setup.state {
+        None => (None, None),
+        Some(SetupState::Running) => (Some("running"), None),
+        Some(SetupState::Worked) => (Some("worked"), None),
+        Some(SetupState::Failed(code)) => (Some("failed"), code),
+        Some(SetupState::Skipped) => (Some("skipped"), None),
+        Some(SetupState::Due) => (Some("due"), None),
+    };
+    Some(SetupInfo {
+        script,
+        state,
+        code,
+    })
 }
 
 #[derive(Serialize)]
@@ -332,6 +367,16 @@ impl AgentChoice {
         }
     }
 
+    /// The agent and model picked now, for `Runs::follow_up`. A follow-up
+    /// goes to the agent that did the work, so then the pick isn't needed
+    /// (and isn't checked).
+    fn chosen(&self, runs: &Runs, follow_up: bool) -> Result<Option<(AgentKind, Model)>, String> {
+        if follow_up && runs.latest().is_some() {
+            return Ok(None);
+        }
+        self.kind().map(|k| Ok((k, self.model()?))).transpose()
+    }
+
     fn model(&self) -> Result<Model, String> {
         match self {
             AgentChoice::Claude { model, effort } => {
@@ -345,16 +390,6 @@ impl AgentChoice {
             }
             _ => Ok(Model::default()),
         }
-    }
-}
-
-fn missing(kind: &AgentKind) -> Option<String> {
-    match kind {
-        AgentKind::Claude if !agent::available("claude") => {
-            Some("Claude Code isn't installed, or isn't on the PATH".into())
-        }
-        AgentKind::Command(c) if c.trim().is_empty() => Some("The agent command is empty".into()),
-        _ => None,
     }
 }
 
@@ -386,6 +421,8 @@ pub(crate) fn task_detail(app: State<App>, id: String) -> Result<TaskDetail, Str
             .map(|e| Item::from(e, &folder))
             .collect(),
         undoable: runs.undoable().map(|r| r.index),
+        undoable_from: runs.undoable_from(),
+        setup: setup_info(runs.setup(&task)),
         asks: runs
             .asks()
             .into_iter()
@@ -434,7 +471,7 @@ pub(crate) fn create_issue_task(
     let mode = mode_of(&mode)?;
     let model = agent.model()?;
     let kind = agent.kind();
-    if let Some(e) = kind.as_ref().and_then(missing) {
+    if let Some(e) = kind.as_ref().and_then(agent::missing) {
         return Err(e);
     }
     refresh_start(&app, &base);
@@ -488,7 +525,7 @@ pub(crate) fn create_task(
     let mode = mode_of(&mode)?;
     let model = agent.model()?;
     let kind = agent.kind();
-    if let Some(e) = kind.as_ref().and_then(missing) {
+    if let Some(e) = kind.as_ref().and_then(agent::missing) {
         return Err(e);
     }
     refresh_start(&app, &base);
@@ -522,37 +559,12 @@ pub(crate) fn send_to_agent(
     let mode = mode_of(&mode)?;
     let (tasks, task) = app.task(&id)?;
     let runs = Runs::of(&tasks, &task);
-    let follow_up = message.is_some();
-    // Follow-ups go to the agent that did the work, on the model it used,
-    // whatever's picked now.
-    let previous = runs.latest().map(|r| (r.kind, r.model));
-    let (kind, model) = match (follow_up, previous, agent.kind()) {
-        (true, Some(p), _) => p,
-        (_, _, Some(k)) => (k, agent.model()?),
-        _ => return Err("Pick an agent first".into()),
-    };
-    if let Some(e) = missing(&kind) {
-        return Err(e);
-    }
-    let session = if follow_up { runs.session() } else { None };
-    let prompt = match message {
-        // A custom command, or Claude without a session to resume, needs the
-        // whole task again, not just the feedback.
-        Some(m) if session.is_none() => format!(
-            "{}\n\nFeedback on the work so far:\n{}",
-            task.prompt.trim(),
-            m.trim()
-        ),
-        Some(m) => m.trim().to_string(),
-        None => task.prompt.clone(),
-    };
-    runs.start_with(
+    let chosen = agent.chosen(&runs, message.is_some())?;
+    runs.follow_up(
         &task,
-        &kind,
-        &prompt,
-        session.as_deref(),
+        message.as_deref(),
+        chosen.as_ref().map(|(k, m)| (k, m)),
         Permissions { mode },
-        &model,
     )
     .map(|_| ())
 }
@@ -662,15 +674,25 @@ pub(crate) fn run_patch(app: State<App>, id: String, index: usize) -> Result<Run
     })
 }
 
-/// Take back the task's last run: its folder as it was before, and the
-/// conversation resumed from before it. ⌘Z brings it back.
+/// Take back the task's last run, or with `from`, that run and every run
+/// after it: the folder as it was before, and the conversation resumed
+/// from before it. ⌘Z brings it back.
 #[tauri::command(async)]
-pub(crate) fn undo_run(app: State<App>, id: String) -> Result<String, String> {
+pub(crate) fn undo_run(app: State<App>, id: String, from: Option<usize>) -> Result<String, String> {
     let (tasks, task) = app.task(&id)?;
-    let index = Runs::of(&tasks, &task)
-        .undo_last()
-        .map_err(|e| first_line(&e))?;
-    let label = format!("Undo run {} of {}", index + 1, task.id);
+    let runs = Runs::of(&tasks, &task);
+    let (index, taken) = match from {
+        Some(index) => (
+            index,
+            runs.undo_from(index).map_err(|e| first_line(&e))?.len(),
+        ),
+        None => (runs.undo_last().map_err(|e| first_line(&e))?, 1),
+    };
+    let label = if taken == 1 {
+        format!("Undo run {} of {}", index + 1, task.id)
+    } else {
+        format!("Undo runs {}–{} of {}", index + 1, index + taken, task.id)
+    };
     app.undo.push(
         label.clone(),
         Undo::RunUndone {
@@ -678,10 +700,70 @@ pub(crate) fn undo_run(app: State<App>, id: String) -> Result<String, String> {
             index,
         },
     );
-    Ok(format!(
-        "Undid run {} — its changes are gone, and follow-ups start from before it",
-        index + 1
-    ))
+    Ok(if taken == 1 {
+        format!(
+            "Undid run {} — its changes are gone, and follow-ups start from before it",
+            index + 1
+        )
+    } else {
+        format!(
+            "Undid {taken} runs — their changes are gone, and follow-ups start from before run {}",
+            index + 1
+        )
+    })
+}
+
+/// Queue a follow-up for when the agent finishes (#22). Kept with the
+/// task, so it isn't lost with the window.
+#[tauri::command(async)]
+pub(crate) fn queue_follow_up(app: State<App>, id: String, text: String) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task).queue(text.trim())
+}
+
+#[tauri::command(async)]
+pub(crate) fn unqueue(app: State<App>, id: String, index: usize) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task).unqueue(index)
+}
+
+/// Send the task's oldest queued follow-up if its agent is idle. True if
+/// one went.
+#[tauri::command(async)]
+pub(crate) fn send_queued(
+    app: State<App>,
+    id: String,
+    agent: AgentChoice,
+    mode: String,
+) -> Result<bool, String> {
+    let mode = mode_of(&mode)?;
+    let (tasks, task) = app.task(&id)?;
+    let runs = Runs::of(&tasks, &task);
+    let chosen = agent.chosen(&runs, true)?;
+    runs.send_queued(
+        &task,
+        chosen.as_ref().map(|(k, m)| (k, m)),
+        Permissions { mode },
+    )
+}
+
+/// Run the folder's setup script again, before the next agent (#23).
+#[tauri::command(async)]
+pub(crate) fn rerun_setup(app: State<App>, id: String) -> Result<(), String> {
+    let (tasks, task) = app.task(&id)?;
+    Runs::of(&tasks, &task).rerun_setup()
+}
+
+/// Delete the run checkpoints of tasks that are done, and discarded
+/// tasks' transcripts. Undo can't bring them back afterwards.
+#[tauri::command(async)]
+pub(crate) fn clean_up_tasks(app: State<App>) -> Result<String, String> {
+    let n = app.tasks()?.clean_up();
+    Ok(match n {
+        0 => "Nothing to clean up".into(),
+        1 => "Cleaned up after 1 old task".into(),
+        n => format!("Cleaned up after {n} old tasks"),
+    })
 }
 
 /// Answer a question the agent asked: allow, or deny (with what to do

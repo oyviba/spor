@@ -1,6 +1,6 @@
 //! Agents running in task folders: real processes, a fake `claude`.
 
-use spor::agent::{AgentKind, Entry, Permissions, RunState, Runs};
+use spor::agent::{AgentKind, Entry, Model, Permissions, RunState, Runs};
 use spor::checkpoint;
 use spor::git::Repo;
 use spor::tasks::Tasks;
@@ -615,4 +615,227 @@ fn listed_ignored_files_are_copied_into_a_new_folder() {
         !task.worktree.parent().unwrap().join("outside.txt").exists(),
         "paths outside the checkout are refused"
     );
+}
+
+// ---- Which agent runs, and what it's sent (#39) -------------------------
+
+#[test]
+fn a_follow_up_goes_to_the_agent_and_model_that_did_the_work() {
+    fake_claude();
+    let f = fixture();
+    let task = f.tasks.create("Leave a mark", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    // Starting needs an agent picked; the task's prompt goes as is.
+    assert_eq!(
+        runs.plan(&task, None, None).unwrap_err(),
+        "Pick an agent first"
+    );
+    let sonnet = Model::new(Some("sonnet"), None).unwrap();
+    let first = runs
+        .plan(&task, None, Some((&AgentKind::Claude, &sonnet)))
+        .unwrap();
+    assert_eq!(first.kind, AgentKind::Claude);
+    assert_eq!(first.prompt, "Leave a mark");
+    assert_eq!(first.resume, None);
+    runs.follow_up(
+        &task,
+        None,
+        Some((&AgentKind::Claude, &sonnet)),
+        NO_COMMANDS,
+    )
+    .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+
+    // Whatever is picked now, feedback goes to Claude on Sonnet, into its
+    // session.
+    let other = AgentKind::Command("true".into());
+    let plan = runs
+        .plan(
+            &task,
+            Some("  Now say hello  "),
+            Some((&other, &Model::default())),
+        )
+        .unwrap();
+    assert_eq!((plan.kind, plan.model), (AgentKind::Claude, sonnet));
+    assert_eq!(plan.prompt, "Now say hello");
+    assert_eq!(plan.resume.as_deref(), Some("sess-42"));
+}
+
+#[test]
+fn feedback_without_a_session_sends_the_whole_task_again() {
+    let f = fixture();
+    let task = f.tasks.create("Write a note", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let kind = AgentKind::Command("echo \"$SPOR_PROMPT\" > note.txt".into());
+    let default = Model::default();
+    runs.follow_up(&task, None, Some((&kind, &default)), NO_COMMANDS)
+        .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    let plan = runs.plan(&task, Some("Shorter, please"), None).unwrap();
+    assert_eq!(plan.kind, kind);
+    assert_eq!(plan.resume, None);
+    assert_eq!(
+        plan.prompt,
+        "Write a note\n\nFeedback on the work so far:\nShorter, please"
+    );
+    runs.follow_up(&task, Some("Shorter, please"), None, NO_COMMANDS)
+        .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    assert_eq!(
+        read(&task.worktree, "note.txt").as_deref(),
+        Some("Write a note\n\nFeedback on the work so far:\nShorter, please\n")
+    );
+}
+
+#[test]
+fn an_agent_that_isnt_there_is_refused() {
+    let f = fixture();
+    let task = f.tasks.create("Anything", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let empty = AgentKind::Command("  ".into());
+    assert!(spor::agent::missing(&empty).is_some());
+    assert!(runs
+        .plan(&task, None, Some((&empty, &Model::default())))
+        .is_err());
+    assert!(runs.latest().is_none());
+    assert_eq!(
+        spor::agent::missing(&AgentKind::Command("codex exec {prompt}".into())),
+        None
+    );
+}
+
+// ---- Follow-ups from #19–#23 (#41) ---------------------------------------
+
+#[test]
+fn queued_follow_ups_are_kept_with_the_task() {
+    let f = fixture();
+    let task = f.tasks.create("Queue", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    assert!(runs.queued().is_empty());
+    runs.queue("first\nwith two lines").unwrap();
+    runs.queue("second").unwrap();
+    runs.queue("third").unwrap();
+    // Another window (another Runs) sees the same queue.
+    let other = Runs::of(&f.tasks, &task);
+    assert_eq!(other.queued(), ["first\nwith two lines", "second", "third"]);
+    other.unqueue(1).unwrap();
+    assert!(other.unqueue(5).is_err());
+    assert_eq!(runs.queued(), ["first\nwith two lines", "third"]);
+    runs.unqueue(0).unwrap();
+    runs.unqueue(0).unwrap();
+    assert!(runs.queued().is_empty());
+    assert!(!f.tasks.run_dir(&task.id).join("queue").exists());
+}
+
+#[test]
+fn a_queued_follow_up_goes_once_the_agent_is_idle() {
+    let f = fixture();
+    let task = f.tasks.create("Write a note", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let kind = AgentKind::Command("sleep 0.3; echo \"$SPOR_PROMPT\" > note.txt".into());
+    let default = Model::default();
+    runs.follow_up(&task, None, Some((&kind, &default)), NO_COMMANDS)
+        .unwrap();
+    runs.queue("Shorter").unwrap();
+    // Still working: it waits.
+    assert!(!runs.send_queued(&task, None, NO_COMMANDS).unwrap());
+    assert_eq!(runs.queued(), ["Shorter"]);
+    wait_until_done(&runs);
+    assert!(runs.send_queued(&task, None, NO_COMMANDS).unwrap());
+    assert!(runs.queued().is_empty());
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    assert_eq!(
+        read(&task.worktree, "note.txt").as_deref(),
+        Some("Write a note\n\nFeedback on the work so far:\nShorter\n")
+    );
+    assert!(!runs.send_queued(&task, None, NO_COMMANDS).unwrap());
+}
+
+#[test]
+fn undo_from_an_earlier_run_takes_back_everything_after_it() {
+    let f = fixture();
+    let task = f.tasks.create("Marks", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let wt = &task.worktree;
+    run_command(&task, &runs, "echo 1 > one.txt");
+    run_command(&task, &runs, "echo 2 > two.txt");
+    run_command(&task, &runs, "echo 3 > three.txt");
+    assert_eq!(runs.undoable_from(), [0, 1, 2]);
+
+    // The last on its own, then from the second: that batch is run 1 (2
+    // was already undone).
+    runs.undo_last().unwrap();
+    assert_eq!(runs.undo_from(1).unwrap(), [1]);
+    assert!(read(wt, "one.txt").is_some());
+    assert!(read(wt, "two.txt").is_none());
+    assert!(read(wt, "three.txt").is_none());
+    assert_eq!(runs.undoable_from(), [0]);
+    assert!(runs.undo_from(2).is_err(), "already undone");
+
+    // Redo brings back that batch only.
+    runs.redo(1).unwrap();
+    assert!(read(wt, "two.txt").is_some());
+    assert!(read(wt, "three.txt").is_none());
+    let undone: Vec<bool> = runs.list().iter().map(|r| r.undone).collect();
+    assert_eq!(undone, [false, false, true]);
+
+    // From the first: everything.
+    runs.redo(2).unwrap();
+    assert_eq!(runs.undo_from(0).unwrap(), [0, 1, 2]);
+    assert!(read(wt, "one.txt").is_none() && read(wt, "three.txt").is_none());
+    runs.redo(0).unwrap();
+    assert!(read(wt, "one.txt").is_some() && read(wt, "three.txt").is_some());
+    assert!(runs.list().iter().all(|r| !r.undone));
+}
+
+#[test]
+fn cleaning_up_removes_landed_and_discarded_tasks_checkpoints() {
+    let f = fixture();
+    let open = f.tasks.create("Keep", "main").unwrap();
+    let landed = f.tasks.create("Land", "main").unwrap();
+    let gone = f.tasks.create("Throw", "main").unwrap();
+    for t in [&open, &landed, &gone] {
+        run_command(t, &Runs::of(&f.tasks, t), &format!("echo x > {}.txt", t.id));
+    }
+    let landed_ref = Runs::of(&f.tasks, &landed).checkpoint_ref(0, "before");
+    let gone_ref = Runs::of(&f.tasks, &gone).checkpoint_ref(0, "before");
+    let open_ref = Runs::of(&f.tasks, &open).checkpoint_ref(0, "before");
+    f.tasks
+        .land(&landed, spor::tasks::LandMode::Squash, true)
+        .unwrap();
+    f.tasks.discard(&gone).unwrap();
+    // Until cleaned up, an undo still has everything.
+    assert!(checkpoint::resolve(f.repo.root(), &gone_ref).is_some());
+    assert!(f.tasks.run_dir(&gone.id).exists());
+
+    assert_eq!(f.tasks.clean_up(), 2);
+    assert!(checkpoint::resolve(f.repo.root(), &landed_ref).is_none());
+    assert!(checkpoint::resolve(f.repo.root(), &gone_ref).is_none());
+    assert!(!f.tasks.run_dir(&gone.id).exists());
+    // A landed task keeps its transcript; an open one keeps everything.
+    assert!(f.tasks.run_dir(&landed.id).exists());
+    assert!(checkpoint::resolve(f.repo.root(), &open_ref).is_some());
+    assert_eq!(f.tasks.clean_up(), 0);
+}
+
+#[test]
+fn the_setup_script_reports_how_it_went() {
+    use spor::agent::SetupState;
+    let f = fixture();
+    commit_spor_file(&f, "setup", "echo ok\n");
+    let task = f.tasks.create("Setup status", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let setup = runs.setup(&task);
+    assert_eq!(setup.script.as_deref(), Some(Path::new(".spor/setup")));
+    assert_eq!(setup.state, None);
+    run_command(&task, &runs, "true");
+    assert_eq!(runs.setup(&task).state, Some(SetupState::Worked));
+    // Run again: due before the next agent, and it runs.
+    runs.rerun_setup().unwrap();
+    assert_eq!(runs.setup(&task).state, Some(SetupState::Due));
+    assert!(runs.setup_script(&task).is_some());
+    run_command(&task, &runs, "true");
+    assert_eq!(runs.setup(&task).state, Some(SetupState::Worked));
+    runs.skip_setup().unwrap();
+    assert_eq!(runs.setup(&task).state, Some(SetupState::Skipped));
 }

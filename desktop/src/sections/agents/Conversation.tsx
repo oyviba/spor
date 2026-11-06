@@ -11,7 +11,8 @@ interface Props {
   detail: TaskDetail;
   onStop: () => unknown;
   onRunChanges: (index: number) => void;
-  onUndoRun: () => unknown;
+  /** Undo the last run, or (`from`) that run and every run after it. */
+  onUndoRun: (from: number | null) => unknown;
   /** After a failed setup: run it again, or start without it. */
   onRetrySetup: () => unknown;
   onSkipSetup: () => unknown;
@@ -76,9 +77,10 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetryS
             info={detail.runs[run.index]}
             open={open}
             toggle={toggle}
-            canUndo={detail.undoable === run.index}
+            canUndo={detail.undoable_from.includes(run.index)}
+            later={detail.runs.filter((r) => r.index > run.index && !r.undone).length}
             onRunChanges={() => onRunChanges(run.index)}
-            onUndoRun={onUndoRun}
+            onUndoRun={() => onUndoRun(detail.undoable === run.index ? null : run.index)}
             setup={run.index === setupActions.last - 1 && !running ? setupActions : null}
           />
         ))}
@@ -94,6 +96,7 @@ function RunBlock({
   open,
   toggle,
   canUndo,
+  later,
   onRunChanges,
   onUndoRun,
   setup,
@@ -103,6 +106,8 @@ function RunBlock({
   open: Set<string>;
   toggle: (key: string) => void;
   canUndo: boolean;
+  /** Runs after this one that "Undo from here" takes back too. */
+  later: number;
   onRunChanges: () => void;
   onUndoRun: () => unknown;
   /** Retry / skip for a failed setup, on the latest run only. */
@@ -169,9 +174,19 @@ function RunBlock({
               className={`link small-text${confirm ? " danger-link" : ""}`}
               onClick={() => (confirm ? onUndoRun() : setConfirm(true))}
               onBlur={() => setConfirm(false)}
-              title="Put the folder back as it was before this run, and start follow-ups from before it (⌘Z brings it back)"
+              title={
+                later > 0
+                  ? `Put the folder back as it was before this run, taking back the ${later + 1} runs from here, and start follow-ups from before it (⌘Z brings them back)`
+                  : "Put the folder back as it was before this run, and start follow-ups from before it (⌘Z brings it back)"
+              }
             >
-              {confirm ? "Undo this run? Its changes go" : "Undo this run"}
+              {later > 0
+                ? confirm
+                  ? `Undo ${later + 1} runs? Their changes go`
+                  : "Undo from here"
+                : confirm
+                  ? "Undo this run? Its changes go"
+                  : "Undo this run"}
             </Button>
           )}
         </div>

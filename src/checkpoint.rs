@@ -177,11 +177,21 @@ pub fn restore(dir: &Path, snapshot: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The refs under `prefix`.
+pub fn list(dir: &Path, prefix: &str) -> Vec<String> {
+    ok(git(dir, &["for-each-ref", "--format=%(refname)", prefix]).output())
+        .map(|refs| {
+            refs.lines()
+                .filter(|r| !r.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Delete every ref under `prefix` (e.g. `refs/spor/tasks/fix-login/`).
 pub fn delete_all(dir: &Path, prefix: &str) {
-    if let Ok(refs) = ok(git(dir, &["for-each-ref", "--format=%(refname)", prefix]).output()) {
-        for r in refs.lines().filter(|r| !r.is_empty()) {
-            let _ = git(dir, &["update-ref", "-d", r]).output();
-        }
+    for r in list(dir, prefix) {
+        let _ = git(dir, &["update-ref", "-d", &r]).output();
     }
 }

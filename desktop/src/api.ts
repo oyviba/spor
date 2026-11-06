@@ -218,6 +218,17 @@ export const api = {
     call<void>("answer_ask", { id, requestId, allow, message, always }),
   /** Start the next agent without the folder's setup script (#23). */
   skipSetup: (id: string) => call<void>("skip_setup", { id }),
+  /** Run the setup script again, before the next agent. */
+  rerunSetup: (id: string) => call<void>("rerun_setup", { id }),
+  /** Follow-ups for when the agent finishes, kept with the task (#22). */
+  queueFollowUp: (id: string, text: string) => call<void>("queue_follow_up", { id, text }),
+  unqueue: (id: string, index: number) => call<void>("unqueue", { id, index }),
+  /** Send the oldest queued follow-up if the agent is idle; true if one went. */
+  sendQueued: (id: string, agent: AgentChoice, mode: Mode) => call<boolean>("send_queued", { id, agent, mode }),
+  /** Delete the run checkpoints of tasks that are done, and discarded tasks' transcripts. */
+  cleanUpTasks: () => call<string>("clean_up_tasks"),
+  /** A notification from the operating system, for when the window is in the background. */
+  notify: (title: string, body: string) => call<void>("notify_os", { title, body }),
   /** Keep an image for a prompt; returns the path the prompt names it by.
    * The bytes go as the request's raw body. */
   attachImage: (data: Uint8Array) => call<string>("attach_image", data),
@@ -233,7 +244,7 @@ export const api = {
   /** One run's changes, between its checkpoints. */
   runPatch: (id: string, index: number) => call<RunPatch>("run_patch", { id, index }),
   /** Take back the task's last run (⌘Z brings it back). */
-  undoRun: (id: string) => call<string>("undo_run", { id }),
+  undoRun: (id: string, from: number | null = null) => call<string>("undo_run", { id, from }),
 
   // Work
   /** Your own branches with work on them (not agents'). */

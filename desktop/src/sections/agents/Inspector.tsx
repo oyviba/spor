@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useChanged } from "../../shared/hooks";
-import type { TaskDetail, TaskPull } from "../../types";
+import type { SetupInfo, TaskDetail, TaskPull } from "../../types";
 import { duration } from "./transcript";
 import { pullStatus } from "../pulls/PullsSection";
 import { StatusPill } from "../../shared/StatusPill";
@@ -17,6 +17,8 @@ import {
   Merge,
   MessageSquare,
   PullRequest,
+  Refresh,
+  Terminal,
   Trash,
 } from "../../shared/Icons";
 
@@ -53,6 +55,7 @@ interface Props extends GithubActions {
   /** Ask the agent to put back what it would undo on the base. */
   onAskRestore: () => void;
   onShowBranch: () => void;
+  onRerunSetup: () => unknown;
 }
 
 /** The task's details and landing actions, in a small floating card. */
@@ -203,6 +206,7 @@ export function Inspector({ detail, ...p }: Props) {
           <Copy size={13} />
           <span>Copy agent command</span>
         </button>
+        {detail.setup && <SetupRow setup={detail.setup} running={running} onRerun={p.onRerunSetup} />}
       </div>
       <div className="inspector-section">
         <button className="inspector-row action" onClick={p.onShowBranch} title="Show it in History">
@@ -432,5 +436,45 @@ export function Inspector({ detail, ...p }: Props) {
       {!done && !prOpen && landBlocked && hasWork && !running && <div className="inspector-note">{landBlocked}</div>}
       {mergeBlocked && !running && <div className="inspector-note">{mergeBlocked}</div>}
     </aside>
+  );
+}
+
+/** The folder's setup script (#23): which, how it went, and Re-run. */
+function SetupRow({ setup, running, onRerun }: { setup: SetupInfo; running: boolean; onRerun: () => unknown }) {
+  const [label, tone] = ((): [string, string] => {
+    switch (setup.state) {
+      case "running":
+        return ["running", ""];
+      case "worked":
+        return ["worked", "ok"];
+      case "failed":
+        return [setup.code != null ? `failed (exit ${setup.code})` : "failed", "bad"];
+      case "skipped":
+        return ["skipped", "muted"];
+      case "due":
+        return ["runs before the next agent", "muted"];
+      default:
+        return ["runs before the first agent", "muted"];
+    }
+  })();
+  const canRerun = setup.state === "worked" || setup.state === "skipped";
+  return (
+    <div className={`inspector-row setup-row ${tone}`}>
+      <Terminal size={13} />
+      <span className="truncate" title={setup.script}>
+        <code>{setup.script}</code> <span className="setup-state">{label}</span>
+      </span>
+      {canRerun && (
+        <button
+          className="icon-button tiny"
+          onClick={onRerun}
+          disabled={running}
+          title="Run it again before the next agent"
+          aria-label="Re-run setup"
+        >
+          <Refresh size={11} />
+        </button>
+      )}
+    </div>
   );
 }
