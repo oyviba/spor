@@ -15,7 +15,7 @@ export function isOpen(t: TaskSummary): boolean {
 /** Once it's a pull request and you've seen the agent's work, what the PR
  * is waiting on (#24). */
 function pullStatus(pr: Pull): Status {
-  if (pr.state === "merged") return { label: "PR merged", tone: "violet", live: false };
+  if (pr.state === "merged") return { label: "PR landed", tone: "violet", live: false };
   if (pr.state === "closed") return { label: "PR closed", tone: "muted", live: false };
   if (pr.checks === "failing") return { label: "Checks failing", tone: "red", live: false };
   if (pr.review === "changesrequested") return { label: "Changes requested", tone: "amber", live: false };

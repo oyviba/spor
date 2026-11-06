@@ -162,6 +162,31 @@ try {
   check(git("tag", "--list", "v0.1.0") === "", "⌘Z deletes the tag again");
   await section("Changes", ".inspector");
 
+  console.log("Hand to an agent");
+  await toastGone();
+  const before = git("status", "--porcelain");
+  git("checkout", "--quiet", "-b", "feat/handoff");
+  await w.until(`return [...$$(".work-header button")].some(b => b.textContent.includes("Hand to an agent"))`, "the branch's work header");
+  check((await w.text(".work-header .stage-track [aria-current]")) === "In progress", "Changes shows the checked-out branch's stage");
+  await w.clickText(".work-header button", "Hand to an agent");
+  await answer("Look it over");
+  await w.until(`return $(".repo-branch")?.textContent.includes("main")`, "your checkout back on main");
+  const folder = `${repo}.spor/handoff`;
+  check(git("status", "--porcelain") === "", "Hand to an agent leaves your checkout on main, clean");
+  check(gitIn(folder)("branch", "--show-current") === "feat/handoff", "…with the branch in its own folder");
+  check(gitIn(folder)("status", "--porcelain") === before, "…and your uncommitted work there, staged as it was");
+  await w.waitFor(".task-page .stage-track");
+  check((await w.text(".task-header h2")) === "Look it over", "…and opens the task on the work page");
+  await w.shot("handoff-1-task");
+  await toastGone();
+  await undoKey();
+  await w.until(`return $(".repo-branch")?.textContent.includes("feat/handoff")`, "the branch back", 30000);
+  check(git("status", "--porcelain") === before, "⌘Z brings the branch and its work back to your checkout");
+  check(!readdirSync(`${repo}.spor`).includes("handoff"), "…and the folder goes");
+  git("checkout", "--quiet", "main");
+  git("branch", "--quiet", "-D", "feat/handoff");
+  await section("Changes", ".inspector");
+
   console.log("A merge that conflicts");
   await toastGone();
   await w.clickText(".inspector .link", "Stash changes");
@@ -213,7 +238,7 @@ try {
   await w.until(`return $(".timeline").innerText.includes("keyword-only nit")`, "the comment");
   check(ghState().comments["12"]?.[0]?.body.includes("keyword-only nit"), "Comment posts through gh");
   await w.shot("pulls-1-conversation");
-  await w.clickText(".tabs button", "Files");
+  await w.clickText(".tabs button", "Changes");
   await w.waitFor(".diff tr.add");
   check((await w.count(".file")) === 2, "Files shows the PR's diff");
   await w.clickText(".tabs button", "Checks");
@@ -229,7 +254,7 @@ try {
   await w.click(".inspector .split .primary");
   check((await w.text(".inspector .split")).includes("Land #11?"), "landing asks once more");
   await w.click(".inspector .split .danger");
-  await w.until(`return $(".task-header")?.innerText.includes("Landed")`, "the landing");
+  await w.until(`return $(".task-header .stage-track [aria-current]")?.innerText === "Landed"`, "the landing");
   check(ghState().merged.includes(11), "Land merges through gh");
   await w.shot("pulls-3-merged");
 

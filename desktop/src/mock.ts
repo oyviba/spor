@@ -335,6 +335,7 @@ const tasksChanged = () =>
   ["tasks-changed", "work-changed"].forEach((e) => listeners.get(e)?.forEach((fn) => fn()));
 const CHANGES_TASKS = new Set([
   "create_task",
+  "hand_to_agent",
   "send_to_agent",
   "stop_agent",
   "land_task",
@@ -515,6 +516,25 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         const sid = slug(prompt);
         const t: MockTask = {
           summary: summary(sid, prompt, now(), startOf(args.base as string)),
+          transcript: [],
+          runs: [],
+          patch: "",
+          script: [],
+        };
+        tasks.unshift(t);
+        const agent = args.agent as AgentChoice;
+        if (agent.kind !== "none") start(t, prompt, agent);
+        return t.summary;
+      }
+      case "hand_to_agent": {
+        // Your branch, in its own folder with an agent (#80, #82).
+        const prompt = (args.prompt as string).trim();
+        if (!prompt) throw "Say what the agent should do first";
+        const branch = args.branch as string;
+        if (tasks.some((x) => x.summary.branch === branch && !x.summary.landed && !x.summary.closed)) throw `${branch} is already a task`;
+        const sid = slug(branch.split("/").pop() ?? branch);
+        const t: MockTask = {
+          summary: { ...summary(sid, prompt, now(), startOf(args.base as string)), branch },
           transcript: [],
           runs: [],
           patch: "",

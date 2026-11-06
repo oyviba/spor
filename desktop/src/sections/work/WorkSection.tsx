@@ -10,9 +10,10 @@ import { EmptyState } from "../../shared/Layout";
 import { Sidebar } from "./Sidebar";
 import { BranchPage } from "./BranchPage";
 import { FromIssue } from "./FromIssue";
-import { PullPage } from "../pulls/PullsSection";
+import { PullView } from "./pull";
 import { NewTask } from "../agents/NewTask";
-import { TaskPage, type Tab } from "../agents/TaskPage";
+import { TaskView } from "./TaskView";
+import type { WorkTab } from "./WorkPage";
 import { choiceOf, useAgentSettings, type ComposerHandle } from "../agents/Composer";
 
 /** What the page shows: something to start, or one work item. */
@@ -51,7 +52,7 @@ export function WorkSection() {
   // The Changes tab: everything against the base, or one run's changes.
   const [source, setSource] = useState<"all" | number>("all");
   const [runPatch, setRunPatch] = useState<{ key: string; value: RunPatch } | null>(null);
-  const [tab, setTab] = useState<Tab>("conversation");
+  const [tab, setTab] = useState<WorkTab>("agent");
   const [settings, setSettings] = useAgentSettings();
   const [seen, setSeen] = useStored<Record<string, number>>("work.seen", {});
   const [settledOpen, setSettledOpen] = useStored("work.settled", false);
@@ -169,7 +170,7 @@ export function WorkSection() {
   useRepoChanges(refreshDetail, ["tasks", "refs"], [selectedId], !!selectedId);
   useChanged(() => {
     setDetail(null);
-    setTab("conversation");
+    setTab("agent");
     setFocus(null);
     setSource("all");
   }, [selectedId]);
@@ -296,7 +297,7 @@ export function WorkSection() {
     }
     return api
       .sendToAgent(id, text, choiceOf(settings), settings.mode)
-      .then(() => setTab("conversation"))
+      .then(() => setTab("agent"))
       .then(afterChange, fail);
   };
 
@@ -427,11 +428,11 @@ export function WorkSection() {
             <NewTask repo={repo} settings={settings} onSettings={setSettings} onCreate={create} />
           )
         ) : view.kind === "pull" ? (
-          <PullPage number={view.number} from="work" />
+          <PullView number={view.number} from="work" />
         ) : view.kind === "branch" ? (
           selectedItem?.kind === "branch" ? (
             selectedItem.pull ? (
-              <PullPage number={selectedItem.pull.number} from="work" />
+              <PullView number={selectedItem.pull.number} from="work" />
             ) : (
               <BranchPage branch={selectedItem.branch} />
             )
@@ -441,7 +442,7 @@ export function WorkSection() {
             </EmptyState>
           )
         ) : shown ? (
-          <TaskPage
+          <TaskView
             ref={composer}
             repo={{ ...repo, branch: shell.state?.branch ?? repo.branch }}
             detail={shown}
@@ -531,6 +532,7 @@ export function WorkSection() {
             onAskRebase={askRebase}
             onAskRestore={askRestore}
             onCopy={(text, what) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), fail)}
+            onOpenFolder={() => api.openFolder(shown.task.id).catch(fail)}
             github={github(shown.task.id)}
           />
         ) : (

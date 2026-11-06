@@ -42,6 +42,9 @@ pub(crate) enum Undo {
     Renamed { old: String, new: String },
     /// A dropped stash: store it again.
     StashDropped(Stash),
+    /// A branch handed to an agent: stop the agent, and take the branch
+    /// back (into the main checkout, with `checkout`, where it came from).
+    HandedOver { task: String, checkout: bool },
 }
 
 struct Entry {
@@ -159,6 +162,18 @@ fn apply(repo: &Repo, undo: Undo) -> Result<(), String> {
         Undo::TagCreated { name } => repo.delete_tag(&name),
         Undo::Renamed { old, new } => repo.rename_branch(&new, &old),
         Undo::StashDropped(stash) => repo.restore_stash(&stash),
+        Undo::HandedOver { task, checkout } => {
+            let tasks = Tasks::open(repo)?;
+            let task = tasks.get(&task).ok_or("The task is gone")?;
+            let _ = spor::agent::Runs::of(&tasks, &task).finish(std::time::Duration::from_secs(4));
+            if checkout && !repo.status()?.is_empty() {
+                return Err(format!(
+                    "Commit or stash what's changed here first, then {} can come back",
+                    task.branch
+                ));
+            }
+            tasks.give_back(&task, checkout)
+        }
     }
 }
 

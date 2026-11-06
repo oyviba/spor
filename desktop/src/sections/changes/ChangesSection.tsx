@@ -8,7 +8,12 @@ import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../
 import { DiffView, selectionRange, type LineSelection } from "../../shared/DiffView";
 import { parsePatch } from "../../shared/diff";
 import { ConflictRegions } from "./Conflicts";
-import { Alert, Archive, ArrowDown, ArrowUp, Branch, Check, Minus, Plus, PullRequest, Refresh, Undo } from "../../shared/Icons";
+import { Alert, Archive, ArrowDown, ArrowUp, Bot, Branch, Check, Minus, Plus, Refresh, Undo } from "../../shared/Icons";
+import { WorkCard } from "../../shared/WorkCard";
+import { findWork } from "../../shared/work";
+import { WorkHeader } from "../work/WorkPage";
+import { handToAgent } from "../work/handover";
+import { useAgentSettings } from "../agents/Composer";
 
 interface Pick {
   path: string;
@@ -149,6 +154,7 @@ export function ChangesSection() {
       </aside>
       <main className="main">
         <div className="task-page with-inspector">
+          <CheckoutHeader />
           <PageHeader
             title={
               pick ? (
@@ -304,9 +310,39 @@ function FileRow({
   );
 }
 
+/** The checked-out branch as the work item it is (#82): its stage, who
+ * it's waiting on, and handing it to an agent. On the base, or another
+ * branch with nothing on it, there's no item and nothing shows. */
+function CheckoutHeader() {
+  const shell = useShell();
+  const [settings] = useAgentSettings();
+  const branch = shell.state?.branch;
+  const item = branch ? findWork(shell.work, { branch }) : undefined;
+  if (!item || !branch || item.task) return null;
+  const base = item.base ?? shell.repo.default_base ?? "main";
+  return (
+    <WorkHeader
+      item={item}
+      title={item.title}
+      hint={branch}
+      action={
+        <Button
+          className="ghost"
+          onClick={() => handToAgent(shell, settings, branch, base)}
+          disabled={!!shell.state?.operation}
+          title={`Move ${branch} and your uncommitted changes to their own folder with an agent; you go back to ${base} (⌘Z undoes)`}
+        >
+          <Bot size={12} /> Hand to an agent
+        </Button>
+      }
+    />
+  );
+}
+
 function SyncCard({ stashes, onChanged, canStash }: { stashes: StashInfo[]; onChanged: () => void; canStash: boolean }) {
   const shell = useShell();
   const { state } = shell;
+  const item = state?.branch ? findWork(shell.work, { branch: state.branch }) : undefined;
   const [busy, setBusy] = useState<string | null>(null);
   const run = (what: "fetch" | "pull" | "push") => {
     setBusy(what);
@@ -324,12 +360,20 @@ function SyncCard({ stashes, onChanged, canStash }: { stashes: StashInfo[]; onCh
   });
   return (
     <DetailsCard>
+      {item && <WorkCard item={item} from="changes" />}
       <div className="inspector-section">
         <div className="inspector-row">
           <Branch size={13} />
           <span className="truncate">
-            <b>{state?.branch ?? "detached HEAD"}</b>
-            {state?.upstream ? <span className="muted"> → {state.upstream}</span> : <span className="muted"> · not published</span>}
+            {!item && <b>{state?.branch ?? "detached HEAD"}</b>}
+            {state?.upstream ? (
+              <span className="muted">
+                {item ? "Tracks " : " → "}
+                {state.upstream}
+              </span>
+            ) : (
+              <span className="muted">{item ? "Not published" : " · not published"}</span>
+            )}
           </span>
         </div>
         {state?.upstream && (
@@ -356,14 +400,14 @@ function SyncCard({ stashes, onChanged, canStash }: { stashes: StashInfo[]; onCh
           <ArrowUp size={12} /> {state?.upstream ? `Push${state.ahead > 0 ? ` ${state.ahead}` : ""}` : "Publish"}
         </Button>
       </div>
-      {state?.branch && state.upstream && state.branch !== shell.repo.default_base && (
+      {state?.branch && state.upstream && state.branch !== shell.repo.default_base && !item?.pull && (
         <div className="inspector-actions">
           <Button
             className="ghost"
-            title="This branch's pull request, or the page to open one"
+            title="GitHub's page to open a pull request for this branch"
             onClick={() => api.pullRequestUrl().then(api.openUrl).catch(shell.fail)}
           >
-            <PullRequest size={12} /> Pull request on GitHub
+            Open a pull request
           </Button>
         </div>
       )}

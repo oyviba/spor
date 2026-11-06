@@ -44,6 +44,13 @@ pub struct Task {
 }
 
 impl Task {
+    /// Whether the task made its branch (`agent/<id>`), as opposed to
+    /// adopting one of yours ([`Tasks::adopt`]). Only a branch the task
+    /// made goes when the task does; yours stays.
+    pub fn owns_branch(&self) -> bool {
+        self.branch.starts_with("agent/")
+    }
+
     /// The task's working tree as a repository.
     pub fn repo(&self) -> Repo {
         Repo::new(&self.worktree)
@@ -272,6 +279,135 @@ impl Tasks {
         };
         self.save(&task)?;
         Ok(task)
+    }
+
+    /// Hand one of your branches to an agent (#80, #82): a task whose folder
+    /// has `branch` checked out, landing on `base`. If the branch is checked
+    /// out in the main checkout, its uncommitted work (untracked files too)
+    /// moves into the folder, and the main checkout switches to `base`.
+    /// Returns the task and whether it moved the branch out of the main
+    /// checkout, which [`Tasks::give_back`] puts back.
+    pub fn adopt(&self, branch: &str, prompt: &str, base: &str) -> Result<(Task, bool), String> {
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            return Err("Say what the agent should do first".into());
+        }
+        if branch.starts_with("agent/") {
+            return Err(format!("{branch} is already an agent's branch"));
+        }
+        self.repo
+            .resolve(&format!("refs/heads/{branch}"))
+            .map_err(|_| format!("There's no local branch {branch}"))?;
+        if self
+            .list()
+            .iter()
+            .any(|t| t.branch == branch && t.state == TaskState::Open)
+        {
+            return Err(format!("{branch} is already a task"));
+        }
+        let (base, from) = match self.repo.remote_branch(base) {
+            Some(local) => (local, Some(base.to_string())),
+            None => (base.to_string(), None),
+        };
+        if base == branch {
+            return Err(format!(
+                "{branch} is the base: start a branch from it first"
+            ));
+        }
+        let here = self.repo.tracking()?.branch;
+        let moving = here.as_deref() == Some(branch);
+        if let Some(w) = self
+            .repo
+            .worktrees()?
+            .into_iter()
+            .find(|w| !w.is_main && w.branch.as_deref() == Some(branch))
+        {
+            return Err(format!(
+                "{branch} is already checked out in {}",
+                w.path.display()
+            ));
+        }
+
+        // Out of the main checkout: its uncommitted work comes along.
+        let mut stashed = false;
+        if moving {
+            if !self.repo.status()?.is_empty() {
+                self.repo
+                    .stash_save(Some(&format!("spor: hand {branch} to an agent")), true)?;
+                stashed = true;
+            }
+            if let Err(e) = self.repo.checkout_branch(&base) {
+                if stashed {
+                    let _ = self.repo.stash_pop_index();
+                }
+                return Err(e);
+            }
+        }
+        let put_back = |e: String| {
+            if moving {
+                let _ = self.repo.checkout_branch(branch);
+                if stashed {
+                    let _ = self.repo.stash_pop_index();
+                }
+            }
+            e
+        };
+
+        let leaf = branch.rsplit('/').next().unwrap_or(branch);
+        let id = self.unique_id(&slug(leaf));
+        let worktree = self.worktree_dir().map_err(&put_back)?.join(&id);
+        std::fs::create_dir_all(worktree.parent().unwrap_or(&worktree))
+            .map_err(|e| put_back(format!("Couldn't create {}: {e}", worktree.display())))?;
+        self.repo
+            .add_worktree(&worktree, branch, None)
+            .map_err(&put_back)?;
+        self.copy_ignored(&worktree);
+        if stashed {
+            // The stash is shared by every checkout of the repository.
+            Repo::new(&worktree).stash_pop_index()?;
+        }
+        let task = Task {
+            id,
+            prompt: prompt.to_string(),
+            base,
+            from,
+            branch: branch.to_string(),
+            worktree,
+            created: now(),
+            state: TaskState::Open,
+            issue: None,
+            pull: None,
+        };
+        self.save(&task)?;
+        Ok((task, moving))
+    }
+
+    /// Take back a branch handed to an agent with [`Tasks::adopt`]: the
+    /// folder goes, its uncommitted work comes along, and the task is
+    /// forgotten. With `checkout`, the branch is checked out in the main
+    /// checkout again, where it was; otherwise the folder's uncommitted
+    /// work is kept as a stash.
+    pub fn give_back(&self, task: &Task, checkout: bool) -> Result<(), String> {
+        if task.owns_branch() {
+            return Err(format!("{} was never yours to take back", task.branch));
+        }
+        let mut stashed = false;
+        if task.worktree.exists() {
+            let folder = task.repo();
+            if !folder.status()?.is_empty() {
+                folder.stash_save(Some(&format!("spor: take back {}", task.branch)), true)?;
+                stashed = true;
+            }
+            self.repo.remove_worktree(&task.worktree, true)?;
+        }
+        self.forget(&task.id)?;
+        if checkout {
+            self.repo.checkout_branch(&task.branch)?;
+            if stashed {
+                self.repo.stash_pop_index()?;
+            }
+        }
+        Ok(())
     }
 
     /// The main checkout.
@@ -512,14 +648,15 @@ impl Tasks {
         wt.patch_since(&start)
     }
 
-    /// Delete a task's folder and branch. Uncommitted work in the folder is
-    /// lost; the branch can come back with [`Tasks::restore`].
+    /// Delete a task's folder and its branch (only the folder for a branch
+    /// it adopted). Uncommitted work in the folder is lost; the branch can
+    /// come back with [`Tasks::restore`].
     pub fn discard(&self, task: &Task) -> Result<Undoable, String> {
         let branch_sha = self.repo.resolve(&task.branch)?;
         if task.worktree.exists() {
             self.repo.remove_worktree(&task.worktree, true)?;
         }
-        self.repo.delete_branch(&task.branch, true)?;
+        self.drop_branch(task)?;
         self.unlist(&task.id)?;
         Ok(Undoable {
             task: task.clone(),
@@ -538,8 +675,15 @@ impl Tasks {
             }
             self.repo.reset(before, ResetMode::Keep)?;
         }
-        self.repo
-            .restore_branch(&undo.task.branch, &undo.branch_sha)?;
+        if undo.task.owns_branch()
+            || self
+                .repo
+                .resolve(&format!("refs/heads/{}", undo.task.branch))
+                .is_err()
+        {
+            self.repo
+                .restore_branch(&undo.task.branch, &undo.branch_sha)?;
+        }
         self.repo
             .add_worktree(&undo.task.worktree, &undo.task.branch, None)?;
         let task = Task {
@@ -638,7 +782,7 @@ impl Tasks {
         }
         let commit = self.repo.head_sha()?;
         self.repo.remove_worktree(&task.worktree, true)?;
-        self.repo.delete_branch(&task.branch, true)?;
+        self.drop_branch(task)?;
         self.save(&Task {
             state: TaskState::Landed(commit),
             ..task.clone()
@@ -768,7 +912,7 @@ impl Tasks {
             }
             self.repo.remove_worktree(&task.worktree, false)?;
         }
-        self.repo.delete_branch(&task.branch, true)?;
+        self.drop_branch(task)?;
         self.save(&Task {
             state,
             ..task.clone()
@@ -782,6 +926,15 @@ impl Tasks {
 
     /// `<parent>/<repo>.spor/`: beside the repository, so editors and
     /// build tools treat each task's folder as an ordinary checkout.
+    /// Delete the task's branch when it's the task's own; an adopted
+    /// branch is yours and stays.
+    fn drop_branch(&self, task: &Task) -> Result<(), String> {
+        if task.owns_branch() {
+            self.repo.delete_branch(&task.branch, true)?;
+        }
+        Ok(())
+    }
+
     fn worktree_dir(&self) -> Result<PathBuf, String> {
         let common = self.repo.common_dir()?;
         let common = common.canonicalize().unwrap_or(common);

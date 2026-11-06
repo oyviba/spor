@@ -2,7 +2,7 @@ import type { WorkItem, Shelf, Filter } from "./items";
 import { unseen } from "./items";
 import { isOpen, statusOf } from "../agents/status";
 import { ago } from "../agents/transcript";
-import { pullStatus } from "../pulls/PullsSection";
+import { pullStatus } from "./pull";
 import { useNow } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { StatusPill, type Status } from "../../shared/StatusPill";

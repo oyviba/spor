@@ -1248,6 +1248,14 @@ impl Repo {
         self.run_ok(&["stash", "pop"]).map(|_| ())
     }
 
+    /// Apply the latest stash with what was staged staged again, and drop
+    /// it. Falls back to a plain pop when the index can't be restored.
+    pub fn stash_pop_index(&self) -> Result<(), String> {
+        self.run_ok(&["stash", "pop", "--index"])
+            .or_else(|_| self.run_ok(&["stash", "pop"]))
+            .map(|_| ())
+    }
+
     /// Apply stash entry `index` and drop it.
     pub fn stash_pop_at(&self, index: usize) -> Result<(), String> {
         self.run_ok(&["stash", "pop", &stash_ref(index)])

@@ -546,6 +546,49 @@ pub(crate) fn create_task(
     Ok(summary(&tasks, &task))
 }
 
+/// Hand one of your branches to an agent (#80, #82): a task whose folder
+/// has the branch checked out, with an agent started on `prompt`. If the
+/// branch is checked out here, its uncommitted work goes along and the main
+/// checkout switches to `base`. ⌘Z takes it back.
+#[tauri::command(async)]
+pub(crate) fn hand_to_agent(
+    app: State<App>,
+    branch: String,
+    prompt: String,
+    base: String,
+    agent: AgentChoice,
+    mode: String,
+) -> Result<TaskSummary, String> {
+    let mode = mode_of(&mode)?;
+    let model = agent.model()?;
+    let kind = agent.kind();
+    if let Some(e) = kind.as_ref().and_then(agent::missing) {
+        return Err(e);
+    }
+    let tasks = app.tasks()?;
+    let (task, moved) = tasks
+        .adopt(&branch, &prompt, &base)
+        .map_err(|e| format!("Couldn't hand {branch} over: {}", first_line(&e)))?;
+    app.undo.push(
+        format!("Hand {branch} to an agent"),
+        Undo::HandedOver {
+            task: task.id.clone(),
+            checkout: moved,
+        },
+    );
+    if let Some(kind) = kind {
+        Runs::of(&tasks, &task).start_with(
+            &task,
+            &kind,
+            &task.prompt,
+            None,
+            Permissions { mode },
+            &model,
+        )?;
+    }
+    Ok(summary(&tasks, &task))
+}
+
 /// Start an agent on a task: with its prompt, or with a follow-up message
 /// that continues the agent's session when it has one.
 #[tauri::command(async)]

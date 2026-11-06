@@ -116,7 +116,7 @@ try {
   await w.until(`return $(".source-bar select").value === "1" && $$(".diff tr.add").length > 0`, "run 2's diff");
   const added = await w.js(`return [...$$(".diff tr.add")].map(r => r.innerText).join(" | ")`);
   check(added.includes("def farewell") && !added.includes("title=None"), "Changes can show just one run's diff");
-  await w.clickText(".tabs button", "Conversation");
+  await w.clickText(".tabs button", "Agent");
   await w.waitFor(".run:nth-of-type(2) .run-actions");
   await w.clickText(".run:nth-of-type(2) .run-actions .link", "Undo this run");
   await w.clickText(".run:nth-of-type(2) .run-actions .link", "Undo this run?");
