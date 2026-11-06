@@ -27,11 +27,16 @@ export interface GithubActions {
   onShowIssue: (n: number) => void;
   onShowPull: (n: number) => void;
   onPublish: (draft: boolean, commitUncommitted: boolean) => unknown;
-  onPush: () => unknown;
+  /** Push to its PR; with `commitUncommitted`, uncommitted work goes too. */
+  onPush: (commitUncommitted: boolean) => unknown;
   onSendReview: () => unknown;
   /** Send its PR's failed Actions jobs to the agent. */
   onSendFailure: () => unknown;
   onSettle: (commit: string) => unknown;
+  /** Squash and merge its PR on GitHub, then clean up as `onSettle` does. */
+  onMerge: () => unknown;
+  /** Mark its draft PR ready for review. */
+  onReady: () => unknown;
   /** Its PR was closed unmerged: close it and remove its folder and branch. */
   onClose: () => unknown;
 }
@@ -61,7 +66,8 @@ export function Inspector({ detail, ...p }: Props) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   // What it's doing (publishing, landing…): that button spins, the others
   // that would change the task wait.
-  const [working, setWorking] = useState<"publish" | "land" | "discard" | null>(null);
+  const [working, setWorking] = useState<"publish" | "land" | "discard" | "merge" | null>(null);
+  const [confirmMerge, setConfirmMerge] = useState(false);
   const work = (what: NonNullable<typeof working>, run: () => unknown) => {
     if (working) return;
     setWorking(what);
@@ -69,6 +75,7 @@ export function Inspector({ detail, ...p }: Props) {
   };
   useChanged(() => {
     setConfirmDiscard(false);
+    setConfirmMerge(false);
     setLandMenu(false);
     setPrMenu(false);
   }, [t.id]);
@@ -92,6 +99,20 @@ export function Inspector({ detail, ...p }: Props) {
   const undoneLines = detail.undoes.reduce((n, u) => n + u.lines, 0);
   const lastRun = detail.runs.at(-1);
   const spent = detail.runs.reduce((n, r) => n + (r.cost_usd ?? 0), 0);
+
+  // What merging its PR from here waits for. GitHub has the final say
+  // (required reviews and checks); this is what would lose work.
+  const mergeBlocked = !prOpen
+    ? null
+    : running
+      ? "The agent is still working"
+      : pr.state === "draft"
+        ? "It's a draft — mark it ready for review first"
+        : s.unpushed > 0 || s.uncommitted > 0
+          ? `Push what isn't on #${pr.number} yet first`
+          : detail.conflicts.length > 0
+              ? `Resolve the conflicts with ${t.base} first`
+              : null;
 
   const publishBlocked = running
     ? "The agent is still working"
@@ -128,13 +149,24 @@ export function Inspector({ detail, ...p }: Props) {
           <StatusPill status={pullStatus(pr)} />
         </button>
       )}
-      {prOpen && s.unpushed > 0 && (
+      {prOpen && (s.unpushed > 0 || s.uncommitted > 0) && (
         <div className="inspector-row warn">
           <ArrowUp size={13} />
           <span>
-            {s.unpushed} {s.unpushed === 1 ? "commit" : "commits"} not on #{pr.number} yet
-            <Button className="link" onClick={p.onPush} disabled={running}>
-              Push
+            {[
+              s.unpushed > 0 && `${s.unpushed} ${s.unpushed === 1 ? "commit" : "commits"}`,
+              s.uncommitted > 0 && `${s.uncommitted} uncommitted ${s.uncommitted === 1 ? "file" : "files"}`,
+            ]
+              .filter(Boolean)
+              .join(" and ")}{" "}
+            not on #{pr.number} yet
+            <Button
+              className="link"
+              onClick={() => p.onPush(s.uncommitted > 0)}
+              disabled={running}
+              title={s.uncommitted > 0 ? "Commit what it left uncommitted, and push" : undefined}
+            >
+              {s.uncommitted > 0 ? "Commit and push" : "Push"}
             </Button>
           </span>
         </div>
@@ -267,6 +299,28 @@ export function Inspector({ detail, ...p }: Props) {
       )}
       {prOpen && (
         <div className="inspector-actions">
+          {pr.state === "draft" && (
+            <Button className="ghost" disabled={running} onClick={p.onReady}>
+              Ready for review
+            </Button>
+          )}
+          <Button
+            className={confirmMerge ? "danger" : "primary"}
+            disabled={mergeBlocked != null || (working != null && working !== "merge")}
+            busy={working === "merge"}
+            title={
+              mergeBlocked ??
+              (pr.checks === "failing"
+                ? "Its checks are failing — squash and merge on GitHub anyway, then clean up"
+                : pr.checks === "pending"
+                  ? "Its checks are still running — squash and merge on GitHub anyway, then clean up"
+                  : "Squash and merge on GitHub, then remove its folder and branch (⌘Z brings them back)")
+            }
+            onClick={() => (confirmMerge ? work("merge", p.onMerge) : setConfirmMerge(true))}
+            onBlur={() => setConfirmMerge(false)}
+          >
+            <Merge size={12} /> {confirmMerge ? `Squash and merge #${pr.number}?` : "Squash and merge"}
+          </Button>
           {pr?.checks === "failing" && (
             <Button
               className="ghost"
@@ -287,14 +341,14 @@ export function Inspector({ detail, ...p }: Props) {
       )}
       {!done && (
       <div className="inspector-actions">
-        {s.uncommitted > 0 && !running && (
+        {s.uncommitted > 0 && !running && !prOpen && (
           <label className="check">
             <input
               type="checkbox"
               checked={includeUncommitted}
               onChange={(e) => setIncludeUncommitted(e.target.checked)}
             />
-            Commit its uncommitted changes when landing{pr ? "" : " or publishing"}
+            Commit its uncommitted changes when landing or publishing
           </label>
         )}
         {!pr && (
@@ -330,6 +384,7 @@ export function Inspector({ detail, ...p }: Props) {
             )}
           </div>
         )}
+        {!prOpen && (
         <div className="split">
           <Button
             className="primary"
@@ -361,6 +416,7 @@ export function Inspector({ detail, ...p }: Props) {
             </div>
           )}
         </div>
+        )}
         <Button
           className={confirmDiscard ? "danger" : "ghost"}
           disabled={running || (working != null && working !== "discard")}
@@ -373,7 +429,8 @@ export function Inspector({ detail, ...p }: Props) {
         </Button>
       </div>
       )}
-      {!done && landBlocked && hasWork && !running && <div className="inspector-note">{landBlocked}</div>}
+      {!done && !prOpen && landBlocked && hasWork && !running && <div className="inspector-note">{landBlocked}</div>}
+      {mergeBlocked && !running && <div className="inspector-note">{mergeBlocked}</div>}
     </aside>
   );
 }

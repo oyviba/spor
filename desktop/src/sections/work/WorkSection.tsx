@@ -327,7 +327,35 @@ export function WorkSection() {
           await refreshPulls();
           await refreshGithub();
         }),
-    onPush: () => shell.act(() => api.pushTask(id), { undo: false, pending: "Pushing…" }).then(afterChange),
+    onPush: (commitUncommitted: boolean) =>
+      shell
+        .act(() => api.pushTask(id, commitUncommitted), {
+          undo: false,
+          pending: commitUncommitted ? "Committing and pushing…" : "Pushing…",
+        })
+        .then(afterChange),
+    // From prompt to merged in one place: merge on GitHub, then clean up
+    // at once (⌘Z brings its folder and branch back).
+    onMerge: async () => {
+      const pr = pulls[id]?.pull;
+      if (!pr) return;
+      const ok = await shell.act(() => api.pullAction(pr.number, "squash"), {
+        undo: false,
+        pending: `Merging #${pr.number} on GitHub…`,
+      });
+      if (!ok) return;
+      // Cleaned up here, so no "merged — can be cleaned up" note follows.
+      merged.current?.add(id);
+      const list = await api.taskPulls().catch(() => [] as TaskPull[]);
+      await settle(id, list.find((p) => p.task === id)?.merge_commit ?? `#${pr.number}`);
+    },
+    onReady: () => {
+      const pr = pulls[id]?.pull;
+      if (!pr) return;
+      return shell
+        .act(() => api.pullAction(pr.number, "ready"), { undo: false, pending: "Marking it ready…" })
+        .then(() => Promise.all([refreshPulls(), refreshGithub()]));
+    },
     onSendReview: () =>
       api.reviewFeedback(id).then(async (text) => {
         await send(text);

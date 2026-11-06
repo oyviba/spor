@@ -753,11 +753,17 @@ fn remote(app: &App) -> Result<String, String> {
 
 /// Push the agent's new commits to the task's pull request.
 #[tauri::command(async)]
-pub(crate) fn push_task(app: State<App>, id: String) -> Result<String, String> {
+pub(crate) fn push_task(
+    app: State<App>,
+    id: String,
+    commit_uncommitted: Option<bool>,
+) -> Result<String, String> {
     let (tasks, task) = app.task(&id)?;
-    let n = tasks.stats(&task).unpushed;
+    let stats = tasks.stats(&task);
+    let commit = commit_uncommitted.unwrap_or(false) && stats.uncommitted > 0;
+    let n = stats.unpushed + usize::from(commit);
     tasks
-        .push(&task, &remote(&app)?)
+        .push(&task, &remote(&app)?, commit)
         .map_err(|e| first_line(&e))?;
     Ok(match (n, task.pull) {
         (0, _) => format!("{} is up to date", task.branch),

@@ -52,7 +52,10 @@ What one app makes possible:
   the agent's session (read-only; the prompt's if it can't), and which says
   `Closes #n`; landing locally puts `Closes #n`
   in the commit instead. The task then shows its PR's state, offers *Push*
-  when the agent has commits the PR doesn't, and *Send review to agent*
+  when the agent has commits the PR doesn't (*Commit and push* when it left
+  work uncommitted), *Squash and merge* (which cleans the task up once
+  GitHub has merged it; ⌘Z brings it back; *Land* is hidden while a PR is open,
+  so the two can't diverge), and *Send review to agent*
   (on the task, or on the PR page) sends reviews and line comments made
   since the agent last ran, as `file:line — comment`. When the PR merges, a
   notification offers *Clean up*: the task is marked landed and its folder

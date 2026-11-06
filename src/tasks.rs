@@ -513,8 +513,7 @@ impl Tasks {
             if !commit_uncommitted {
                 return Err(format!("{} has uncommitted changes", task.id));
             }
-            wt.stage_all()?;
-            wt.commit(&format!("Uncommitted work from {}", task.id))?;
+            commit_all(&wt, task)?;
         }
         if self
             .repo
@@ -595,8 +594,7 @@ impl Tasks {
             if !commit_uncommitted {
                 return Err(format!("{} has uncommitted changes", task.id));
             }
-            wt.stage_all()?;
-            wt.commit(&format!("Uncommitted work from {}", task.id))?;
+            commit_all(&wt, task)?;
         }
         if self
             .repo
@@ -605,7 +603,7 @@ impl Tasks {
         {
             return Err(format!("{} has no commits to publish", task.id));
         }
-        self.push(task, remote)?;
+        self.push(task, remote, false)?;
         let described = describe
             .then(|| crate::agent::describe_pull(self, task).ok())
             .flatten();
@@ -631,9 +629,15 @@ impl Tasks {
     /// Push the task's branch to `remote` (setting it as the upstream), so
     /// its pull request gets the agent's latest commits. A key passphrase
     /// or password comes up in the app, as for any other push.
-    pub fn push(&self, task: &Task, remote: &str) -> Result<(), String> {
+    /// Push the task's branch to `remote`. With `commit_uncommitted`,
+    /// uncommitted work in its folder is committed first, so it goes too.
+    pub fn push(&self, task: &Task, remote: &str, commit_uncommitted: bool) -> Result<(), String> {
         if task.state != TaskState::Open || !task.worktree.exists() {
             return Err(format!("{} has no folder to push from", task.id));
+        }
+        let wt = task.repo();
+        if commit_uncommitted && !wt.status()?.is_empty() {
+            commit_all(&wt, task)?;
         }
         crate::askpass::git_network(
             &task.worktree,
@@ -730,6 +734,12 @@ impl Tasks {
 }
 
 /// Lines in a file's contents, counting a last line without a newline.
+/// Commit everything in the task's folder, as work the agent left uncommitted.
+fn commit_all(wt: &Repo, task: &Task) -> Result<(), String> {
+    wt.stage_all()?;
+    wt.commit(&format!("Uncommitted work from {}", task.id))
+}
+
 fn bytecount_lines(bytes: &[u8]) -> usize {
     let newlines = bytes.iter().filter(|&&b| b == b'\n').count();
     newlines + usize::from(bytes.last().is_some_and(|&b| b != b'\n'))
