@@ -119,6 +119,7 @@ export const External = (p: P) => (
 export const Archive = (p: P) => (
   <Svg {...p}><rect x="2" y="4" width="20" height="5" rx="1" /><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9M10 13h4" /></Svg>
 );
+export const Circle = (p: P) => <Svg {...p}><circle cx="12" cy="12" r="8" /></Svg>;
 export const CircleCheck = (p: P) => <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="m8.5 12 2.5 2.5 4.5-5" /></Svg>;
 export const CircleX = (p: P) => <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="m15 9-6 6M9 9l6 6" /></Svg>;
 export const CircleDashed = (p: P) => (

@@ -1062,15 +1062,13 @@ button.busy::after {
   font-size: 11px;
   color: var(--faint);
   white-space: nowrap;
-  /* The hint gives way, not the pickers beside it. */
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.composer-footer > .chip-select,
-.composer-footer > .chip-static,
-.composer-footer > .chip-toggle {
-  flex-shrink: 0;
+/* The key hint gives way well before the pickers do. */
+.composer-footer > .hint-keys {
+  flex-shrink: 1000;
+  min-width: 0;
 }
 .send {
   display: inline-grid;
@@ -3771,4 +3769,87 @@ body.resizing * {
   padding-left: 10px;
   border-left: 2px solid var(--border-strong);
   font-size: 13px;
+}
+
+/* ---- What a running agent is doing (#96) -------------------------------- */
+
+.live {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.live-line > .truncate {
+  min-width: 0;
+}
+.live-plan {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 6px 10px;
+}
+.live-plan-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.plan-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--raised);
+  overflow: hidden;
+}
+.plan-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--sky);
+  transition: width 0.3s ease;
+}
+.todo-list {
+  list-style: none;
+  margin: 6px 0 2px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+}
+.todo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+.todo > svg,
+.todo > .dot {
+  flex-shrink: 0;
+}
+.todo > .dot {
+  margin: 0 3px;
+}
+.todo.completed {
+  color: var(--faint);
+}
+.todo.completed > span {
+  text-decoration: line-through;
+  text-decoration-color: var(--border-strong);
+}
+.todo.completed > svg {
+  color: var(--emerald);
+}
+.todo.in_progress {
+  color: var(--fg);
+  font-weight: 500;
+}
+.todo.in_progress > .dot {
+  color: var(--sky);
 }

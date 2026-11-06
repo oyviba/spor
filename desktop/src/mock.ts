@@ -85,6 +85,7 @@ const summary = (id: string, prompt: string, created: number, over: Partial<Task
   command: `cd /Users/you/code/postplan.spor/${id} && claude '${prompt}'`,
   asks: 0,
   ask: null,
+  progress: null,
   mode: "acceptEdits",
   issue: null,
   pull: null,
@@ -158,6 +159,37 @@ const LOGIN_PATCH = `diff --git a/src/auth/session.ts b/src/auth/session.ts
  }
 `;
 
+/** The mock agent's plan at step `at` (steps before it done). */
+const sharePlan = (at: number): Item => ({
+  kind: "todos",
+  todos: [
+    ["Find how drafts are stored", "Finding how drafts are stored"],
+    ["Add the shareLinks table", "Adding the shareLinks table"],
+    ["Add the share routes", "Adding the share routes"],
+    ["Check types and tests", "Checking types and tests"],
+    ["Test link expiry", "Testing link expiry"],
+  ].map(([content, active], i) => ({
+    content,
+    active,
+    status: i < at ? "completed" : i === at ? "in_progress" : "pending",
+  })),
+});
+
+/** What the backend's `Runs::progress` reads from a running task. */
+function progressOf(t: MockTask): TaskSummary["progress"] {
+  if (t.summary.run?.state !== "running") return null;
+  const plan = t.transcript.findLast((i) => i.kind === "todos");
+  const tool = t.transcript.findLast((i) => i.kind === "tool" && i.name !== "TodoWrite");
+  const todos = plan?.kind === "todos" ? plan.todos : [];
+  return {
+    done: todos.filter((x) => x.status === "completed").length,
+    total: todos.length,
+    step: todos.find((x) => x.status === "in_progress")?.active ?? null,
+    tool: tool?.kind === "tool" ? tool.name : null,
+    detail: tool?.kind === "tool" ? tool.detail : null,
+  };
+}
+
 const PLAN = `# Rename drafts to posts
 
 The app says "draft" for what people now call a post. Rename it everywhere it's visible, and keep the old API working for a release.
@@ -180,6 +212,8 @@ const tasks: MockTask[] = [
     transcript: [
       { kind: "prompt", text: "Add expiring share links to drafts" },
       { kind: "text", text: "I'll look at how drafts are stored and routed first." },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(0),
       { kind: "tool", name: "Glob", detail: "src/**/*.ts" },
       { kind: "tool", name: "Read", detail: "src/routes/drafts.ts" },
       { kind: "tool", name: "Read", detail: "src/db/index.ts" },
@@ -188,10 +222,16 @@ const tasks: MockTask[] = [
         kind: "text",
         text: "Drafts live in `db.drafts` and there's no sharing table yet. Plan:\n\n1. A `shareLinks` table with a token and an expiry\n2. `POST /drafts/:id/share` to create one\n3. `GET /s/:token` to open it until it expires",
       },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(1),
       { kind: "tool", name: "Write", detail: "src/drafts/share.ts" },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(2),
       { kind: "tool", name: "Edit", detail: "src/routes/drafts.ts" },
     ],
     script: [
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(3),
       {
         kind: "ask",
         ask: "permission",
@@ -233,7 +273,11 @@ const tasks: MockTask[] = [
         ],
       },
       { kind: "text", text: "Types check and the draft tests pass. Adding a test for expiry next." },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(4),
       { kind: "tool", name: "Write", detail: "src/drafts/share.test.ts" },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(5),
     ],
     runs: [run({ state: "running", exit_code: null, started: t0 - 52, ended: null, cost_usd: null })],
     patch: SHARE_PATCH,
@@ -432,11 +476,14 @@ const CHANGES_TASKS = new Set([
   "send_queued",
 ]);
 
+for (const t of tasks) t.summary.progress = progressOf(t);
+
 // The working task makes progress every few seconds, then finishes.
 setInterval(() => {
   const t = tasks.find((x) => x.summary.run?.state === "running");
   if (!t || t.asks?.length) return;
   progress(t);
+  t.summary.progress = progressOf(t);
   tasksChanged();
 }, 4000);
 

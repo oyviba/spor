@@ -171,3 +171,31 @@ test("duration formats", () => {
   assert.equal(duration(125), "2m 05s");
   assert.equal(duration(3780), "1h 03m");
 });
+
+test("a finished run's fold says how far through its plan it got", () => {
+  const plan = (done: number): Item => ({
+    kind: "todos",
+    todos: ["a", "b", "c"].map((c, i) => ({
+      content: c,
+      active: c,
+      status: i < done ? "completed" : i === done ? "in_progress" : "pending",
+    })),
+  });
+  const ran = (done: number) =>
+    runs(
+      [
+        { kind: "prompt", text: "p" },
+        { kind: "tool", name: "TodoWrite", detail: "" },
+        plan(1),
+        { kind: "tool", name: "Edit", detail: "a.ts" },
+        { kind: "tool", name: "TodoWrite", detail: "" },
+        plan(done),
+        { kind: "text", text: "Done." },
+        { kind: "done", ok: true, summary: "", cost_usd: null, turns: null, seconds: 840 },
+      ],
+      false,
+    )[0];
+  assert.equal(ran(3).fold?.label, "Worked for 14m 00s · 3 of 3 done");
+  assert.equal(ran(2).fold?.label, "Worked for 14m 00s · stopped at 2 of 3");
+  assert.equal(ran(2).plan?.length, 3, "the run keeps its last plan");
+});

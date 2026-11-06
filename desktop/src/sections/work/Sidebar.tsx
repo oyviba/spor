@@ -1,6 +1,7 @@
 import type { WorkItem, Shelf, Filter } from "./items";
 import { unseen } from "./items";
 import { isOpen, statusOf } from "../agents/status";
+import { doing } from "../agents/progress";
 import { ago } from "../agents/transcript";
 import { pullStatus } from "./pull";
 import { useNow } from "../../shared/hooks";
@@ -83,7 +84,11 @@ export function Sidebar(p: Props) {
         <div className="task-row-line sub">
           {i.kind === "pull" ? <PullRequest size={11} className="shrink-0" /> : <Branch size={11} className="shrink-0" />}
           <span className="truncate">
-            {i.kind === "task"
+            {i.kind === "task" && i.task.ask
+              ? capitalize(i.task.ask)
+              : i.kind === "task" && i.task.run?.state === "running" && doing(i.task.progress)
+              ? doing(i.task.progress)
+              : i.kind === "task"
               ? i.task.landed
                 ? `landed on ${i.task.base}`
                 : i.task.closed
@@ -177,3 +182,5 @@ export function Sidebar(p: Props) {
     </aside>
   );
 }
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);

@@ -64,6 +64,8 @@ export interface TaskSummary {
   asks: number;
   /** The first question in a few words ("asks: Keep the old endpoint?"); null when none waits. */
   ask: string | null;
+  /** While it runs: how far through its plan, and what it's doing (#96). */
+  progress: Progress | null;
   mode: Mode | null;
   /** The GitHub issue it was started from. */
   issue: number | null;
@@ -122,7 +124,30 @@ export type Item =
   | ({ kind: "ask"; id: string; tool: string; detail: string; session: string | null } & AskKind)
   | { kind: "answer"; id: string; allow: boolean; message: string; always: boolean }
   | { kind: "steer"; text: string }
-  | { kind: "setup"; ok: boolean | null; code: number | null };
+  | { kind: "setup"; ok: boolean | null; code: number | null }
+  /** The agent's plan as it now stands (TodoWrite, #96). */
+  | { kind: "todos"; todos: Todo[] };
+
+/** One step of the agent's plan. */
+export interface Todo {
+  /** "Migrate the tests". */
+  content: string;
+  /** "Migrating the tests": the step while it's being done. */
+  active: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+/** What a running agent is doing (#96). */
+export interface Progress {
+  /** Steps done, of how many; total 0 without a plan. */
+  done: number;
+  total: number;
+  /** The step in progress ("Migrating the tests"). */
+  step: string | null;
+  /** Its latest tool call. */
+  tool: string | null;
+  detail: string | null;
+}
 
 export interface TaskDetail {
   task: TaskSummary;

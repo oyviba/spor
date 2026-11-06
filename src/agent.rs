@@ -282,6 +282,78 @@ pub enum Entry {
     /// The folder's setup script (#23): started (`ok` None), or done. Its
     /// output is the `Output` lines between.
     Setup { ok: Option<bool>, code: Option<i32> },
+    /// The agent's plan as it now stands (`TodoWrite`, #96). Each one
+    /// replaces the last.
+    Todos(Vec<Todo>),
+}
+
+/// One step of the agent's plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Todo {
+    /// The step: "Migrate the tests".
+    pub content: String,
+    /// The step while it's being done: "Migrating the tests".
+    pub active: String,
+    pub status: TodoStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+/// What a running agent is doing (#96): how far through its plan, and the
+/// tool call it made last.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Progress {
+    /// Steps done, and how many there are (0 when it has no plan).
+    pub done: usize,
+    pub total: usize,
+    /// The step in progress, as it says it ("Migrating the tests").
+    pub step: Option<String>,
+    /// Its latest tool call: the tool and its gist.
+    pub tool: Option<(String, String)>,
+}
+
+/// `TodoWrite`'s list.
+fn todos(input: &Json) -> Vec<Todo> {
+    input
+        .get("todos")
+        .array()
+        .iter()
+        .map(|t| {
+            let content = t.get("content").str().unwrap_or_default().to_string();
+            Todo {
+                active: t
+                    .get("activeForm")
+                    .str()
+                    .filter(|a| !a.trim().is_empty())
+                    .unwrap_or(&content)
+                    .to_string(),
+                content,
+                status: match t.get("status").str() {
+                    Some("completed") => TodoStatus::Completed,
+                    Some("in_progress") => TodoStatus::InProgress,
+                    _ => TodoStatus::Pending,
+                },
+            }
+        })
+        .collect()
+}
+
+/// Progress through a plan: done, total and the step in progress.
+pub fn plan_progress(list: &[Todo]) -> (usize, usize, Option<String>) {
+    let done = list
+        .iter()
+        .filter(|t| t.status == TodoStatus::Completed)
+        .count();
+    let step = list
+        .iter()
+        .find(|t| t.status == TodoStatus::InProgress)
+        .map(|t| t.active.clone());
+    (done, list.len(), step)
 }
 
 /// A question the agent is waiting on.
@@ -1010,6 +1082,44 @@ echo $code > "$SPOR_EXIT""#;
         std::fs::write(&path, lines.join("\n") + "\n").map_err(|e| e.to_string())
     }
 
+    /// What the running agent is doing (#96): its plan's progress and its
+    /// latest tool call. Reads only the lines that carry them, so a list
+    /// of tasks can ask each one. None when nothing is running.
+    pub fn progress(&self) -> Option<Progress> {
+        let run = self.latest().filter(|r| r.state == RunState::Running)?;
+        let log = std::fs::read_to_string(self.file(run.index, "log")).ok()?;
+        let mut out = Progress::default();
+        let mut plan = false;
+        for line in log.lines().rev() {
+            if out.tool.is_some() && plan {
+                break;
+            }
+            if !line.contains("\"tool_use\"") {
+                continue;
+            }
+            let Some(event) = Json::parse(line) else {
+                continue;
+            };
+            if event.get("type").str() != Some("assistant") {
+                continue;
+            }
+            for part in event.get("message").get("content").array().iter().rev() {
+                if part.get("type").str() != Some("tool_use") {
+                    continue;
+                }
+                let name = part.get("name").str().unwrap_or("Tool");
+                if !plan && name == "TodoWrite" {
+                    (out.done, out.total, out.step) = plan_progress(&todos(part.get("input")));
+                    plan = true;
+                }
+                if out.tool.is_none() && name != "TodoWrite" {
+                    out.tool = Some((name.to_string(), tool_detail(part.get("input"))));
+                }
+            }
+        }
+        Some(out)
+    }
+
     /// The questions the running agent is waiting on.
     pub fn asks(&self) -> Vec<Ask> {
         let Some(run) = self.latest().filter(|r| r.state == RunState::Running) else {
@@ -1390,10 +1500,16 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                                 out.push(Entry::Text(text.to_string()));
                             }
                         }
-                        Some("tool_use") => out.push(Entry::Tool {
-                            name: part.get("name").str().unwrap_or("Tool").to_string(),
-                            detail: tool_detail(part.get("input")),
-                        }),
+                        Some("tool_use") => {
+                            let name = part.get("name").str().unwrap_or("Tool");
+                            out.push(Entry::Tool {
+                                name: name.to_string(),
+                                detail: tool_detail(part.get("input")),
+                            });
+                            if name == "TodoWrite" {
+                                out.push(Entry::Todos(todos(part.get("input"))));
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1849,6 +1965,22 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plan_is_read_from_todo_write() {
+        let log = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"Read the routes","activeForm":"Reading the routes","status":"completed"},{"content":"Migrate the tests","activeForm":"Migrating the tests","status":"in_progress"},{"content":"Run them","status":"pending"}]}}]}}"#;
+        let entries = parse_claude(log);
+        assert!(matches!(&entries[0], Entry::Tool { name, .. } if name == "TodoWrite"));
+        let Entry::Todos(list) = &entries[1] else {
+            panic!("{entries:?}")
+        };
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[2].active, "Run them", "no activeForm: the step itself");
+        assert_eq!(
+            plan_progress(list),
+            (1, 3, Some("Migrating the tests".to_string()))
+        );
+    }
 
     #[test]
     fn pull_text_is_a_title_line_then_the_description() {

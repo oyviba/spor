@@ -6,8 +6,8 @@ use crate::undo::Undo;
 use crate::{first_line, App};
 use serde::{Deserialize, Serialize};
 use spor::agent::{
-    self, AgentKind, AskKind, Effort, Entry, Mode, Model, Permissions, Run, RunState, Runs, Setup,
-    SetupState,
+    self, AgentKind, AskKind, Effort, Entry, Mode, Model, Permissions, Progress, Run, RunState,
+    Runs, Setup, SetupState, TodoStatus,
 };
 use spor::tasks::{LandMode, Task, TaskState, TaskStats, Tasks};
 use tauri::State;
@@ -125,6 +125,8 @@ pub(crate) struct TaskSummary {
     /// The first of them in a few words ("asks: Keep the old endpoint?"),
     /// for its row and notification (#102).
     ask: Option<String>,
+    /// While it runs: how far through its plan, and what it's doing (#96).
+    progress: Option<ProgressInfo>,
     /// The permission mode of its latest run.
     mode: Option<&'static str>,
     /// The GitHub issue it was started from.
@@ -160,6 +162,9 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
         command: task.agent_command(),
         asks: asks.len(),
         ask: asks.first().map(|a| a.gist()),
+        progress: runs
+            .progress()
+            .map(|p| ProgressInfo::from(p, &format!("{}/", task.worktree.display()))),
         issue: task.issue,
         pull: task.pull,
         queued: runs.queued(),
@@ -215,6 +220,44 @@ pub(crate) enum Item {
         ok: Option<bool>,
         code: Option<i32>,
     },
+    /// The agent's plan as it now stands (#96).
+    Todos {
+        todos: Vec<TodoInfo>,
+    },
+}
+
+#[derive(Serialize)]
+pub(crate) struct TodoInfo {
+    content: String,
+    active: String,
+    /// "pending", "in_progress" or "completed".
+    status: &'static str,
+}
+
+/// What a running agent is doing (#96), for its row and header.
+#[derive(Serialize)]
+pub(crate) struct ProgressInfo {
+    done: usize,
+    total: usize,
+    step: Option<String>,
+    /// Its latest tool call's name and gist.
+    tool: Option<String>,
+    detail: Option<String>,
+}
+
+impl ProgressInfo {
+    fn from(p: Progress, folder: &str) -> Self {
+        let (tool, detail) = p.tool.map_or((None, None), |(t, d)| {
+            (Some(t), Some(d.replace(folder, "")))
+        });
+        ProgressInfo {
+            done: p.done,
+            total: p.total,
+            step: p.step,
+            tool,
+            detail,
+        }
+    }
 }
 
 impl Item {
@@ -268,6 +311,20 @@ impl Item {
             },
             Entry::Steer(text) => Item::Steer { text },
             Entry::Setup { ok, code } => Item::Setup { ok, code },
+            Entry::Todos(list) => Item::Todos {
+                todos: list
+                    .into_iter()
+                    .map(|t| TodoInfo {
+                        content: t.content,
+                        active: t.active,
+                        status: match t.status {
+                            TodoStatus::Pending => "pending",
+                            TodoStatus::InProgress => "in_progress",
+                            TodoStatus::Completed => "completed",
+                        },
+                    })
+                    .collect(),
+            },
         }
     }
 }

@@ -4,7 +4,7 @@
 //!
 //! Its own test binary: opting in to the host is process-wide.
 
-use spor::agent::{AgentKind, AskKind, Entry, Mode, Permissions, RunState, Runs};
+use spor::agent::{AgentKind, AskKind, Entry, Mode, Permissions, Progress, RunState, Runs};
 use spor::git::Repo;
 use spor::tasks::{Task, Tasks};
 use std::path::{Path, PathBuf};
@@ -55,6 +55,11 @@ read -r first
 echo "$init" > init.txt
 echo '{"type":"system","subtype":"init","session_id":"sess-stream"}'
 case "$first" in
+  *todo*)
+    echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"Read it","activeForm":"Reading it","status":"completed"},{"content":"Change it","activeForm":"Changing it","status":"in_progress"},{"content":"Test it","activeForm":"Testing it","status":"pending"}]}}]}}'
+    echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"make test"}}]}}'
+    read -r next
+    say "Done it." ;;
   *question*)
     echo '{"type":"control_request","request_id":"req-q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Keep the old endpoint working?","header":"Endpoint","options":[{"label":"Keep it","description":"Both work for a release"},{"label":"Remove it","description":""}],"multiSelect":false},{"question":"Which docs?","header":"Docs","options":[{"label":"README","description":""},{"label":"CHANGELOG","description":""}],"multiSelect":true}]},"tool_use_id":"tq"}}'
     read -r answer
@@ -497,4 +502,26 @@ fn a_plan_can_be_sent_back_with_comments() {
         "{sent}"
     );
     assert!(texts(&runs).contains(&Entry::Text("Revising the plan.".into())));
+}
+
+#[test]
+fn progress_says_how_far_through_its_plan_it_is() {
+    let f = fixture();
+    let (_task, runs) = start(&f, "a todo list");
+    wait_for("its plan", || {
+        runs.progress()
+            .is_some_and(|p| p.total == 3 && p.tool.is_some())
+    });
+    assert_eq!(
+        runs.progress().unwrap(),
+        Progress {
+            done: 1,
+            total: 3,
+            step: Some("Changing it".into()),
+            tool: Some(("Bash".into(), "make test".into())),
+        }
+    );
+    runs.send("go on").unwrap();
+    assert_eq!(done(&runs), RunState::Finished);
+    assert_eq!(runs.progress(), None, "nothing is running");
 }
