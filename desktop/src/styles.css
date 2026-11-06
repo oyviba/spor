@@ -1007,7 +1007,8 @@ button.busy::after {
 .composer-footer > .chip-select,
 .composer-footer > .chip-select-wrap {
   flex-shrink: 1;
-  min-width: 0;
+  /* Never shrink to an empty chip: keep room for a cut-short label. */
+  min-width: 72px;
   max-width: max-content;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1062,6 +1063,14 @@ button.busy::after {
   font-size: 11px;
   color: var(--faint);
   white-space: nowrap;
+}
+/* In the composer the hint gives way before the pickers do, but keeps its
+ * first part ("↩ queue") readable; the full text stays in the DOM. */
+.composer-footer > .hint-keys {
+  flex-shrink: 1000;
+  min-width: 7ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .send {
   display: inline-grid;
