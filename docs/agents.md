@@ -239,6 +239,18 @@ Each phase is useful on its own.
    and open pull requests. A task can follow a remote branch or PR instead
    of a local worktree, so cloud and local agents share one panel.
 
+**Spor as an MCP server** (#106): each Claude Code run gets a stdio MCP
+server (`--mcp-config` names a file in the run directory; the server is
+the app's executable started with `__spor-mcp`). Tools: `ask` (a question
+for the Inbox, answered inside the turn), `report_progress`,
+`other_tasks` (with the files you share), `pr_comments` (unresolved
+threads), `ci_log` (failing jobs, folded to the failure) and `why` (blame
+a line; if the commit has a `Spor-Task` trailer, that task's prompt and
+what its agent did to the file). Everything but `ask` is pre-approved and
+read-only, apart from `report_progress` writing to the run's log. Still to
+do: `checks()` (#43). `ask` isn't asked in `bypassPermissions` mode, where
+Claude Code doesn't prompt for any tool.
+
 ## Decisions to make
 
 - **Which agents first.** Claude Code has a structured stream and hooks,

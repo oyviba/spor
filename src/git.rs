@@ -417,6 +417,11 @@ impl Repo {
             .unwrap_or_default()
     }
 
+    /// A commit's full message.
+    pub fn message(&self, rev: &str) -> Result<String, String> {
+        self.run_ok(&["log", "-1", "--format=%B", rev, "--"])
+    }
+
     /// The files that differ between two revisions (or trees).
     pub fn changed_paths(&self, from: &str, to: &str) -> Vec<String> {
         self.run_ok(&[

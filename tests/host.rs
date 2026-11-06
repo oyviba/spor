@@ -55,6 +55,11 @@ read -r first
 echo "$init" > init.txt
 echo '{"type":"system","subtype":"init","session_id":"sess-stream"}'
 case "$first" in
+  *mcp-ask*)
+    echo '{"type":"control_request","request_id":"req-m","request":{"subtype":"can_use_tool","tool_name":"mcp__spor__ask","input":{"question":"Which database?","options":["Postgres","SQLite"]},"tool_use_id":"tm"}}'
+    read -r answer
+    echo "$answer" > answer.txt
+    say "Using it." ;;
   *todo*)
     echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"Read it","activeForm":"Reading it","status":"completed"},{"content":"Change it","activeForm":"Changing it","status":"in_progress"},{"content":"Test it","activeForm":"Testing it","status":"pending"}]}}]}}'
     echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"make test"}}]}}'
@@ -524,4 +529,40 @@ fn progress_says_how_far_through_its_plan_it_is() {
     runs.send("go on").unwrap();
     assert_eq!(done(&runs), RunState::Finished);
     assert_eq!(runs.progress(), None, "nothing is running");
+}
+
+#[test]
+fn spors_mcp_server_is_given_to_the_run_and_its_ask_reaches_the_inbox() {
+    let f = fixture();
+    let (task, runs) = start(&f, "mcp-ask");
+    wait_for("the question", || !runs.asks().is_empty());
+    let ask = runs.asks().remove(0);
+    assert_eq!(ask.tool, "mcp__spor__ask");
+    assert_eq!(ask.gist(), "asks: Which database?");
+    let AskKind::Questions(qs) = &ask.kind else {
+        panic!("not a question: {:?}", ask.kind)
+    };
+    assert_eq!(qs[0].options.len(), 2);
+    assert_eq!(qs[0].options[1].label, "SQLite");
+    runs.answer_questions(&ask.id, &[vec!["SQLite".into()]])
+        .unwrap();
+    assert_eq!(done(&runs), RunState::Finished);
+    // The answer goes back in the call's input, where the server finds it.
+    let sent = std::fs::read_to_string(task.worktree.join("answer.txt")).unwrap();
+    assert!(sent.contains(r#""answer":"SQLite""#), "{sent}");
+
+    let args = std::fs::read_to_string(task.worktree.join("claude-args.txt")).unwrap();
+    let lines: Vec<&str> = args.lines().collect();
+    let at = lines.iter().position(|l| *l == "--mcp-config").unwrap();
+    let config = std::fs::read_to_string(lines[at + 1]).unwrap();
+    assert!(
+        config.contains(r#""spor""#) && config.contains("__spor-mcp"),
+        "{config}"
+    );
+    let allowed = lines[lines.iter().position(|l| *l == "--allowedTools").unwrap() + 1];
+    assert!(allowed.contains("mcp__spor__why"), "{allowed}");
+    assert!(
+        !allowed.contains("mcp__spor__ask"),
+        "asking is never pre-approved"
+    );
 }
