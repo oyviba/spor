@@ -101,6 +101,9 @@ export interface TaskDetail {
   transcript: Item[];
   runs: RunInfo[];
   conflicts: string[];
+  /** Work that reached the base after the task started and landing it
+   * would take back out: lines per file, most first. */
+  undoes: { path: string; lines: number }[];
   /** The run "Undo this run" would take back. */
   undoable: number | null;
   /** Questions the agent is waiting on. */
@@ -409,4 +412,28 @@ export interface RepoHead {
   ahead: number;
   behind: number;
   changes: number;
+}
+
+// ---- Work ----
+
+export interface BranchCommit {
+  hash: string;
+  short: string;
+  subject: string;
+  author: string;
+  time: number;
+}
+
+/** One of your own branches with work on it (#81): commits its base
+ * doesn't have, or checked out. */
+export interface WorkBranch {
+  name: string;
+  base: string;
+  current: boolean;
+  /** Newest first. */
+  commits: BranchCommit[];
+  files: number;
+  additions: number;
+  deletions: number;
+  updated: number;
 }

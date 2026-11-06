@@ -40,8 +40,11 @@ is a list in the sidebar, a page, and a details card:
   looked at, a failed CI run on your branch, a pull request waiting for
   your review. Each row opens where you deal with it, and goes once you
   have. Its count is the rail's only badge
-- **Work** (⌘2) — every piece of work in flight. Today that's agent tasks:
-  give a coding agent its own branch and folder so several can work at once
+- **Work** (⌘2) — every piece of work in flight, in one list: agents'
+  tasks, your own branches with commits ahead of the base, and open pull
+  requests from anyone, in shelves (needs you, in progress, in review,
+  settled). *New…* (⌘N) starts a branch, an agent task, or work on an
+  issue. An agent task gives a coding agent its own branch and folder so several can work at once
   without touching your checkout. A task is a prompt: spor creates
   `agent/<name>` from a base, checks it out in `<repo>.spor/<name>` beside
   the repository, and starts Claude Code (or any command) there. Paste,

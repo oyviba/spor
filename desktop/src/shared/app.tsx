@@ -6,7 +6,7 @@ import { createContext, useContext } from "react";
 import type { RepoInfo, RepoState, TaskSummary } from "../types";
 import type { MenuItem } from "./Overlay";
 
-export type SectionId = "inbox" | "changes" | "history" | "issues" | "pulls" | "actions" | "agents";
+export type SectionId = "inbox" | "changes" | "history" | "issues" | "pulls" | "actions" | "work";
 
 /** Where to go: a section, and what to open there. */
 export type Target =
@@ -16,7 +16,7 @@ export type Target =
   | { section: "issues"; number?: number }
   | { section: "pulls"; number?: number; /** Its head, to find its work item. */ branch?: string }
   | { section: "actions"; runId?: number; jobId?: number; /** The run's branch, to find its work item. */ branch?: string }
-  | { section: "agents"; taskId?: string };
+  | { section: "work"; taskId?: string; number?: number; branch?: string };
 
 export interface ToastAction {
   label: string;

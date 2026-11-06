@@ -17,10 +17,16 @@ export interface Inbox {
   refresh: () => void;
 }
 
-/** The Agents section's record of when each task was last looked at. */
+/** Work's record of when each task was last looked at, by task id (Work
+ * keys it by work item: `task:<id>`). */
 function seenTasks(): Record<string, number> {
   try {
-    return JSON.parse(localStorage.getItem("spor.seen") ?? "{}") ?? {};
+    const byItem: Record<string, number> = JSON.parse(localStorage.getItem("spor.work.seen") ?? "{}") ?? {};
+    return Object.fromEntries(
+      Object.entries(byItem)
+        .filter(([key]) => key.startsWith("task:"))
+        .map(([key, at]) => [key.slice("task:".length), at]),
+    );
   } catch {
     return {};
   }

@@ -1,5 +1,5 @@
 // End-to-end check of agent tasks in the real app (Tauri + spor's core),
-// through WebDriver.
+// through WebDriver, in Work: every work item in the repository (#81).
 //
 //   tauri-driver &            # needs WebKitWebDriver (Linux: webkit2gtk-driver)
 //   SPOR_REPO=/path/to/a/scratch/repo node e2e/run.mjs path/to/spor-desktop out-dir
@@ -21,15 +21,30 @@ const git = gitIn(repo);
 const w = await open(app, out);
 
 try {
+  // Stored from before Work replaced Agents: it should open Work.
   await w.js("localStorage.clear(); localStorage.setItem('spor.section', JSON.stringify('agents'))");
   await w.refresh();
+  console.log("Work");
+  await w.waitFor(`.rail-item[aria-label="Work"][aria-current="page"]`);
+  check(true, "a stored Agents section opens Work");
+  await w.until(`return [...$$(".task-row[data-kind=branch]")].some(r => r.innerText.includes("Document how to call greet()"))`, "your branch");
+  check((await w.text(".task-list")).includes("In progress"), "your own branch with commits ahead of main is listed, in progress");
+  await w.clickText(".segmented button", "Agents");
+  check(!(await w.count(".task-row[data-kind=branch]")), "the Agents filter leaves it out");
+  await w.clickText(".segmented button", "All");
+
   console.log("New task");
+  await w.click(".new-work");
+  await w.waitFor(".menu.floating");
+  await w.clickText(".menu.floating button", "Agent task");
   await w.waitFor(".new-task textarea");
   const before = git("rev-parse", "main");
   await w.fill(".new-task textarea", "Let greet() take an optional title");
   await w.enter(".new-task textarea");
   await w.waitFor(".task-page .live-line");
   check(git("branch", "--list", "agent/*").includes("agent/let-greet-take-optional"), "task branch created");
+  await w.until(`return $(".task-row.selected[data-kind=task]")?.innerText.includes("Let greet() take an optional title")`, "the task's row");
+  check(true, "the task is listed next to your branch, and selected");
 
   console.log("Steering it while it works (#22)");
   check((await w.text(".composer-footer .chip-toggle")).includes("queues"), "while it works, ↩ queues by default");
@@ -121,6 +136,8 @@ try {
   check(git("log", "-1", "--format=%s", "main") === "Let greet() take an optional title", "landed as one commit on main");
   check(git("log", "-1", "--format=%B", "main").includes("Spor-Task:"), "landing commit has the Spor-Task trailer");
   check(!git("branch", "--list", "agent/*"), "task branch removed after landing");
+  await w.until(`return [...$$(".shelf-header")].some(h => h.innerText.includes("Settled"))`, "the Settled shelf");
+  check(true, "the landed task moves to Settled");
   await w.shot("5-landed");
 
   console.log("Undo");

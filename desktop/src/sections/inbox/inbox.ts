@@ -28,7 +28,7 @@ export const GROUPS: { kind: InboxKind; label: string }[] = [
   { kind: "review", label: "Review requested" },
 ];
 
-/** When the task last did something, as the Agents section counts "seen". */
+/** When the task last did something, as Work counts "seen". */
 export function taskActivity(t: InboxTask): number {
   return t.ended ?? t.started ?? t.created;
 }
@@ -36,7 +36,7 @@ export function taskActivity(t: InboxTask): number {
 /**
  * The rows: agents asking a question, finished (or failed) agent runs you
  * haven't looked at, review requests and failing runs on your branches.
- * `seen` is the Agents section's record of when you last looked at each
+ * `seen` is Work's record of when you last looked at each
  * task.
  */
 export function inboxItems(
@@ -46,7 +46,7 @@ export function inboxItems(
 ): InboxItem[] {
   const items: InboxItem[] = [];
   for (const t of tasks) {
-    const target: Target = { section: "agents", taskId: t.id };
+    const target: Target = { section: "work", taskId: t.id };
     if (t.asks > 0)
       items.push({
         key: `ask:${t.repo}:${t.id}`,

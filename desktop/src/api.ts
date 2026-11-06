@@ -30,6 +30,7 @@ import type {
   TaskSummary,
   TaskPull,
   WorktreeInfo,
+  WorkBranch,
 } from "./types";
 import type { Place } from "./shared/DiffView";
 
@@ -195,8 +196,9 @@ export const api = {
   /** Push the task's branch and open a pull request for it. */
   publishTask: (id: string, draft: boolean, commitUncommitted: boolean) =>
     call<string>("publish_task", { id, draft, commitUncommitted }),
-  /** Push the agent's new commits to the task's pull request. */
-  pushTask: (id: string) => call<string>("push_task", { id }),
+  /** Push the agent's new commits to the task's pull request; with
+   * `commitUncommitted`, what it left uncommitted is committed and goes too. */
+  pushTask: (id: string, commitUncommitted = false) => call<string>("push_task", { id, commitUncommitted }),
   /** Every open task's pull request (one `gh` call). */
   taskPulls: () => call<TaskPull[]>("task_pulls"),
   /** New review on the task's PR, written as a follow-up for its agent. */
@@ -232,6 +234,12 @@ export const api = {
   runPatch: (id: string, index: number) => call<RunPatch>("run_patch", { id, index }),
   /** Take back the task's last run (⌘Z brings it back). */
   undoRun: (id: string) => call<string>("undo_run", { id }),
+
+  // Work
+  /** Your own branches with work on them (not agents'). */
+  workBranches: () => call<WorkBranch[]>("work_branches"),
+  /** A branch's changes since it left the base. */
+  branchPatch: (branch: string) => call<string>("branch_patch", { branch }),
 };
 
 export function errorText(e: unknown): string {

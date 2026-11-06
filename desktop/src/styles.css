@@ -2038,6 +2038,21 @@ button.busy::after {
   flex-shrink: 0;
 }
 
+/* ---- Work ---- */
+
+/* A commit's subject or an issue's title takes the row's room. */
+.branch-commits .link,
+.issue-pick .link {
+  display: block;
+  flex-shrink: 1;
+  min-width: 0;
+  text-align: left;
+  color: var(--text);
+}
+.issue-pick li.selected {
+  background: var(--accent-soft);
+}
+
 /* ---- Actions ---- */
 
 .run-branch {

@@ -3,7 +3,8 @@
 #
 #   e2e/make-repos.sh <dir>
 #
-#   <dir>/agents    for run.mjs: a small Python project on main
+#   <dir>/agents    for run.mjs: a small Python project on main, and a
+#                   branch of your own, docs/usage, one commit ahead
 #   <dir>/setup     for setup.mjs: the same, with a .spor/setup that fails
 #                   the first time and works the second, and a .spor/copy
 #                   that brings an ignored .env into new task folders
@@ -38,6 +39,10 @@ new_repo() {
 
 # ---- agents -------------------------------------------------------------
 new_repo agents
+git -C "$repo" switch -qc docs/usage
+printf '\nCall greet("Ada").\n' >> "$repo/README.md"
+git -C "$repo" commit -qam "Document how to call greet()"
+git -C "$repo" switch -q main
 
 # ---- setup --------------------------------------------------------------
 new_repo setup

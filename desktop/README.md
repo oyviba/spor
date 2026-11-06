@@ -13,7 +13,7 @@ at the bottom.
 | Section | ⌘ | Sidebar | Page | Details card | Bottom |
 |---|---|---|---|---|---|
 | **Inbox** | 1 | What needs you in every workspace: answers, finished runs, failed CI, review requests | | | |
-| **Work** | 2 | Tasks, with Working / Settled shelves | Conversation · Changes | Folder, branch, conflicts, its issue and PR, open a PR, land, discard | Composer |
+| **Work** | 2 | Every work item: agents' tasks, your branches with commits ahead of the base, and open PRs from anyone. Shelves: Needs you, In progress, In review, Settled (folded); filters Mine / Agents / Teammates; right-click to move one up or down. *New…* (⌘N): a branch, an agent task, or from an issue | A task: Conversation · Changes. A PR: Conversation · Files · Checks. A branch: Commits · Changes | A task: folder, branch, conflicts, its issue and PR, open a PR, land, discard. A branch: open a PR, switch to it | A task's composer, or a PR's comment box |
 | **Changes** | 3 | Conflicts, staged and unstaged files | The file's diff (unified or side by side): click lines, shift-click to extend, then stage, unstage or discard them; a conflicted file's regions, a side picked for each | Branch and upstream, Fetch / Pull / Push, its PR, stashes (pop, apply, drop) | Commit box (⌘↩), amend |
 | **History** | 4 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
 | **Issues** (browser) | 5 | Assigned / Yours / Open / Closed | The issue and its comments | Labels, assignees, its agent task and PR, close or reopen | *Start agent task*: the issue as the prompt (editable), the base and the agent |
@@ -52,7 +52,10 @@ What one app makes possible:
   the agent's session (read-only; the prompt's if it can't), and which says
   `Closes #n`; landing locally puts `Closes #n`
   in the commit instead. The task then shows its PR's state, offers *Push*
-  when the agent has commits the PR doesn't, and *Send review to agent*
+  when the agent has commits the PR doesn't (*Commit and push* when it left
+  work uncommitted), *Squash and merge* (which cleans the task up once
+  GitHub has merged it; ⌘Z brings it back; *Land* is hidden while a PR is open,
+  so the two can't diverge), and *Send review to agent*
   (on the task, or on the PR page) sends reviews and line comments made
   since the agent last ran, as `file:line — comment`. When the PR merges, a
   notification offers *Clean up*: the task is marked landed and its folder
@@ -149,11 +152,12 @@ src-tauri/src/
   github.rs     issues, pull requests and Actions, through spor's gh wrappers
   agents.rs     agent tasks, and their pull requests
   inbox.rs      what needs you across every workspace's repositories
+  work.rs       your own branches, for Work
 src/
   App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–7, ⌘Z, ⌘K,
                 background fetch, credential prompts, recent repositories
   shared/       DiffView, details card, menus and dialogs, palette, status pills, CI status, icons, hooks
-  sections/     inbox/ agents/ (Work) changes/ history/ issues/ pulls/ actions/
+  sections/     inbox/ work/ changes/ history/ issues/ pulls/ actions/ (and agents/, a task's page)
 ```
 
 `src-tauri` is its own Cargo workspace, so the root crate stays a

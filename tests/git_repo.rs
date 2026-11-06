@@ -373,6 +373,31 @@ fn interactive_rebase_rewrites_history() {
 }
 
 #[test]
+fn a_branch_since_it_left_its_base() {
+    let f = fixture();
+    f.commit_file("a.txt", "a\n", "a");
+    f.git(&["switch", "--quiet", "-c", "topic"]);
+    f.commit_file("b.txt", "b\nb\n", "add b");
+    f.commit_file("a.txt", "a\nmore\n", "grow a");
+    f.git(&["switch", "--quiet", "main"]);
+    // main moving on doesn't count as the branch's work.
+    f.commit_file("c.txt", "c\n", "c on main");
+
+    let subjects: Vec<String> = f
+        .repo
+        .branch_commits("main", "topic")
+        .unwrap()
+        .into_iter()
+        .map(|c| c.subject)
+        .collect();
+    assert_eq!(subjects, ["grow a", "add b"]);
+    assert_eq!(f.repo.branch_numstat("main", "topic"), (2, 3, 0));
+    let patch = f.repo.branch_patch("main", "topic").unwrap();
+    assert!(patch.contains("+more") && patch.contains("b/b.txt") && !patch.contains("c.txt"));
+    assert!(f.repo.branch_commits("main", "main").unwrap().is_empty());
+}
+
+#[test]
 fn branches_delete_restore_rename() {
     let f = fixture();
     f.commit_file("a.txt", "a\n", "a");

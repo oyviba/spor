@@ -30,5 +30,5 @@ export function workItemOf(target: Target, tasks: TaskSummary[]): TaskSummary | 
 /** The target, sent to its work item's page when it has one. */
 export function resolveTarget(target: Target, tasks: TaskSummary[]): Target {
   const task = workItemOf(target, tasks);
-  return task ? { section: "agents", taskId: task.id } : target;
+  return task ? { section: "work", taskId: task.id } : target;
 }

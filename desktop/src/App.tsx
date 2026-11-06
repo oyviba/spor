@@ -35,7 +35,7 @@ import {
   type Workspace,
 } from "./shared/workspaces";
 import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuItem, type MenuSpec } from "./shared/Overlay";
-import { AgentsSection } from "./sections/agents/AgentsSection";
+import { WorkSection } from "./sections/work/WorkSection";
 import { HistorySection } from "./sections/history/HistorySection";
 import { ChangesSection } from "./sections/changes/ChangesSection";
 import { IssuesSection } from "./sections/issues/IssuesSection";
@@ -60,7 +60,7 @@ interface Toast {
  */
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string; browser?: boolean }[] = [
   { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "Mod+1" },
-  { id: "agents", label: "Work", icon: <Bot size={17} />, key: "Mod+2" },
+  { id: "work", label: "Work", icon: <Bot size={17} />, key: "Mod+2" },
   { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "Mod+3" },
   { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+4" },
   { id: "issues", label: "Issues", icon: <IssueIcon size={15} />, key: "Mod+5", browser: true },
@@ -68,12 +68,12 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: stri
   { id: "actions", label: "Actions", icon: <Play size={15} />, key: "Mod+7", browser: true },
 ];
 
-/** Is the task open on screen (Agents, its page)? Then it needs no toast. */
+/** Is the task open on screen (Work, its page)? Then it needs no toast. */
 function viewing(taskId: string): boolean {
   try {
     const section = JSON.parse(localStorage.getItem("spor.section") ?? "null");
-    const view = JSON.parse(localStorage.getItem("spor.agents.view") ?? "null");
-    return section === "agents" && view?.kind === "task" && view.id === taskId && document.hasFocus();
+    const view = JSON.parse(localStorage.getItem("spor.work.view") ?? "null");
+    return section === "work" && view?.kind === "task" && view.id === taskId && document.hasFocus();
   } catch {
     return false;
   }
@@ -144,7 +144,7 @@ export function App() {
   const [state, setState] = useState<RepoState | null>(null);
   const [section, setSection] = useStored<SectionId>("section", "inbox");
   const [reposShown, setReposShown] = useStored("repos.shown", true);
-  const [target, setTarget] = useState<Target & { seq: number }>({ section: "agents", seq: 0 });
+  const [target, setTarget] = useState<Target & { seq: number }>({ section: "work", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [changed, setChanged] = useState(0);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
@@ -272,7 +272,7 @@ export function App() {
     !!repo,
   );
 
-  // Agent tasks, loaded here once for the rail, Agents and Issues: a task's
+  // Agent tasks, loaded here once for the rail, Work and Issues: a task's
   // commits are refs, the rest is in `.git/spor/tasks`.
   const reloadTasks = useCallback(async () => {
     const list = await api.listTasks();
@@ -284,8 +284,8 @@ export function App() {
           toast(`${t.title} is waiting for you`, "ok", false, {
             label: "Answer",
             run: () => {
-              setSection("agents");
-              setTarget((old) => ({ section: "agents", taskId: t.id, seq: old.seq + 1 }));
+              setSection("work");
+              setTarget((old) => ({ section: "work", taskId: t.id, seq: old.seq + 1 }));
             },
           });
     }
@@ -578,7 +578,7 @@ export function App() {
           id: `work:${t.id}`,
           label: `Open ${t.title}`,
           hint: t.pull != null ? `work item · #${t.pull}` : t.issue != null ? `work item · issue #${t.issue}` : "work item",
-          run: () => shell.go({ section: "agents", taskId: t.id }),
+          run: () => shell.go({ section: "work", taskId: t.id }),
         })),
       ...branches
         .filter((b) => !b.current && !b.remote)
@@ -754,7 +754,7 @@ const SECTION_VIEWS: Record<Exclude<SectionId, "inbox">, () => React.ReactNode> 
   issues: IssuesSection,
   pulls: PullsSection,
   actions: ActionsSection,
-  agents: AgentsSection,
+  work: WorkSection,
 };
 
 /** The sections opened so far, kept mounted so going back to one shows it
