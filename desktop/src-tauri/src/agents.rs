@@ -733,13 +733,25 @@ fn remote(app: &App) -> Result<String, String> {
         .ok_or_else(|| "This repository has no remote".to_string())
 }
 
-/// Push the agent's new commits to the task's pull request.
+/// Push the agent's new commits to the task's pull request, with its
+/// uncommitted work committed first when `commit_uncommitted`.
 #[tauri::command(async)]
-pub(crate) fn push_task(app: State<App>, id: String) -> Result<String, String> {
+pub(crate) fn push_task(
+    app: State<App>,
+    id: String,
+    commit_uncommitted: bool,
+) -> Result<String, String> {
     let (tasks, task) = app.task(&id)?;
-    let n = tasks.stats(&task).unpushed;
+    if Runs::of(&tasks, &task)
+        .latest()
+        .is_some_and(|r| r.state == RunState::Running)
+    {
+        return Err("The agent is still working".into());
+    }
+    let before = tasks.stats(&task);
+    let n = before.unpushed + usize::from(commit_uncommitted && before.uncommitted > 0);
     tasks
-        .push(&task, &remote(&app)?)
+        .push(&task, &remote(&app)?, commit_uncommitted)
         .map_err(|e| first_line(&e))?;
     Ok(match (n, task.pull) {
         (0, _) => format!("{} is up to date", task.branch),

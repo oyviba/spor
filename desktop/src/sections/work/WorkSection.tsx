@@ -313,7 +313,8 @@ export function WorkSection() {
           await refreshPulls();
           await refreshGithub();
         }),
-    onPush: () => shell.act(() => api.pushTask(id), { undo: false, pending: "Pushing…" }).then(afterChange),
+    onPush: (commitUncommitted: boolean) =>
+      shell.act(() => api.pushTask(id, commitUncommitted), { undo: false, pending: "Pushing…" }).then(afterChange),
     onSendReview: () =>
       api.reviewFeedback(id).then(async (text) => {
         await send(text);

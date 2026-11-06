@@ -557,7 +557,7 @@ impl Tasks {
         {
             return Err(format!("{} has no commits to publish", task.id));
         }
-        self.push(task, remote)?;
+        self.push_branch(task, remote)?;
         let described = describe
             .then(|| crate::agent::describe_pull(self, task).ok())
             .flatten();
@@ -581,12 +581,23 @@ impl Tasks {
     }
 
     /// Push the task's branch to `remote` (setting it as the upstream), so
-    /// its pull request gets the agent's latest commits. A key passphrase
+    /// its pull request gets the agent's latest commits. With
+    /// `commit_uncommitted`, uncommitted work in its folder is committed
+    /// first, so it goes too; otherwise it stays behind. A key passphrase
     /// or password comes up in the app, as for any other push.
-    pub fn push(&self, task: &Task, remote: &str) -> Result<(), String> {
+    pub fn push(&self, task: &Task, remote: &str, commit_uncommitted: bool) -> Result<(), String> {
         if task.state != TaskState::Open || !task.worktree.exists() {
             return Err(format!("{} has no folder to push from", task.id));
         }
+        if commit_uncommitted && self.stats(task).uncommitted > 0 {
+            let wt = task.repo();
+            wt.stage_all()?;
+            wt.commit(&format!("Uncommitted work from {}", task.id))?;
+        }
+        self.push_branch(task, remote)
+    }
+
+    fn push_branch(&self, task: &Task, remote: &str) -> Result<(), String> {
         crate::askpass::git_network(
             &task.worktree,
             &["push", "--set-upstream", remote, &task.branch],

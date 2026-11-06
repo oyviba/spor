@@ -307,8 +307,20 @@ fn publish_pushes_the_branch_before_opening_a_pull_request() {
     assert_eq!(f.tasks.stats(&task).unpushed, 0);
     work(&task.worktree, "new.txt", "newer\n", Some("Address review"));
     assert_eq!(f.tasks.stats(&task).unpushed, 1);
-    f.tasks.push(&task, "origin").unwrap();
+    f.tasks.push(&task, "origin", false).unwrap();
     assert_eq!(f.tasks.stats(&task).unpushed, 0);
+
+    // Uncommitted work stays behind unless it's committed on the way.
+    work(&task.worktree, "new.txt", "newest\n", None);
+    f.tasks.push(&task, "origin", false).unwrap();
+    assert_eq!(f.tasks.stats(&task).uncommitted, 1);
+    f.tasks.push(&task, "origin", true).unwrap();
+    let stats = f.tasks.stats(&task);
+    assert_eq!((stats.uncommitted, stats.unpushed), (0, 0));
+    assert_eq!(
+        git(&remote, &["show", "agent/add-thing:new.txt"]),
+        "newest\n"
+    );
 }
 
 #[test]

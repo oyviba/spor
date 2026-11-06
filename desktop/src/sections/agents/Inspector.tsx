@@ -27,7 +27,7 @@ export interface GithubActions {
   onShowIssue: (n: number) => void;
   onShowPull: (n: number) => void;
   onPublish: (draft: boolean, commitUncommitted: boolean) => unknown;
-  onPush: () => unknown;
+  onPush: (commitUncommitted: boolean) => unknown;
   onSendReview: () => unknown;
   /** Send its PR's failed Actions jobs to the agent. */
   onSendFailure: () => unknown;
@@ -98,6 +98,12 @@ export function Inspector({ detail, ...p }: Props) {
         ? "It has uncommitted changes"
         : null;
 
+  // What its pull request doesn't have yet.
+  const toPush = [
+    s.unpushed > 0 && `${s.unpushed} ${s.unpushed === 1 ? "commit" : "commits"}`,
+    s.uncommitted > 0 && includeUncommitted && `${s.uncommitted} uncommitted ${s.uncommitted === 1 ? "change" : "changes"}`,
+  ].filter((x): x is string => !!x);
+
   // Where it came from and where it went, on GitHub.
   const github = (t.issue != null || t.pull != null || pr) && (
     <div className="inspector-section">
@@ -125,12 +131,12 @@ export function Inspector({ detail, ...p }: Props) {
           <StatusPill status={pullStatus(pr)} />
         </button>
       )}
-      {prOpen && s.unpushed > 0 && (
+      {prOpen && toPush.length > 0 && (
         <div className="inspector-row warn">
           <ArrowUp size={13} />
           <span>
-            {s.unpushed} {s.unpushed === 1 ? "commit" : "commits"} not on #{pr.number} yet
-            <Button className="link" onClick={p.onPush} disabled={running}>
+            {toPush.join(" and ")} not on #{pr.number} yet
+            <Button className="link" onClick={() => p.onPush(includeUncommitted)} disabled={running}>
               Push
             </Button>
           </span>
@@ -275,7 +281,7 @@ export function Inspector({ detail, ...p }: Props) {
               checked={includeUncommitted}
               onChange={(e) => setIncludeUncommitted(e.target.checked)}
             />
-            Commit its uncommitted changes when landing{pr ? "" : " or publishing"}
+            Commit its uncommitted changes when landing{prOpen ? " or pushing" : pr ? "" : " or publishing"}
           </label>
         )}
         {!pr && (
