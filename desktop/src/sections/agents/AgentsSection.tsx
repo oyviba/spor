@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { LineComment, RunPatch, TaskDetail, TaskPull, TaskSummary } from "../../types";
 import { activityAt, isOpen } from "./status";
+import { catchUpPrompt } from "./prompts";
 import { useChanged, usePoll, useRepoChanges, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { Sidebar } from "./Sidebar";
@@ -234,12 +235,7 @@ export function AgentsSection() {
 
   const askRebase = () => {
     if (!shown) return;
-    const base = shown.task.base;
-    send(
-      `${base} has moved on and this branch now conflicts with it in ${shown.conflicts.join(", ")}. ` +
-        `Rebase onto ${base} (git rebase ${base}), resolve the conflicts keeping both sides' intent, ` +
-        `make sure it still builds and the tests pass, and commit.`,
-    );
+    send(catchUpPrompt(shown.task.base, shown.conflicts, shown.task.pull != null));
   };
 
   const taskComments = selectedId ? (comments[selectedId] ?? []) : [];

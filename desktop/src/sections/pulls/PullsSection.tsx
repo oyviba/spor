@@ -13,6 +13,7 @@ import { ago } from "../agents/transcript";
 import { isOpen } from "../agents/status";
 import { Bot, Branch, Check, ChevronDown, External, MessageSquare, Play, X } from "../../shared/Icons";
 import { choiceOf, useAgentSettings } from "../agents/Composer";
+import { catchUpPrompt } from "../agents/prompts";
 
 type Filter = "review" | "yours" | "open" | "closed";
 const FILTERS: { id: Filter; label: string }[] = [
@@ -305,6 +306,7 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
   }, [pr.pull.number]);
   const p = pr.pull;
   const open = p.state === "open" || p.state === "draft";
+  const conflicting = open && pr.mergeable === "conflicting";
   const failing = pr.checks.filter((c) => c.status === "failure").length;
   const passing = pr.checks.filter((c) => c.status === "success").length;
   const PENDING: Record<string, string> = {
@@ -336,6 +338,18 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
     );
     if (ok) shell.go({ section: "agents", taskId: task.id });
   };
+  // GitHub won't merge it until the base is merged into the branch.
+  const askCatchUp = async () => {
+    if (!task) return;
+    const ok = await shell.act(
+      async () => {
+        await api.sendToAgent(task.id, catchUpPrompt(p.base, [], true), choiceOf(settings), settings.mode);
+        return `Asked ${task.id} to merge ${p.base} in`;
+      },
+      { undo: false, pending: "Sending to the agent…" },
+    );
+    if (ok) shell.go({ section: "agents", taskId: task.id });
+  };
   return (
     <DetailsCard>
       <div className="inspector-section">
@@ -362,10 +376,25 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
             </span>
           </div>
         )}
-        {open && pr.mergeable === "conflicting" && (
+        {conflicting && (
           <div className="inspector-row bad">
             <X size={13} />
-            <span>Conflicts with {p.base}</span>
+            <span>
+              Conflicts with {p.base}, so GitHub can't merge it.{" "}
+              {task
+                ? "Have the agent merge it in, then push its commit."
+                : `Check it out, merge origin/${p.base} into it, resolve the conflicts and push.`}
+              {task && (
+                <button
+                  className="link"
+                  disabled={task.run?.state === "running"}
+                  title={task.run?.state === "running" ? "The agent is working — ask when it's done" : undefined}
+                  onClick={askCatchUp}
+                >
+                  Ask agent to merge {p.base} in
+                </button>
+              )}
+            </span>
           </div>
         )}
         {task && (
@@ -392,13 +421,19 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
           <div className="split">
             <Button
               className={confirm === "squash" ? "danger" : "primary"}
-              disabled={p.state === "draft"}
-              title={p.state === "draft" ? "Mark it ready for review first" : "Squash and merge on GitHub"}
+              disabled={p.state === "draft" || conflicting}
+              title={
+                p.state === "draft"
+                  ? "Mark it ready for review first"
+                  : conflicting
+                    ? `Resolve the conflicts with ${p.base} first`
+                    : "Squash and merge on GitHub"
+              }
               onClick={() => merge("squash")}
             >
               {confirm === "squash" ? "Squash and merge?" : "Squash and merge"}
             </Button>
-            <button className="primary split-more" aria-label="Other merge methods" disabled={p.state === "draft"} onClick={() => setMenu((m) => !m)}>
+            <button className="primary split-more" aria-label="Other merge methods" disabled={p.state === "draft" || conflicting} onClick={() => setMenu((m) => !m)}>
               <ChevronDown size={12} />
             </button>
             {menu && (

@@ -594,6 +594,27 @@ pub fn merge_pull(dir: &Path, number: u64, method: MergeMethod) -> Result<(), St
         ],
     )
     .map(drop)
+    .map_err(|e| merge_refusal(number, &e))
+}
+
+/// gh's reasons for not merging, said as what to do about them. Anything
+/// else is passed on as it is.
+fn merge_refusal(number: u64, err: &str) -> String {
+    if err.contains("merge commit cannot be cleanly created") {
+        format!(
+            "#{number} conflicts with its base branch. Merge the base into it, \
+             resolve the conflicts and push, then merge again"
+        )
+    } else if err.contains("head branch is not up to date") {
+        format!("#{number} is behind its base branch, which must be merged into it first")
+    } else if err.contains("base branch policy prohibits the merge") {
+        format!(
+            "#{number} isn't allowed to merge yet: it needs the reviews or checks \
+             its base branch requires"
+        )
+    } else {
+        err.to_string()
+    }
 }
 
 /// Check the PR's branch out locally (works for forks too).
@@ -1660,6 +1681,15 @@ mod tests {
             checks: Vec::new(),
             timeline,
         }
+    }
+
+    #[test]
+    fn merge_refusals_say_what_to_do() {
+        let dirty = "X Pull request o/r#73 is not mergeable: the merge commit cannot be cleanly created.";
+        assert!(merge_refusal(73, dirty).starts_with("#73 conflicts with its base branch"));
+        let behind = "X Pull request o/r#5 is not mergeable: the head branch is not up to date with the base branch.";
+        assert!(merge_refusal(5, behind).contains("behind"));
+        assert_eq!(merge_refusal(5, "HTTP 502"), "HTTP 502");
     }
 
     #[test]
