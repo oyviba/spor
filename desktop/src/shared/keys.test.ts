@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bind, display, effective, isSafe, lookup, resetOne, shortcutOf } from "./keys.ts";
+import { bind, display, effective, isSafe, keepChanges, lookup, resetOne, shortcutOf } from "./keys.ts";
 
 const ev = (key: string, mods: Partial<Record<"metaKey" | "ctrlKey" | "altKey" | "shiftKey", boolean>> = {}, code?: string) => ({
   key,
@@ -62,4 +62,22 @@ test("removing and resetting", () => {
   const r = resetOne(commands, keymap, "undo");
   assert.equal(r.took, "fetch");
   assert.equal(lookup(commands, r.keymap, "Mod+Z"), "undo");
+});
+
+test("moved defaults don't take a shortcut the user chose", () => {
+  // Before: History was Mod+2 and the user gave Fetch Mod+3, which was Issues'.
+  const before = { "go:issues": null, fetch: "Mod+3", "go:history": "Mod+H" };
+  // After: Changes' new default is Mod+3.
+  const after = [
+    { id: "go:changes", keys: "Mod+3" },
+    { id: "go:history", keys: "Mod+4" },
+    { id: "go:issues", keys: "Mod+5" },
+    { id: "fetch" },
+  ];
+  const keymap = keepChanges(after, before);
+  assert.equal(lookup(after, keymap, "Mod+3"), "fetch");
+  assert.equal(lookup(after, keymap, "Mod+H"), "go:history");
+  assert.equal(effective(after, keymap).get("go:changes"), undefined);
+  // What the user didn't touch keeps its new default.
+  assert.deepEqual(keepChanges(after, {}), {});
 });

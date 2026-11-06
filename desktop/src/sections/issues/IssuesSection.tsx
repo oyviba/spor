@@ -243,7 +243,7 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
           </button>
         )}
         {task?.pull != null && (
-          <button className="inspector-row action" onClick={() => shell.go({ section: "pulls", number: task.pull! })}>
+          <button className="inspector-row action" onClick={() => shell.go({ section: "pulls", number: task.pull! }, { browse: true })}>
             <Branch size={13} />
             <span>
               Pull request <span className="num">#{task.pull}</span>

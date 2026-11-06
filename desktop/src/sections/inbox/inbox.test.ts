@@ -52,7 +52,7 @@ test("gathers every kind, grouped, newest first within a group", () => {
     items.map((i) => `${i.kind}:${i.key.split(":").pop()}`),
     ["ask:asking", "failed:99", "ready:new", "ready:old", "review:7"],
   );
-  assert.deepEqual(items[1].target, { section: "actions", runId: 99 });
+  assert.deepEqual(items[1].target, { section: "actions", runId: 99, branch: "agent/1-fix" });
   assert.deepEqual(items[4].target, { section: "pulls", number: 7 });
   assert.equal(items[4].repo, "/code/b");
 });

@@ -57,8 +57,7 @@ try {
   console.log("Changes");
   await w.waitFor(".file-row");
   check((await w.count(".file-row")) === 3, "lists the staged, edited and untracked files");
-  await w.until(`return $('.rail-item[aria-label="Changes"] .rail-badge')?.textContent === "3"`, "the rail's count");
-  check(true, "the rail counts 3 changed files");
+  check(!(await w.js(`return !!$('.rail-item[aria-label="Changes"] .rail-badge')`)), "the rail has no count per section");
   await w.clickText(".file-row-main", "greet.py");
   await w.until(`return $("h2")?.textContent === "greet.py" && $$(".diff tr.add").length === 4`, "greet.py's diff");
   // Pick the two lines of shout(): click one, shift-click the next.
@@ -242,9 +241,13 @@ try {
   check(inbox.includes("CI failed on agent/let-greet-take-optional"), "the Inbox lists the failed run on the agent's branch");
   check(inbox.includes("#12") && !inbox.includes("#11"), "…and #12's review request, but not the merged #11");
   await w.shot("inbox-1");
+  check(await w.js(`return !!document.querySelector('.rail-item[aria-label="Inbox"] .rail-badge')`), "the Inbox has the rail's badge");
   await w.clickText(".task-row", "CI failed");
-  await w.waitFor(".log-section.failed");
-  check(true, "clicking the run opens it in Actions, at the failed step");
+  await w.waitFor(".task-page");
+  check(
+    await w.js(`return document.querySelector('.rail-item[aria-label="Work"]').getAttribute("aria-current") === "page"`),
+    "the run is on the agent's branch, so it opens the task in Work",
+  );
 
   console.log("Actions");
   await toastGone();

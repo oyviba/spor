@@ -1509,6 +1509,18 @@ button.busy::after {
   background: var(--sky);
   color: #fff;
 }
+/* The browsers (Issues, Pull requests, Actions): smaller and quieter than
+   the four sections you work in. */
+.rail-item.browser {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  opacity: 0.8;
+}
+.rail-item.browser:hover,
+.rail-item.browser.active {
+  opacity: 1;
+}
 
 /* ---- Shared bits ---- */
 

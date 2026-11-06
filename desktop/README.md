@@ -2,19 +2,23 @@
 
 Spor's app: a web UI on Tauri over the Rust core in the repository root
 (`spor::git`, `spor::graph`, `spor::github`, `spor::tasks`, `spor::agent`,
-`spor::askpass`). It has six sections, each built from the same four pieces:
-a list in the sidebar, a page, a details card on the right, and a bar or
-composer at the bottom. Above them, the Inbox (⌘0) gathers what needs you
-from all of them.
+`spor::askpass`). The rail is ordered by the questions you come with (#83):
+**Inbox** (what needs me?), **Work** (what's in flight?), **Changes** (what's
+in my checkout?) and **History** (what happened?). Below a divider,
+**Issues**, **Pull requests** and **Actions** are browsers for what belongs
+to no work item yet. Each section is built from the same four pieces: a list
+in the sidebar, a page, a details card on the right, and a bar or composer
+at the bottom.
 
 | Section | ⌘ | Sidebar | Page | Details card | Bottom |
 |---|---|---|---|---|---|
-| **Changes** | 1 | Conflicts, staged and unstaged files | The file's diff (unified or side by side): click lines, shift-click to extend, then stage, unstage or discard them; a conflicted file's regions, a side picked for each | Branch and upstream, Fetch / Pull / Push, its PR, stashes (pop, apply, drop) | Commit box (⌘↩), amend |
-| **History** | 2 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
-| **Issues** | 3 | Assigned / Yours / Open / Closed | The issue and its comments | Labels, assignees, its agent task and PR, close or reopen | *Start agent task*: the issue as the prompt (editable), the base and the agent |
-| **Pull requests** | 4 | Review / Yours / Open / Closed | Conversation · Files · Checks | Branches, checks, conflicts, linked agent task, merge, check out, close | Comment / Approve, with line comments from Files |
-| **Actions** | 5 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | Run, commit, linked agent task, re-run, cancel | |
-| **Agents** | 6 | Tasks, with Working / Settled shelves | Conversation · Changes | Folder, branch, conflicts, its issue and PR, open a PR, land, discard | Composer |
+| **Inbox** | 1 | What needs you in every workspace: answers, finished runs, failed CI, review requests | | | |
+| **Work** | 2 | Tasks, with Working / Settled shelves | Conversation · Changes | Folder, branch, conflicts, its issue and PR, open a PR, land, discard | Composer |
+| **Changes** | 3 | Conflicts, staged and unstaged files | The file's diff (unified or side by side): click lines, shift-click to extend, then stage, unstage or discard them; a conflicted file's regions, a side picked for each | Branch and upstream, Fetch / Pull / Push, its PR, stashes (pop, apply, drop) | Commit box (⌘↩), amend |
+| **History** | 4 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
+| **Issues** (browser) | 5 | Assigned / Yours / Open / Closed | The issue and its comments | Labels, assignees, its agent task and PR, close or reopen | *Start agent task*: the issue as the prompt (editable), the base and the agent |
+| **Pull requests** (browser) | 6 | Review / Yours / Open / Closed | Conversation · Files · Checks | Branches, checks, conflicts, linked agent task, merge, check out, close | Comment / Approve, with line comments from Files |
+| **Actions** (browser) | 7 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | Run, commit, linked agent task, re-run, cancel | |
 
 What one app makes possible:
 
@@ -25,8 +29,13 @@ What one app makes possible:
   goes once it's dealt with; nothing is stored. Agent tasks are read from
   each repository's `.git/spor/tasks` every few seconds; GitHub is one
   `gh search prs` per host and one `gh run list` per repository, every two
-  minutes and whenever the Inbox is opened. The Inbox's rail badge counts
-  what needs you.
+  minutes and whenever the Inbox is opened. The Inbox's count is the
+  rail's only badge: one number for how many things need you.
+- **Links open the work, not the list** (#83). A pull request, an issue or a
+  CI run that belongs to a work item opens that item in Work, whether you
+  click it in the Inbox, the palette or another section. Only what belongs
+  to none stays in its browser. Links that name the browser (*Open in
+  Actions* on a PR's check, a work item's own issue or PR) go there.
 
 - **One undo stack.** Every change (stage, discard, commit, amend, pull,
   branch, switch, merge, cherry-pick, revert, land) records how to take it
@@ -72,7 +81,9 @@ What one app makes possible:
   shortcuts. Settings are one object in localStorage (`shared/settings.ts`);
   every command and its default shortcut is in one table in `App.tsx`, read
   by the key handler, the palette and the Shortcuts page (`shared/keys.ts`
-  resolves them).
+  resolves them). When the rail's defaults moved (#83), the shortcuts you
+  had changed were kept, and the first launch after says so once, pointing
+  to ⌘/.
 
 The graph's lanes are laid out by `spor::graph::assign_lanes`, and the
 segments for each row are worked out in Rust (`src-tauri/src/history.rs`).
@@ -99,8 +110,9 @@ finishes while you watch.
 
 ## Tests
 
-- `pnpm test`: the transcript folding and summaries, shortcut parsing, the
-  Inbox's rows, and how reloads coalesce.
+- `pnpm test`: the transcript folding and summaries, shortcut parsing and
+  keeping your shortcuts when the defaults move, how reloads coalesce, the
+  Inbox's rows, and which links open a work item.
 - `cargo test` in `src-tauri`: the watcher, on scratch repositories.
 - `e2e/run.mjs` (agent tasks), `e2e/setup.mjs` (setup scripts) and
   `e2e/sections.mjs` (Changes, History, renaming and tagging, a conflicting
@@ -138,10 +150,10 @@ src-tauri/src/
   agents.rs     agent tasks, and their pull requests
   inbox.rs      what needs you across every workspace's repositories
 src/
-  App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘0–6, ⌘Z, ⌘K,
+  App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–7, ⌘Z, ⌘K,
                 background fetch, credential prompts, recent repositories
   shared/       DiffView, details card, menus and dialogs, palette, status pills, CI status, icons, hooks
-  sections/     inbox/ changes/ history/ issues/ pulls/ actions/ agents/
+  sections/     inbox/ agents/ (Work) changes/ history/ issues/ pulls/ actions/
 ```
 
 `src-tauri` is its own Cargo workspace, so the root crate stays a

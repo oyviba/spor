@@ -76,7 +76,8 @@ export function inboxItems(
       title: r.title,
       detail: `${r.workflow} failed on ${r.branch}`,
       since: r.updated,
-      target: { section: "actions", runId: r.id },
+      // On a work item's branch it opens the item (#83).
+      target: { section: "actions", runId: r.id, branch: r.branch },
     });
   for (const p of github?.reviews ?? [])
     items.push({
