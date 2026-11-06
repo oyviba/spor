@@ -338,3 +338,31 @@ fn settle_cleans_up_after_a_merged_pull_request_and_can_be_undone() {
     assert_eq!(back.pull, Some(12));
     assert!(task.worktree.join("app.txt").exists());
 }
+
+#[test]
+fn close_cleans_up_after_a_closed_pull_request_and_can_be_undone() {
+    let f = fixture();
+    let task = f.tasks.create("Closed elsewhere", "main").unwrap();
+    work(&task.worktree, "app.txt", "done\n", Some("Do it"));
+    f.tasks.link_pull(&task, 13).unwrap();
+    let task = f.tasks.get(&task.id).unwrap();
+
+    let undo = f.tasks.close(&task).unwrap();
+    assert!(!task.worktree.exists());
+    assert!(f.repo.resolve("refs/heads/agent/closed-elsewhere").is_err());
+    let closed = f.tasks.get(&task.id).unwrap();
+    assert_eq!(closed.state, TaskState::Closed);
+    assert_eq!(closed.pull, Some(13));
+    let err = f.tasks.close(&closed).unwrap_err();
+    assert!(err.contains("already settled"), "{err}");
+
+    // Closed tasks sort after open ones.
+    let open = f.tasks.create("Still going", "main").unwrap();
+    let ids: Vec<String> = f.tasks.list().into_iter().map(|t| t.id).collect();
+    assert_eq!(ids, [open.id.clone(), task.id.clone()]);
+
+    f.tasks.restore(&undo).unwrap();
+    let back = f.tasks.get(&task.id).unwrap();
+    assert_eq!(back.state, TaskState::Open);
+    assert!(task.worktree.join("app.txt").exists());
+}

@@ -1385,6 +1385,119 @@ pub fn job_log(dir: &Path, job_id: u64) -> Result<Vec<LogLine>, String> {
     gh(dir, &repo, &["api", &path]).map(|raw| parse_log(&raw))
 }
 
+/// How many log lines go to the agent per failed job.
+pub const FAILURE_LOG_LINES: usize = 200;
+
+/// A failed Actions job, as the agent is told about it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JobFailure {
+    pub workflow: String,
+    pub job: String,
+    /// The step that failed, when GitHub says.
+    pub step: Option<String>,
+    pub url: String,
+    /// The end of its log (see [`failure_tail`]).
+    pub log: Vec<String>,
+}
+
+/// The part of a log that explains a failure: up to its last error (the
+/// runner's cleanup steps after it are noise), at most `max` lines.
+pub fn failure_tail(log: &[LogLine], max: usize) -> Vec<String> {
+    let end = log
+        .iter()
+        .rposition(|l| l.kind == LogKind::Error)
+        .map_or(log.len(), |i| i + 1);
+    log[end.saturating_sub(max)..end]
+        .iter()
+        .map(|l| match l.kind {
+            LogKind::Group => format!("▸ {}", l.text),
+            _ => l.text.clone(),
+        })
+        .collect()
+}
+
+/// A failed job of `run` (its steps say which one failed), with the end of
+/// its `log`.
+pub fn job_failure(run: &RunDetail, job_id: u64, log: &[LogLine]) -> Option<JobFailure> {
+    let job = run.jobs.iter().find(|j| j.id == job_id)?;
+    Some(JobFailure {
+        workflow: run.run.workflow.clone(),
+        job: job.name.clone(),
+        step: job
+            .steps
+            .iter()
+            .find(|s| s.status == Status::Failure)
+            .map(|s| s.name.clone()),
+        url: job.url.clone(),
+        log: failure_tail(log, FAILURE_LOG_LINES),
+    })
+}
+
+/// Fetch a failed job's run and log, for [`failure_feedback`].
+pub fn fetch_job_failure(dir: &Path, run_id: u64, job_id: u64) -> Result<JobFailure, String> {
+    let run = run_detail(dir, run_id)?;
+    let log = job_log(dir, job_id)?;
+    job_failure(&run, job_id, &log).ok_or_else(|| format!("Run {run_id} has no job {job_id}"))
+}
+
+/// Failed Actions jobs written as a follow-up for the agent: for each, the
+/// job and its failing step, and the end of its log. `pull`: the pull
+/// request the checks are on. None when nothing failed.
+pub fn failure_feedback(failures: &[JobFailure], pull: Option<&Pull>) -> Option<String> {
+    if failures.is_empty() {
+        return None;
+    }
+    let mut out = match pull {
+        Some(p) => format!("CI failed on pull request #{} ({}):\n", p.number, p.url),
+        None => "CI failed:\n".to_string(),
+    };
+    for f in failures {
+        let name = if f.workflow.is_empty() {
+            f.job.clone()
+        } else {
+            format!("{} / {}", f.workflow, f.job)
+        };
+        out.push_str(&format!("\n`{name}` failed"));
+        if let Some(step) = &f.step {
+            out.push_str(&format!(" at step “{step}”"));
+        }
+        out.push_str(&format!(" ({}).\n", f.url));
+        if !f.log.is_empty() {
+            out.push_str(&format!(
+                "The end of its log:\n```\n{}\n```\n",
+                f.log.join("\n")
+            ));
+        }
+    }
+    out.push_str(
+        "\nFind the cause, fix it, make sure it builds and the tests pass locally, and commit.",
+    );
+    Some(out)
+}
+
+/// The failed Actions jobs among a PR's checks, fetched for
+/// [`failure_feedback`]. Checks that aren't Actions jobs (other apps,
+/// commit statuses) have no log to send and are left out.
+pub fn pull_failures(dir: &Path, detail: &PullDetail) -> Result<Vec<JobFailure>, String> {
+    let mut runs: Vec<RunDetail> = Vec::new();
+    let mut out = Vec::new();
+    for check in detail.checks.iter().filter(|c| c.status == Status::Failure) {
+        let (Some(run_id), Some(job_id)) = (check.run_id, check.job_id) else {
+            continue;
+        };
+        if !runs.iter().any(|r| r.run.id == run_id) {
+            runs.push(run_detail(dir, run_id)?);
+        }
+        let run = runs
+            .iter()
+            .find(|r| r.run.id == run_id)
+            .expect("fetched above");
+        let log = job_log(dir, job_id)?;
+        out.extend(job_failure(run, job_id, &log));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1650,6 +1763,67 @@ mod tests {
         assert_eq!(d.jobs[1].status, Status::Running);
         assert_eq!(d.jobs[1].steps[0].status, Status::Running);
         assert_eq!(parse_runs(out).len(), 1);
+    }
+
+    #[test]
+    fn failure_tail_ends_at_the_last_error() {
+        let log = parse_log(
+            "##[group]Run cargo test\n\
+             ok 1\n\
+             error[E0425]: cannot find value `x`\n\
+             ##[error]Process completed with exit code 101.\n\
+             ##[group]Post Run actions/checkout@v4\n\
+             Cleaning up orphan processes\n",
+        );
+        assert_eq!(
+            failure_tail(&log, 200),
+            [
+                "▸ Run cargo test",
+                "ok 1",
+                "error[E0425]: cannot find value `x`",
+                "Process completed with exit code 101."
+            ]
+        );
+        assert_eq!(
+            failure_tail(&log, 2),
+            [
+                "error[E0425]: cannot find value `x`",
+                "Process completed with exit code 101."
+            ]
+        );
+        // No error line: the plain end of the log.
+        let quiet = parse_log("a\nb\nc\n");
+        assert_eq!(failure_tail(&quiet, 2), ["b", "c"]);
+        assert!(failure_tail(&[], 200).is_empty());
+    }
+
+    #[test]
+    fn failure_feedback_names_the_job_and_step() {
+        let run = parse_run_detail(
+            "run\t555\t42\tCI\tAdd a thing\tagent/x\tabc123\tpull_request\tcompleted\tfailure\t1\t2026-10-30T10:00:00Z\t2026-10-30T10:06:00Z\thttps://github.com/o/r/actions/runs/555\n\
+             job\t901\ttest\tcompleted\tfailure\t\t\thttps://github.com/o/r/actions/runs/555/job/901\n\
+             step\t1\tSet up job\tcompleted\tsuccess\n\
+             step\t2\tRun tests\tcompleted\tfailure\n\
+             step\t3\tPost checkout\tcompleted\tsuccess\n",
+        )
+        .unwrap();
+        let log = parse_log(&(0..300).map(|n| format!("line {n}\n")).collect::<String>());
+        let failure = job_failure(&run, 901, &log).unwrap();
+        assert_eq!(failure.step.as_deref(), Some("Run tests"));
+        assert_eq!(failure.log.len(), FAILURE_LOG_LINES);
+        assert_eq!(failure.log.last().map(String::as_str), Some("line 299"));
+        assert_eq!(job_failure(&run, 1, &log), None);
+
+        let pull = detail(Vec::new()).pull;
+        let text = failure_feedback(&[failure], Some(&pull)).unwrap();
+        assert!(text.starts_with("CI failed on pull request #12 (https://github.com/o/r/pull/12):"));
+        assert!(text.contains(
+            "`CI / test` failed at step “Run tests” (https://github.com/o/r/actions/runs/555/job/901)."
+        ));
+        assert!(text.contains("```\nline 100\n"));
+        assert!(!text.contains("line 99\n"));
+        assert!(text.ends_with("and commit."));
+        assert_eq!(failure_feedback(&[], Some(&pull)), None);
     }
 
     #[test]

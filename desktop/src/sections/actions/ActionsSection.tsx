@@ -9,6 +9,7 @@ import { StatusPill } from "../../shared/StatusPill";
 import { CiIcon, ciStatus, elapsed } from "../../shared/ci";
 import { ago } from "../agents/transcript";
 import { choiceOf, useAgentSettings } from "../agents/Composer";
+import { isOpen } from "../agents/status";
 import { Bot, Branch, Chevron, Commit, External, Refresh, Square } from "../../shared/Icons";
 
 /** GitHub Actions: runs, their jobs and logs; re-run and cancel. */
@@ -85,7 +86,7 @@ export function ActionsSection() {
 
   const run = detail?.run.id === selected ? detail : null;
   const job = run?.jobs.find((j) => j.id === jobId) ?? null;
-  const task = run ? tasks.find((t) => t.branch === run.run.branch && !t.landed) : undefined;
+  const task = run ? tasks.find((t) => t.branch === run.run.branch && isOpen(t)) : undefined;
 
   return (
     <>
@@ -274,25 +275,18 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
       })
       .then(onChanged);
 
-  // A failed run on an agent's branch: hand the failure to that agent.
+  // A failed run on an agent's branch: hand the failed job (its failing
+  // step and the end of its log) to that agent.
   const sendToAgent = async () => {
     if (!task) return;
     const failedJob = job?.status === "failure" ? job : run.jobs.find((j) => j.status === "failure");
-    let excerpt = "";
-    if (failedJob) {
-      const lines = await api.jobLog(failedJob.id).catch(() => []);
-      const bad = sections(lines).filter((s) => s.failed);
-      excerpt = bad
-        .map((s) => `${s.title}\n${s.lines.slice(-60).map((l) => l.text).join("\n")}`)
-        .join("\n\n")
-        .slice(-6000);
-    }
-    const message =
-      `CI failed: ${r.workflow} #${r.number}${failedJob ? `, job “${failedJob.name}”` : ""}.` +
-      (excerpt ? `\n\nThe failing part of the log:\n\`\`\`\n${excerpt}\n\`\`\`` : "") +
-      `\n\nFind the cause, fix it, check it passes locally, and commit.`;
+    if (!failedJob) return;
     const ok = await shell.act(
-      () => api.sendToAgent(task.id, message, choiceOf(settings), settings.mode).then(() => `Sent the failure to ${task.id}`),
+      () =>
+        api
+          .jobFeedback(r.id, failedJob.id)
+          .then((message) => api.sendToAgent(task.id, message, choiceOf(settings), settings.mode))
+          .then(() => `Sent the failure to ${task.id}`),
       { undo: false, pending: "Sending the failure…" },
     );
     if (ok) shell.go({ section: "agents", taskId: task.id });

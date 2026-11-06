@@ -10,6 +10,7 @@ import { Markdown } from "../../shared/Markdown";
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { CiIcon } from "../../shared/ci";
 import { ago } from "../agents/transcript";
+import { isOpen } from "../agents/status";
 import { Bot, Branch, Check, ChevronDown, External, MessageSquare, Play, X } from "../../shared/Icons";
 import { choiceOf, useAgentSettings } from "../agents/Composer";
 
@@ -89,7 +90,7 @@ export function PullsSection() {
     if (tab === "files" && selected != null && diff == null) api.pullDiff(selected).then(setDiff, fail);
   }, [tab, selected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const task = detail ? tasks.find((t) => t.branch === detail.pull.head && !t.landed) : undefined;
+  const task = detail ? tasks.find((t) => t.branch === detail.pull.head && isOpen(t)) : undefined;
   const pr = detail?.pull.number === selected ? detail : null;
 
   return (
