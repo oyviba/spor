@@ -6,7 +6,8 @@
 #   e2e/run-all.sh <app binary> [out dir] [suite …]
 #
 # Suites: run (agent tasks), setup (setup scripts), sections (Changes,
-# History, a conflicting merge, stashes, Pulls, Actions). All by default.
+# History, a conflicting merge, stashes, Pulls, Actions): all three by
+# default. journeys (docs/journeys.md, with its known gaps) only when named.
 # Needs tauri-driver and, on Linux, WebKitWebDriver and a display (run it
 # under xvfb-run). Screenshots go to <out dir>/<suite>/.
 set -eu
@@ -39,6 +40,7 @@ for suite in $suites; do
     run) repo=agents ;;
     setup) repo=setup ;;
     sections) repo=sections ;;
+    journeys) repo=journeys ;;
     *) echo "No suite $suite" >&2; exit 2 ;;
   esac
   echo "== $suite"

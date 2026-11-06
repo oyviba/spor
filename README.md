@@ -36,7 +36,9 @@ what needs me, what's in flight, what's in my checkout, what happened. Each
 is a list in the sidebar, a page, and a details card. What you follow is a
 **work item** (a branch with its issue, task folder, agent, pull request and
 checks) moving from *Planned* to *Landed*, and every section uses the same
-words for it: [docs/concepts.md](docs/concepts.md).
+words for it: [docs/concepts.md](docs/concepts.md). [docs/journeys.md](docs/journeys.md)
+has five journeys through it, each with a budget of how often it changes
+section, run as end-to-end tests.
 
 - **Inbox** (⌘1) — what needs you, across every repository of every
   workspace: an agent waiting on an answer, a finished run you haven't

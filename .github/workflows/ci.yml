@@ -81,6 +81,12 @@ jobs:
         run: cargo install tauri-driver --locked
       - name: End-to-end suites
         run: xvfb-run -a e2e/run-all.sh src-tauri/target/debug/spor-desktop e2e-shots
+      # The journeys in docs/journeys.md (#75), counting section changes.
+      # Known gaps are reported, not failed; until #74 is done, nothing here
+      # fails the build.
+      - name: Journeys
+        continue-on-error: true
+        run: xvfb-run -a e2e/run-all.sh src-tauri/target/debug/spor-desktop e2e-shots journeys
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

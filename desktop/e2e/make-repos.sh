@@ -9,6 +9,9 @@
 #                   the first time and works the second, and a .spor/copy
 #                   that brings an ignored .env into new task folders
 #   <dir>/sections  for sections.mjs: see the comment at its top
+#   <dir>/journeys  for journeys.mjs: greeter on GitHub (demo/greeter, as the
+#                   stand-in gh has it) with nothing started yet but the
+#                   branch of PR #12; pushes go to <dir>/journeys-origin.git
 #
 # Everything in <dir> is replaced.
 set -eu
@@ -16,12 +19,13 @@ set -eu
 dir=${1:?usage: make-repos.sh <dir>}
 mkdir -p "$dir"
 dir=$(cd "$dir" && pwd)
-for name in agents setup sections; do
+for name in agents setup sections journeys; do
   if [ -e "$dir/$name" ]; then
     git -C "$dir/$name" worktree prune 2>/dev/null || true
     rm -rf "$dir/$name" "$dir/$name.spor"
   fi
 done
+rm -rf "$dir/journeys-origin.git"
 
 new_repo() {
   repo="$dir/$1"
@@ -102,4 +106,17 @@ g add README.md
 printf '\n\ndef shout(name):\n    return greet(name).upper()\n' >> "$repo/greet.py"
 printf 'Ideas: a farewell, a shout.\n' > "$repo/NOTES.md"
 
-echo "Made $dir/agents, $dir/setup and $dir/sections"
+# ---- journeys ------------------------------------------------------------
+new_repo journeys
+repo="$dir/journeys"
+g() { git -C "$repo" "$@"; }
+# origin is GitHub's demo/greeter for spor and gh; a push goes to a bare
+# repository here instead (`get-url` doesn't apply pushInsteadOf).
+git init -q --bare "$dir/journeys-origin.git"
+g remote add origin https://github.com/demo/greeter.git
+g config "url.$dir/journeys-origin.git.pushInsteadOf" https://github.com/demo/greeter.git
+g -c push.negotiate=false push -q origin main 2>/dev/null
+# PR #12's branch, without a task: someone else's agent opened it.
+g branch agent/let-greet-take-optional
+
+echo "Made $dir/agents, $dir/setup, $dir/sections and $dir/journeys"

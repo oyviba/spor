@@ -121,6 +121,10 @@ finishes while you watch.
   `e2e/sections.mjs` (Changes, History, renaming and tagging, a conflicting
   merge, stashes, pull requests, the Inbox and Actions) drive the real app through WebDriver and check the
   repository with git at every step. CI runs all three on Linux under Xvfb.
+- `e2e/journeys.mjs` drives the five journeys in `docs/journeys.md`, counting
+  how often each changes section against its budget. Steps waiting on work
+  that hasn't landed are known gaps, reported but not failed; CI runs it
+  without failing the build. `e2e/run-all.sh <app> <out> journeys` runs it.
 
   They need no real agent or GitHub: `e2e/bin` has stand-ins. `claude` is a
   Python script that speaks Claude Code's stream-json both ways (it edits,
