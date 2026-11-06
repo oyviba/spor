@@ -25,7 +25,7 @@ const FILTERS: { id: Filter; label: string }[] = [
 
 /** The one status a PR shows in lists: what's in the way, or where it is. */
 export function pullStatus(p: Pull): Status {
-  if (p.state === "merged") return { label: "Merged", tone: "violet", live: false };
+  if (p.state === "merged") return { label: "Landed", tone: "violet", live: false };
   if (p.state === "closed") return { label: "Closed", tone: "muted", live: false };
   if (p.checks === "failing") return { label: "Checks failing", tone: "red", live: false };
   if (p.review === "changesrequested") return { label: "Changes requested", tone: "amber", live: false };
@@ -35,7 +35,7 @@ export function pullStatus(p: Pull): Status {
   return { label: "Open", tone: "sky", live: false };
 }
 
-/** Pull requests on GitHub, through `gh`: read, review, merge. */
+/** Pull requests on GitHub, through `gh`: read, review, land. */
 export function PullsSection() {
   const shell = useShell();
   const [filter, setFilter] = useStored<Filter>("pulls.filter", "open");
@@ -318,9 +318,9 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
   const failing = pr.checks.filter((c) => c.status === "failure").length;
   const passing = pr.checks.filter((c) => c.status === "success").length;
   const PENDING: Record<string, string> = {
-    squash: "Merging on GitHub…",
-    merge: "Merging on GitHub…",
-    rebase: "Merging on GitHub…",
+    squash: `Landing #${p.number} on GitHub…`,
+    merge: `Landing #${p.number} on GitHub…`,
+    rebase: `Landing #${p.number} on GitHub…`,
     ready: "Marking it ready…",
     checkout: `Checking out ${p.head}…`,
     close: `Closing #${p.number}…`,
@@ -435,26 +435,26 @@ function PullCard({ pr, task, onChanged }: { pr: PullDetail; task?: TaskSummary;
                   ? "Mark it ready for review first"
                   : conflicting
                     ? `Resolve the conflicts with ${p.base} first`
-                    : "Squash and merge on GitHub"
+                    : `Squash and merge into ${p.base} on GitHub`
               }
               onClick={() => merge("squash")}
             >
-              {confirm === "squash" ? "Squash and merge?" : "Squash and merge"}
+              {confirm === "squash" ? `Land #${p.number}?` : `Land #${p.number}`}
             </Button>
-            <button className="primary split-more" aria-label="Other merge methods" disabled={p.state === "draft" || conflicting} onClick={() => setMenu((m) => !m)}>
+            <button className="primary split-more" aria-label="Other ways to land" disabled={p.state === "draft" || conflicting} onClick={() => setMenu((m) => !m)}>
               <ChevronDown size={12} />
             </button>
             {menu && (
               <div className="menu" onMouseLeave={() => setMenu(false)}>
-                <button onClick={() => { setMenu(false); merge("merge"); }}>Create a merge commit</button>
-                <button onClick={() => { setMenu(false); merge("rebase"); }}>Rebase and merge</button>
+                <button onClick={() => { setMenu(false); merge("merge"); }}>Land with a merge commit</button>
+                <button onClick={() => { setMenu(false); merge("rebase"); }}>Land by rebasing</button>
               </div>
             )}
           </div>
         )}
         {confirm && confirm !== "squash" && (
           <Button className="danger" onClick={() => act(confirm)}>
-            {confirm === "merge" ? "Merge?" : "Rebase and merge?"}
+            {confirm === "merge" ? "Land with a merge commit?" : "Land by rebasing?"}
           </Button>
         )}
         {p.state === "draft" && (

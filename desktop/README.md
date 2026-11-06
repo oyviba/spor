@@ -13,12 +13,12 @@ at the bottom.
 | Section | ⌘ | Sidebar | Page | Details card | Bottom |
 |---|---|---|---|---|---|
 | **Inbox** | 1 | What needs you in every workspace: answers, finished runs, failed CI, review requests | | | |
-| **Work** | 2 | Every work item: agents' tasks, your branches with commits ahead of the base, and open PRs from anyone. Shelves: Needs you, In progress, In review, Settled (folded); filters Mine / Agents / Teammates; right-click to move one up or down. *New…* (⌘N): a branch, an agent task, or from an issue | A task: Conversation · Changes. A PR: Conversation · Files · Checks. A branch: Commits · Changes | A task: folder, branch, conflicts, its issue and PR, open a PR, land, discard. A branch: open a PR, switch to it | A task's composer, or a PR's comment box |
-| **Changes** | 3 | Conflicts, staged and unstaged files | The file's diff (unified or side by side): click lines, shift-click to extend, then stage, unstage or discard them; a conflicted file's regions, a side picked for each | Branch and upstream, Fetch / Pull / Push, its PR, stashes (pop, apply, drop) | Commit box (⌘↩), amend |
+| **Work** | 2 | Every work item: agents' tasks, your branches with commits ahead of the base, and open PRs from anyone. Shelves: Needs you, In progress, In review, Settled (folded); filters Mine / Agents / Teammates; right-click to move one up or down. *New…* (⌘N): a branch, an agent task, or from an issue | A task: Conversation · Changes. A PR: Conversation · Files · Checks. A branch: Commits · Changes | The work card (issue → branch · folder → PR → checks, and the next step). A task: folder, conflicts, publish, land, discard. A branch: publish, switch to it | A task's composer, or a PR's comment box |
+| **Changes** | 3 | Conflicts, staged and unstaged files | The file's diff (unified or side by side): click lines, shift-click to extend, then stage, unstage or discard them; a conflicted file's regions, a side picked for each | Branch and upstream, Fetch / Pull / Push (Publish the first time), its PR, stashes (pop, apply, drop) | Commit box (⌘↩), amend |
 | **History** | 4 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
-| **Issues** (browser) | 5 | Assigned / Yours / Open / Closed | The issue and its comments | Labels, assignees, its agent task and PR, close or reopen | *Start agent task*: the issue as the prompt (editable), the base and the agent |
-| **Pull requests** (browser) | 6 | Review / Yours / Open / Closed | Conversation · Files · Checks | Branches, checks, conflicts, linked agent task, merge, check out, close | Comment / Approve, with line comments from Files |
-| **Actions** (browser) | 7 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | Run, commit, linked agent task, re-run, cancel | |
+| **Issues** (browser) | 5 | Assigned / Yours / Open / Closed | The issue and its comments | The work card, labels, assignees, close or reopen | *Start with agent*: the issue as the prompt (editable), the base and the agent |
+| **Pull requests** (browser) | 6 | Review / Yours / Open / Closed | Conversation · Files · Checks | The work card, checks, conflicts, land (squash, merge commit or rebase), check out, close | Comment / Approve, with line comments from Files |
+| **Actions** (browser) | 7 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | The work card, run, commit, re-run, cancel | |
 
 What one app makes possible:
 
@@ -45,16 +45,16 @@ What one app makes possible:
   failing log. A task's branch opens in History, and a run's commit too.
 - **One conflict banner.** A merge or rebase that stops shows on every
   section, with *Resolve in Changes*, *Continue* and *Abort*.
-- **From issue to merged PR** (#47, #24). *Start agent task* on an issue
+- **From issue to landed PR** (#47, #24). *Start with agent* on an issue
   gives the agent the issue and its comments, on `agent/<number>-<slug>`.
-  *Open pull request* (or a draft) on the task pushes its branch and opens
+  *Publish* (or *Publish as a draft*) on the task pushes its branch and opens
   a PR whose title and description Claude Code writes from the branch and
   the agent's session (read-only; the prompt's if it can't), and which says
   `Closes #n`; landing locally puts `Closes #n`
   in the commit instead. The task then shows its PR's state, offers *Push*
   when the agent has commits the PR doesn't (*Commit and push* when it left
-  work uncommitted), *Squash and merge* (which cleans the task up once
-  GitHub has merged it; ⌘Z brings it back; *Land* is hidden while a PR is open,
+  work uncommitted), *Land #n* (squash and merge on GitHub, which cleans the
+  task up once GitHub has merged it; ⌘Z brings it back; *Land* is hidden while a PR is open,
   so the two can't diverge), and *Send review to agent*
   (on the task, or on the PR page) sends reviews and line comments made
   since the agent last ran, as `file:line — comment`. When the PR merges, a

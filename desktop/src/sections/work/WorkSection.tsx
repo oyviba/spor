@@ -117,12 +117,12 @@ export function WorkSection() {
       for (const p of list)
         if (now.has(p.task) && !merged.current.has(p.task))
           toast(
-            `#${p.pull.number} ${p.pull.state === "merged" ? "merged" : "was closed"} — ${p.task} can be cleaned up`,
+            `#${p.pull.number} ${p.pull.state === "merged" ? "landed" : "was closed"} — ${p.task} can be cleaned up`,
             "ok",
             false,
             p.pull.state === "merged"
               ? { label: "Clean up", run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`) }
-              : { label: "Close task", run: () => close(p.task) },
+              : { label: "Clean up", run: () => close(p.task) },
           );
     merged.current = now;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -336,17 +336,17 @@ export function WorkSection() {
           pending: commitUncommitted ? "Committing and pushing…" : "Pushing…",
         })
         .then(afterChange),
-    // From prompt to merged in one place: merge on GitHub, then clean up
+    // From prompt to landed in one place: merge on GitHub, then clean up
     // at once (⌘Z brings its folder and branch back).
     onMerge: async () => {
       const pr = pulls[id]?.pull;
       if (!pr) return;
       const ok = await shell.act(() => api.pullAction(pr.number, "squash"), {
         undo: false,
-        pending: `Merging #${pr.number} on GitHub…`,
+        pending: `Landing #${pr.number} on GitHub…`,
       });
       if (!ok) return;
-      // Cleaned up here, so no "merged — can be cleaned up" note follows.
+      // Cleaned up here, so no "landed — can be cleaned up" note follows.
       merged.current?.add(id);
       const list = await api.taskPulls().catch(() => [] as TaskPull[]);
       await settle(id, list.find((p) => p.task === id)?.merge_commit ?? `#${pr.number}`);

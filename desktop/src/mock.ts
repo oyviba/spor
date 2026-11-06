@@ -644,7 +644,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           taskPulls[id].pull = { ...taskPulls[id].pull, state: "merged", review: "approved" };
           taskPulls[id].merge_commit = "c0ffee1d2e3f";
         }, 20000);
-        return `Opened ${args.draft ? "draft " : ""}pull request #${n}`;
+        return `Published ${id} as ${args.draft ? "a draft " : ""}pull request #${n}`;
       }
       case "push_task": {
         const t = find(id);

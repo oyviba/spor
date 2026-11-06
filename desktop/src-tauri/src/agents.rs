@@ -833,8 +833,9 @@ pub(crate) fn publish_task(
         .map_err(|e| first_line(&e))?;
     app.github.clear(tasks.root());
     Ok(format!(
-        "Opened {}pull request #{number}",
-        if draft { "draft " } else { "" }
+        "Published {} as {}pull request #{number}",
+        task.id,
+        if draft { "a draft " } else { "" }
     ))
 }
 
@@ -972,7 +973,7 @@ pub(crate) fn settle_task(app: State<App>, id: String, commit: String) -> Result
         return Err("Stop the agent first".into());
     }
     let undo = tasks.settle(&task, &commit).map_err(|e| first_line(&e))?;
-    let message = format!("Cleaned up {} — its pull request was merged", task.id);
+    let message = format!("Cleaned up {} — its pull request landed", task.id);
     app.undo.push(message.clone(), Undo::Task(undo));
     Ok(message)
 }

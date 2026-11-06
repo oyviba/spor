@@ -35,7 +35,7 @@ export interface GithubActions {
   /** Send its PR's failed Actions jobs to the agent. */
   onSendFailure: () => unknown;
   onSettle: (commit: string) => unknown;
-  /** Squash and merge its PR on GitHub, then clean up as `onSettle` does. */
+  /** Land its PR (squash and merge on GitHub), then clean up as `onSettle` does. */
   onMerge: () => unknown;
   /** Mark its draft PR ready for review. */
   onReady: () => unknown;
@@ -277,7 +277,7 @@ export function Inspector({ detail, ...p }: Props) {
       )}
       {merged && (
         <div className="inspector-actions">
-          <div className="inspector-note">Its pull request was merged. Its folder and branch can go.</div>
+          <div className="inspector-note">Its pull request landed. Its folder and branch can go.</div>
           <Button
             className="primary"
             disabled={running}
@@ -297,7 +297,7 @@ export function Inspector({ detail, ...p }: Props) {
             title="Mark it closed and remove its folder and branch (⌘Z undoes)"
             onClick={p.onClose}
           >
-            <Trash size={12} /> Close task
+            <Trash size={12} /> Clean up
           </Button>
         </div>
       )}
@@ -315,15 +315,15 @@ export function Inspector({ detail, ...p }: Props) {
             title={
               mergeBlocked ??
               (pr.checks === "failing"
-                ? "Its checks are failing — squash and merge on GitHub anyway, then clean up"
+                ? "Its checks are failing — land it anyway: squash and merge on GitHub, then clean up"
                 : pr.checks === "pending"
-                  ? "Its checks are still running — squash and merge on GitHub anyway, then clean up"
+                  ? "Its checks are still running — land it anyway: squash and merge on GitHub, then clean up"
                   : "Squash and merge on GitHub, then remove its folder and branch (⌘Z brings them back)")
             }
             onClick={() => (confirmMerge ? work("merge", p.onMerge) : setConfirmMerge(true))}
             onBlur={() => setConfirmMerge(false)}
           >
-            <Merge size={12} /> {confirmMerge ? `Squash and merge #${pr.number}?` : "Squash and merge"}
+            <Merge size={12} /> {confirmMerge ? `Land #${pr.number} on ${t.base}?` : `Land #${pr.number}`}
           </Button>
           {pr?.checks === "failing" && (
             <Button
@@ -364,12 +364,12 @@ export function Inspector({ detail, ...p }: Props) {
               title={publishBlocked ?? `Push ${t.branch} and open a pull request into ${t.base}`}
               onClick={() => work("publish", () => p.onPublish(false, includeUncommitted))}
             >
-              <PullRequest size={12} /> Open pull request
+              <PullRequest size={12} /> Publish
             </Button>
             <button
               className="ghost split-more"
               disabled={publishBlocked != null || working != null}
-              aria-label="More ways to open a pull request"
+              aria-label="More ways to publish"
               onClick={() => setPrMenu((v) => !v)}
             >
               <ChevronDown size={12} />
@@ -382,7 +382,7 @@ export function Inspector({ detail, ...p }: Props) {
                     work("publish", () => p.onPublish(true, includeUncommitted));
                   }}
                 >
-                  Open as a draft
+                  Publish as a draft
                 </button>
               </div>
             )}

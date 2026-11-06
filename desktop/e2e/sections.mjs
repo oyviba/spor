@@ -227,10 +227,10 @@ try {
   await w.clickText(".task-row", "#11");
   await w.until(`return $(".task-header")?.innerText.includes("#11")`, "#11");
   await w.click(".inspector .split .primary");
-  check((await w.text(".inspector .split")).includes("Squash and merge?"), "merging asks once more");
+  check((await w.text(".inspector .split")).includes("Land #11?"), "landing asks once more");
   await w.click(".inspector .split .danger");
-  await w.until(`return $(".task-header")?.innerText.includes("Merged")`, "the merge");
-  check(ghState().merged.includes(11), "Squash and merge merges through gh");
+  await w.until(`return $(".task-header")?.innerText.includes("Landed")`, "the landing");
+  check(ghState().merged.includes(11), "Land merges through gh");
   await w.shot("pulls-3-merged");
 
   console.log("Inbox");

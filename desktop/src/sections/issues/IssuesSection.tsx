@@ -275,7 +275,7 @@ export function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarte
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const attachments = useAttachments(shell.fail);
-  const verb = settings.agent === "none" ? "Create task" : "Start agent task";
+  const verb = settings.agent === "none" ? "Start task" : "Start with agent";
 
   const start = async () => {
     if (busy || !prompt.trim() || attachments.saving) return;
