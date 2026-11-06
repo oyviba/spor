@@ -45,7 +45,10 @@ interface Props {
   /** For one run: files left out because they came with the base. */
   fromBase: string[];
   onRunChanges: (index: number) => void;
-  onUndoRun: () => unknown;
+  /** Undo the last run, or (`from`) that run and every run after it. */
+  onUndoRun: (from: number | null) => unknown;
+  /** Run the setup script again before the next agent. */
+  onRerunSetup: () => unknown;
   onAnswer: (ask: Ask, allow: boolean, message?: string) => unknown;
   /** Allow it, and don't ask again about this kind of action this session. */
   onAllowForSession: (ask: Ask) => unknown;
@@ -148,6 +151,7 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
             onAskRebase={p.onAskRebase}
             onAskRestore={p.onAskRestore}
             onShowBranch={p.onShowBranch}
+            onRerunSetup={p.onRerunSetup}
             {...p.github}
           />
         )}

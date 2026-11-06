@@ -518,6 +518,12 @@ button.busy::after {
   background: var(--hover);
   color: var(--fg-2);
 }
+.shelf-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 10px;
+}
 
 /* ---- Status ---- */
 
@@ -1125,6 +1131,19 @@ button.busy::after {
 .inspector-row.bad,
 .inspector-row.bad > svg {
   color: var(--red);
+}
+.setup-row .setup-state {
+  color: var(--muted);
+}
+.setup-row.ok .setup-state {
+  color: var(--emerald);
+}
+.setup-row.bad .setup-state {
+  color: var(--red);
+}
+.setup-row .icon-button {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .inspector-row .link {
   display: block;

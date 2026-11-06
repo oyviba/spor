@@ -79,6 +79,7 @@ const summary = (id: string, prompt: string, created: number, over: Partial<Task
   mode: "acceptEdits",
   issue: null,
   pull: null,
+  queued: [],
   ...over,
 });
 
@@ -331,7 +332,21 @@ export async function listen(event: string, fn: () => void): Promise<() => void>
   return () => listeners.get(event)!.delete(fn);
 }
 const tasksChanged = () => listeners.get("tasks-changed")?.forEach((fn) => fn());
-const CHANGES_TASKS = new Set(["create_task", "send_to_agent", "stop_agent", "land_task", "discard_task", "undo", "answer_ask", "steer", "set_mode"]);
+const CHANGES_TASKS = new Set([
+  "create_task",
+  "send_to_agent",
+  "stop_agent",
+  "land_task",
+  "discard_task",
+  "undo",
+  "answer_ask",
+  "steer",
+  "set_mode",
+  "undo_run",
+  "queue_follow_up",
+  "unqueue",
+  "send_queued",
+]);
 
 // The working task makes progress every few seconds, then finishes.
 setInterval(() => {
@@ -483,6 +498,9 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           conflicts: t.summary.id === "dark-mode-dashboard" ? ["src/styles/theme.css"] : [],
           undoes: [],
           undoable: last && !last.undone && last.state !== "running" ? last.index : null,
+          undoable_from:
+            t.summary.run?.state === "running" ? [] : t.runs.filter((r) => !r.undone).map((r) => r.index),
+          setup: t.summary.id === "login-redirect" ? { script: ".spor/setup", state: "worked", code: null } : null,
           asks: t.asks ?? [],
           listening: t.summary.run?.state === "running",
         };
@@ -663,11 +681,39 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
       }
       case "undo_run": {
         const t = find(id);
+        if (args.from != null) {
+          const from = args.from as number;
+          const taken = t.runs.filter((r) => r.index >= from && !r.undone);
+          if (taken.length === 0 || t.summary.run?.state === "running") throw "That run can't be undone";
+          for (const r of taken) r.undone = true;
+          return taken.length === 1 ? `Undid run ${from + 1}` : `Undid ${taken.length} runs`;
+        }
         const last = t.runs.at(-1);
         if (!last || last.undone || last.state === "running") throw "There's no run to undo";
         last.undone = true;
         return `Undid run ${last.index + 1}`;
       }
+      case "queue_follow_up":
+        find(id).summary.queued.push((args.text as string).trim());
+        return null;
+      case "unqueue": {
+        const q = find(id).summary.queued;
+        if ((args.index as number) >= q.length) throw "That follow-up was already sent";
+        q.splice(args.index as number, 1);
+        return null;
+      }
+      case "send_queued": {
+        const t = find(id);
+        if (t.summary.run?.state === "running" || t.summary.queued.length === 0) return false;
+        start(t, t.summary.queued.shift()!, args.agent as AgentChoice);
+        return true;
+      }
+      case "rerun_setup":
+        return null;
+      case "clean_up_tasks":
+        return "Nothing to clean up";
+      case "notify_os":
+        return null;
       default:
         throw `Unknown command ${cmd}`;
     }

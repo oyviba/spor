@@ -280,15 +280,19 @@ export function App() {
     setTasks(list);
     const waiting = list.filter((t) => t.asks > 0);
     if (asking.current) {
-      for (const t of waiting)
-        if (!asking.current.has(t.id) && !viewing(t.id))
-          toast(`${t.title} is waiting for you`, "ok", false, {
-            label: "Answer",
-            run: () => {
-              setSection("work");
-              setTarget((old) => ({ section: "work", taskId: t.id, seq: old.seq + 1 }));
-            },
-          });
+      for (const t of waiting) {
+        if (asking.current.has(t.id) || viewing(t.id)) continue;
+        // With the window in the background nobody sees a toast: ask the
+        // operating system too (#41).
+        if (!document.hasFocus()) api.notify(`${t.title} needs you`, "An agent is waiting for an answer").catch(() => {});
+        toast(`${t.title} is waiting for you`, "ok", false, {
+          label: "Answer",
+          run: () => {
+            setSection("work");
+            setTarget((old) => ({ section: "work", taskId: t.id, seq: old.seq + 1 }));
+          },
+        });
+      }
     }
     asking.current = new Set(waiting.map((t) => t.id));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

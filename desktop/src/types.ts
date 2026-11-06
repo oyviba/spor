@@ -67,6 +67,8 @@ export interface TaskSummary {
   issue: number | null;
   /** The pull request it was published as. */
   pull: number | null;
+  /** Follow-ups waiting for the agent to finish, kept with the task. */
+  queued: string[];
 }
 
 /** How much an agent may do without asking (#21). */
@@ -112,10 +114,21 @@ export interface TaskDetail {
   undoes: { path: string; lines: number }[];
   /** The run "Undo this run" would take back. */
   undoable: number | null;
+  /** The runs "Undo from here" can start at. */
+  undoable_from: number[];
+  /** The folder's setup script and how it went (#23). */
+  setup: SetupInfo | null;
   /** Questions the agent is waiting on. */
   asks: Ask[];
   /** The running agent can be answered, steered and interrupted. */
   listening: boolean;
+}
+
+export interface SetupInfo {
+  script: string;
+  /** null: it hasn't run. "due": it worked, and runs again before the next agent. */
+  state: "running" | "worked" | "failed" | "skipped" | "due" | null;
+  code: number | null;
 }
 
 export interface RunPatch {

@@ -88,9 +88,35 @@ fn open_repo(handle: AppHandle, app: State<App>, path: String) -> Result<RepoInf
     let repo = Repo::discover(&path).map_err(|e| first_line(&e))?;
     let info = repo_info(&repo);
     watch_repo(&handle, &repo);
+    tidy(&repo);
     *app.repo.lock().unwrap() = Some(repo);
     app.undo.clear();
     Ok(info)
+}
+
+/// Opening a repository starts with nothing to undo, so the run checkpoints
+/// of tasks that are done have outlived their undo window (#41).
+fn tidy(repo: &Repo) {
+    let repo = repo.clone();
+    std::thread::spawn(move || {
+        if let Ok(tasks) = spor::tasks::Tasks::open(&repo) {
+            tasks.clean_up();
+        }
+    });
+}
+
+/// A notification from the operating system, for when the window is in
+/// the background (an agent needs you, #41).
+#[tauri::command]
+fn notify_os(handle: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt as _;
+    handle
+        .notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
 }
 
 /// Send the UI an event when `repo` changes (see `watch`), in place of the
@@ -394,9 +420,11 @@ pub fn run() {
         .map(|p| expand_home(&p))
         .or_else(|| std::env::current_dir().ok());
     if let Some(repo) = start.and_then(|p| Repo::discover(&p).ok()) {
+        tidy(&repo);
         *app.repo.lock().unwrap() = Some(repo);
     }
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(app)
         .setup(|tauri| {
             let handle = tauri.handle();
@@ -412,6 +440,7 @@ pub fn run() {
             repo_state,
             undo,
             open_url,
+            notify_os,
             askpass_pending,
             askpass_answer,
             legacy_workspaces,
@@ -434,6 +463,11 @@ pub fn run() {
             agents::steer,
             agents::attach_image,
             agents::skip_setup,
+            agents::rerun_setup,
+            agents::queue_follow_up,
+            agents::unqueue,
+            agents::send_queued,
+            agents::clean_up_tasks,
             agents::create_issue_task,
             agents::publish_task,
             agents::push_task,

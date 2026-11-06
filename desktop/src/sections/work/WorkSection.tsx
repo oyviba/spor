@@ -59,7 +59,8 @@ export function WorkSection() {
   const [order, setOrder] = useStored<Record<string, number>>("work.order", {});
   const [inspector, setInspector] = useStored("inspector", true);
   const [comments, setComments] = useState<Record<string, LineComment[]>>({});
-  const [queue, setQueue] = useStored<Record<string, string[]>>("queue", {});
+  // Queued follow-ups used to be kept here; they're kept with the task now.
+  const [oldQueue, setOldQueue] = useStored<Record<string, string[]>>("queue", {});
   const [focus, setFocus] = useState<Pick<LineComment, "file" | "line" | "side"> | null>(null);
   const composer = useRef<ComposerHandle>(null);
 
@@ -202,23 +203,25 @@ export function WorkSection() {
     if (seen[key] !== at) setSeen((s) => ({ ...s, [key]: at }));
   }, [shown?.task.id, shown && activityAt(shown.task)]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Follow-ups queued before the queue moved to the task: hand them over once.
+  useEffect(() => {
+    const old = Object.entries(oldQueue).filter(([id, q]) => q.length > 0 && tasks.some((t) => t.id === id && isOpen(t)));
+    if (tasks.length === 0 || Object.keys(oldQueue).length === 0) return;
+    setOldQueue({});
+    Promise.all(old.flatMap(([id, q]) => q.map((text) => api.queueFollowUp(id, text)))).then(refreshTasks, fail);
+  }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Queued follow-ups go out, one per run, when their task's agent is idle.
+  // The queue is kept with the task, so it outlives the window.
   const sending = useRef(new Set<string>());
   useEffect(() => {
-    for (const [id, messages] of Object.entries(queue)) {
-      const t = tasks.find((x) => x.id === id);
-      if (!t || !isOpen(t)) {
-        if (!t && tasks.length > 0) setQueue(({ [id]: _, ...rest }) => rest);
-        continue;
-      }
-      if (messages.length === 0 || t.run?.state === "running" || sending.current.has(id)) continue;
-      sending.current.add(id);
-      const [first, ...rest] = messages;
+    for (const t of tasks) {
+      if (!isOpen(t) || t.queued.length === 0 || t.run?.state === "running" || sending.current.has(t.id)) continue;
+      sending.current.add(t.id);
       api
-        .sendToAgent(id, first, choiceOf(settings), settings.mode)
-        .then(() => setQueue((q) => ({ ...q, [id]: rest })), fail)
-        .then(refreshTasks)
-        .finally(() => sending.current.delete(id));
+        .sendQueued(t.id, choiceOf(settings), settings.mode)
+        .then((sent) => (sent ? refreshTasks() : undefined), fail)
+        .finally(() => sending.current.delete(t.id));
     }
   }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -289,8 +292,7 @@ export function WorkSection() {
     const id = shown.task.id;
     setComments((c) => ({ ...c, [id]: [] }));
     if (shown.task.run?.state === "running") {
-      setQueue((q) => ({ ...q, [id]: [...(q[id] ?? []), text] }));
-      return;
+      return api.queueFollowUp(id, text).then(afterChange, fail);
     }
     return api
       .sendToAgent(id, text, choiceOf(settings), settings.mode)
@@ -411,6 +413,7 @@ export function WorkSection() {
         onSelect={(i) => setView(viewOf(i))}
         onMove={(i, top) => setOrder((o) => moveTo(items, o, i.key, top))}
         onNew={newMenu}
+        onCleanUp={() => api.cleanUpTasks().then((msg) => toast(msg), fail)}
       />
       <main className="main">
         {view.kind === "new" ? (
@@ -463,7 +466,12 @@ export function WorkSection() {
               setSource(index);
               setTab("changes");
             }}
-            onUndoRun={() => shell.act(() => api.undoRun(shown.task.id), { pending: "Undoing the run…" }).then(afterChange)}
+            onUndoRun={(from) =>
+              shell
+                .act(() => api.undoRun(shown.task.id, from), { pending: from == null ? "Undoing the run…" : "Undoing the runs…" })
+                .then(afterChange)
+            }
+            onRerunSetup={() => api.rerunSetup(shown.task.id).then(afterChange, fail)}
             onAnswer={(ask, allow, message) =>
               api.answerAsk(shown.task.id, ask.id, allow, message ?? "").then(afterChange, fail)
             }
@@ -505,10 +513,8 @@ export function WorkSection() {
               setTab("changes");
               setFocus({ file: c.file, line: c.line, side: c.side });
             }}
-            queued={queue[shown.task.id] ?? []}
-            onUnqueue={(i) =>
-              setQueue((q) => ({ ...q, [shown.task.id]: (q[shown.task.id] ?? []).filter((_, j) => j !== i) }))
-            }
+            queued={shown.task.queued}
+            onUnqueue={(i) => api.unqueue(shown.task.id, i).then(afterChange, fail)}
             onStart={() =>
               api.sendToAgent(shown.task.id, null, choiceOf(settings), settings.mode).then(afterChange, fail)
             }

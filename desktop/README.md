@@ -167,8 +167,7 @@ dependency-free library.
 
 A signed, notarized Mac app (#62): CI's `Spor.app` is ad-hoc signed.
 
-The rules for starting an agent live in `src-tauri/src/agents.rs`; they
-belong in the core (#39). On Linux the watcher uses inotify, which needs a
+On Linux the watcher uses inotify, which needs a
 watch per folder: a working tree with more folders than
 `fs.inotify.max_user_watches` isn't watched, and the window reloads only
 every 30 s.
