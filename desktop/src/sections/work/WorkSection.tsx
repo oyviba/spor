@@ -413,6 +413,7 @@ export function WorkSection() {
         onMove={(i, top) => setOrder((o) => moveTo(items, o, i.key, top))}
         onNew={newMenu}
         onCleanUp={() => api.cleanUpTasks().then((msg) => toast(msg), fail)}
+        spent={{ usd: tasks.reduce((n, t) => n + t.spent, 0), tokens: tasks.reduce((n, t) => n + t.tokens, 0) }}
       />
       <main className="main">
         {view.kind === "new" ? (

@@ -3614,6 +3614,49 @@ body.resizing * {
   font-weight: 600;
 }
 
+/* Context, compaction and cost (#98) */
+.context-chip {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.context-chip.high {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+.context-note,
+.mcp-failed {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--amber);
+}
+.context-note {
+  margin-bottom: 6px;
+}
+.compacted {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.compacted::before,
+.compacted::after {
+  content: "";
+  flex: 1;
+  border-top: 1px dashed var(--border);
+}
+.sidebar-foot {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--faint);
+  border-top: 1px solid var(--border);
+}
+
 /* ---- Questions with options (#102) and plans (#101) --------------------- */
 
 .ask-card.questions,

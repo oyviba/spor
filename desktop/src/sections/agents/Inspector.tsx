@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useChanged } from "../../shared/hooks";
 import type { SetupInfo, TaskDetail, TaskPull } from "../../types";
-import { duration } from "./transcript";
+import { duration, tokens } from "./transcript";
 import { useShell } from "../../shared/app";
 import { Button } from "../../shared/Button";
 import { WorkCard } from "../../shared/WorkCard";
@@ -99,6 +99,7 @@ export function Inspector({ detail, ...p }: Props) {
   const undoneLines = detail.undoes.reduce((n, u) => n + u.lines, 0);
   const lastRun = detail.runs.at(-1);
   const spent = detail.runs.reduce((n, r) => n + (r.cost_usd ?? 0), 0);
+  const spentTokens = detail.runs.reduce((n, r) => n + r.tokens_in + r.tokens_out, 0);
 
   // What merging its PR from here waits for. GitHub has the final say
   // (required reviews and checks); this is what would lose work.
@@ -238,8 +239,24 @@ export function Inspector({ detail, ...p }: Props) {
               {lastRun.label} · {detail.runs.length} {detail.runs.length === 1 ? "run" : "runs"}
               {lastRun.ended && ` · last ${duration(lastRun.ended - lastRun.started)}`}
               {spent > 0 && ` · $${spent.toFixed(2)}`}
+              {spentTokens > 0 && ` · ${tokens(spentTokens)} tokens`}
             </span>
           </div>
+          {lastRun.model && (
+            <div className="inspector-row">
+              <span className="num small-text muted" title="The model that actually ran, from Claude Code's start-up message">
+                Ran on {lastRun.model}
+              </span>
+            </div>
+          )}
+          {lastRun.mcp_failed.length > 0 && (
+            <div className="inspector-row">
+              <Alert size={12} />
+              <span className="small-text">
+                {lastRun.mcp_failed.join(", ")} didn't connect
+              </span>
+            </div>
+          )}
         </div>
       )}
       {merged && (

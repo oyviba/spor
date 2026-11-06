@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Progress, RunInfo, TaskDetail, Todo } from "../../types";
 import { liveLine } from "./progress";
-import { duration, runs as toRuns, stoppedLabel, summarize, type Block, type RunView, type Tool } from "./transcript";
+import { duration, runs as toRuns, stoppedLabel, summarize, tokens, type Block, type RunView, type Tool } from "./transcript";
 import { useChanged, useNow, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { Markdown } from "../../shared/Markdown";
@@ -207,7 +207,11 @@ function RunBlock({
 function RunMeta({ run, info }: { run: RunView; info: RunInfo | undefined }) {
   const parts: string[] = [];
   if (info) parts.push(info.label);
+  // The model that actually ran can differ from the one asked for.
+  if (info?.model && !info.label.includes(info.model)) parts.push(info.model);
   if (run.done?.turns) parts.push(`${run.done.turns} turns`);
+  if (info && info.tokens_in + info.tokens_out > 0)
+    parts.push(`${tokens(info.tokens_in)} in · ${tokens(info.tokens_out)} out`);
   const cost = run.done?.cost_usd ?? info?.cost_usd;
   if (cost != null) parts.push(`$${cost.toFixed(2)}`);
   return <span className="run-meta num">{parts.join(" · ")}</span>;
@@ -228,6 +232,25 @@ function BlockView({
   toggle: (key: string) => void;
   setup?: { onRetrySetup: () => unknown; onSkipSetup: () => unknown } | null;
 }) {
+  if (block.kind === "compacted") {
+    return (
+      <div className="compacted" role="separator">
+        <span>The conversation was compacted here</span>
+      </div>
+    );
+  }
+  if (block.kind === "mcp") {
+    return (
+      <div className="mcp-failed">
+        <Alert size={13} />
+        <span>
+          {block.failed.length === 1
+            ? `The ${block.failed[0]} MCP server didn't connect`
+            : `${block.failed.length} MCP servers didn't connect: ${block.failed.join(", ")}`}
+        </span>
+      </div>
+    );
+  }
   if (block.kind === "setup") {
     // A failure shows its output; success folds it away.
     const shown = block.ok === false || open.has(id) || block.ok == null;

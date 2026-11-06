@@ -1,6 +1,7 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import type { AgentChoice, Ask, Effort, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
 import { useStored } from "../../shared/hooks";
+import { CONTEXT_HIGH } from "./transcript";
 import { useShell } from "../../shared/app";
 import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
 import { Button } from "../../shared/Button";
@@ -276,6 +277,15 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
   return (
     <div className="composer-dock">
       <div className="column">
+        {!running && p.latest?.agent === "claude" && p.latest.context != null && p.latest.context >= CONTEXT_HIGH && (
+          <div className="context-note">
+            <Alert size={12} />
+            <span>
+              The agent's context is {p.latest.context}% full. A follow-up may make Claude Code compact the
+              conversation, and the agent can lose track of earlier decisions. Restate what matters in your message.
+            </span>
+          </div>
+        )}
         {p.queued.length > 0 && (
           <div className="queued">
             {p.queued.map((q, i) => (
