@@ -355,12 +355,12 @@ impl Tasks {
 
         let leaf = branch.rsplit('/').next().unwrap_or(branch);
         let id = self.unique_id(&slug(leaf));
-        let worktree = self.worktree_dir().map_err(&put_back)?.join(&id);
+        let worktree = self.worktree_dir().map_err(put_back)?.join(&id);
         std::fs::create_dir_all(worktree.parent().unwrap_or(&worktree))
             .map_err(|e| put_back(format!("Couldn't create {}: {e}", worktree.display())))?;
         self.repo
             .add_worktree(&worktree, branch, None)
-            .map_err(&put_back)?;
+            .map_err(put_back)?;
         self.copy_ignored(&worktree);
         if stashed {
             // The stash is shared by every checkout of the repository.
