@@ -301,7 +301,7 @@ impl Runs {
             dir: tasks.run_dir(&task.id),
             refs: checkpoint_prefix(&task.id),
             worktree: task.worktree.clone(),
-            base: task.base.clone(),
+            base: task.start().to_string(),
             repo_root: tasks.root().to_path_buf(),
             attachments: tasks.attachments_dir(),
         }
@@ -1217,7 +1217,7 @@ fn rule_words(tool: &str, content: Option<&str>) -> String {
 pub fn describe_pull(tasks: &Tasks, task: &Task) -> Result<(String, String), String> {
     let prompt = format!(
         "Write the pull request for this branch's work: `{branch}` into `{base}`. \
-         Look at what it changes (`git log {base}..HEAD`, `git diff {base}...HEAD`) \
+         Look at what it changes (`git log {start}..HEAD`, `git diff {start}...HEAD`) \
          and, if this conversation has it, why.\n\n\
          Reply with only the pull request: its title on the first line (under 72 \
          characters, no prefix, no quotes), a blank line, then the description in \
@@ -1225,6 +1225,7 @@ pub fn describe_pull(tasks: &Tasks, task: &Task) -> Result<(String, String), Str
          at closely. Only say how it was tested if it was. Don't change any files.",
         branch = task.branch,
         base = task.base,
+        start = task.start(),
     );
     let mut args: Vec<String> = [
         "--output-format",

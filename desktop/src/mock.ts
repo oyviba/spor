@@ -24,6 +24,7 @@ const repo: RepoInfo = {
   branch: "main",
   branches: ["main", "release/1.4", "feat/share-links"],
   default_base: "main",
+  default_start: "origin/main",
   claude: true,
 };
 
@@ -55,11 +56,16 @@ const run = (over: Partial<RunInfo>): RunInfo => ({
   ...over,
 });
 
+/** A task's base and where it started, as the backend has them: one
+ * started from `origin/main` lands on `main`. */
+const startOf = (base: string) => (base.startsWith("origin/") ? { base: base.slice("origin/".length), from: base } : { base, from: null });
+
 const summary = (id: string, prompt: string, created: number, over: Partial<TaskSummary> = {}): TaskSummary => ({
   id,
   title: prompt.split("\n")[0],
   prompt,
   base: "main",
+  from: "origin/main",
   branch: `agent/${id}`,
   worktree: `/Users/you/code/postplan.spor/${id}`,
   created,
@@ -488,7 +494,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         if (!prompt) throw "Describe the task first";
         const sid = slug(prompt);
         const t: MockTask = {
-          summary: summary(sid, prompt, now(), { base: args.base as string }),
+          summary: summary(sid, prompt, now(), startOf(args.base as string)),
           transcript: [],
           runs: [],
           patch: "",
@@ -593,7 +599,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         const prompt = (args.prompt as string).trim();
         const sid = `${n}-${slug(d.issue.title)}`;
         const t: MockTask = {
-          summary: summary(sid, prompt, now(), { base: args.base as string, issue: n }),
+          summary: summary(sid, prompt, now(), { ...startOf(args.base as string), issue: n }),
           transcript: [],
           runs: [],
           patch: "",

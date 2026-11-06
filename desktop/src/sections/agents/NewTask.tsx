@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { RepoInfo } from "../../types";
 import { ModelPicker, ModePicker, type AgentSettings } from "./Composer";
-import { ArrowUp, Branch } from "../../shared/Icons";
+import { ArrowUp } from "../../shared/Icons";
+import { BasePicker, defaultStart } from "../../shared/BasePicker";
 import { Button } from "../../shared/Button";
 import { useShell } from "../../shared/app";
 import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
@@ -17,7 +18,7 @@ interface Props {
 /** A blank task: what to do, from which branch, with which agent. */
 export function NewTask({ repo, settings, onSettings, onCreate }: Props) {
   const [prompt, setPrompt] = useState("");
-  const [base, setBase] = useState(repo.branch ?? repo.default_base ?? repo.branches[0] ?? "main");
+  const [base, setBase] = useState(defaultStart(repo));
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   useEffect(() => input.current?.focus(), []);
@@ -59,14 +60,7 @@ export function NewTask({ repo, settings, onSettings, onCreate }: Props) {
             }}
           />
           <div className="composer-footer">
-            <label className="chip-select-wrap" title="The branch it starts from and lands on">
-              <Branch size={12} />
-              <select className="chip-select bare" value={base} onChange={(e) => setBase(e.target.value)}>
-                {repo.branches.map((b) => (
-                  <option key={b}>{b}</option>
-                ))}
-              </select>
-            </label>
+            <BasePicker repo={repo} value={base} onChange={setBase} title="The branch it starts from and lands on" />
             <select
               className="chip-select"
               value={settings.agent}

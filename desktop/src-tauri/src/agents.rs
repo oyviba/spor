@@ -105,6 +105,8 @@ pub(crate) struct TaskSummary {
     title: String,
     prompt: String,
     base: String,
+    /// Where it started when that isn't `base`: `origin/main`.
+    from: Option<String>,
     branch: String,
     worktree: String,
     created: i64,
@@ -133,6 +135,7 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
         title: task.title(),
         prompt: task.prompt.clone(),
         base: task.base.clone(),
+        from: task.from.clone(),
         branch: task.branch.clone(),
         worktree: task.worktree.display().to_string(),
         created: task.created,
@@ -361,7 +364,7 @@ pub(crate) fn task_detail(app: State<App>, id: String) -> Result<TaskDetail, Str
     let folder = format!("{}/", task.worktree.display());
     let conflicts = if task.state == TaskState::Open && task.worktree.exists() {
         task.repo()
-            .merge_conflicts(&task.base, "HEAD")
+            .merge_conflicts(task.start(), "HEAD")
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -416,6 +419,7 @@ pub(crate) fn create_issue_task(
     if let Some(e) = kind.as_ref().and_then(missing) {
         return Err(e);
     }
+    refresh_start(&app, &base);
     let tasks = app.tasks()?;
     if let Some(open) = tasks
         .list()
@@ -445,6 +449,16 @@ pub(crate) fn create_issue_task(
     Ok(summary(&tasks, &task))
 }
 
+/// A task starting from a remote's branch (`origin/main`) starts from what
+/// the remote has now: fetch that branch first. Quietly, and only as good as
+/// it can be: offline, it starts from the last fetch.
+fn refresh_start(app: &App, base: &str) {
+    let Ok(repo) = app.repo() else { return };
+    if let (Some(branch), Some((remote, _))) = (repo.remote_branch(base), base.split_once('/')) {
+        let _ = spor::askpass::git_network_quiet(repo.root(), &["fetch", remote, &branch]);
+    }
+}
+
 #[tauri::command(async)]
 pub(crate) fn create_task(
     app: State<App>,
@@ -459,6 +473,7 @@ pub(crate) fn create_task(
     if let Some(e) = kind.as_ref().and_then(missing) {
         return Err(e);
     }
+    refresh_start(&app, &base);
     let tasks = app.tasks()?;
     let task = tasks
         .create(&prompt, &base)

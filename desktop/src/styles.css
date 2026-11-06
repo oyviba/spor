@@ -1599,6 +1599,64 @@ button.busy::after {
   gap: 2px;
   flex-shrink: 0;
 }
+/* The branch you're on, across the top of every section; tinted when it
+   needs a pull (or isn't on a branch at all). */
+.branch-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+  flex-shrink: 0;
+  min-width: 0;
+}
+.branch-bar-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 40%;
+  font-weight: 650;
+  font-size: 13.5px;
+  color: var(--fg);
+}
+.branch-bar-name > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.branch-bar-text {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.branch-bar.ok .branch-bar-text::before {
+  content: "✓ ";
+  color: var(--emerald);
+}
+.branch-bar.behind {
+  background: color-mix(in oklab, var(--sky) 14%, var(--bg));
+  border-bottom-color: color-mix(in oklab, var(--sky) 40%, var(--border));
+}
+.branch-bar.behind .branch-bar-text {
+  color: var(--fg);
+  font-weight: 500;
+}
+.branch-bar.behind .branch-bar-name > svg {
+  color: var(--sky);
+}
+.branch-bar.warn {
+  background: color-mix(in oklab, var(--amber) 14%, var(--bg));
+  border-bottom-color: color-mix(in oklab, var(--amber) 35%, var(--border));
+}
+.branch-bar.warn .branch-bar-name > svg,
+.branch-bar.warn .branch-bar-text {
+  color: var(--fg);
+}
+.branch-bar.warn .branch-bar-name > svg {
+  color: var(--amber);
+}
 .op-banner {
   display: flex;
   align-items: center;
