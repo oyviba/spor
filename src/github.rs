@@ -352,6 +352,71 @@ pub fn list_pulls(dir: &Path, filter: PullFilter) -> Result<Vec<Pull>, String> {
     Ok(pulls)
 }
 
+/// An open pull request somewhere on a host that waits for your review.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReviewRequest {
+    /// `owner/name`.
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub updated: i64,
+    pub url: String,
+}
+
+fn parse_review_requests(out: &str) -> Vec<ReviewRequest> {
+    out.lines()
+        .filter_map(
+            |line| match line.split('\t').collect::<Vec<_>>().as_slice() {
+                ["rr", repo, number, title, author, updated, url, ..] => Some(ReviewRequest {
+                    repo: repo.to_string(),
+                    number: number.parse().ok()?,
+                    title: unescape(title),
+                    author: author.to_string(),
+                    updated: parse_time(updated),
+                    url: url.to_string(),
+                }),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+/// Every open pull request on `host` (`github.com`, or an Enterprise host)
+/// that waits for your review, across all repositories: one search, not one
+/// call per repository.
+pub fn review_requests(host: &str) -> Result<Vec<ReviewRequest>, String> {
+    let jq = r#".[] | ["rr", .repository.nameWithOwner, (.number|tostring), .title, (.author.login // ""), .updatedAt, .url] | @tsv"#;
+    let out = Command::new("gh")
+        .env("GH_HOST", host)
+        .args([
+            "search",
+            "prs",
+            "--review-requested=@me",
+            "--state=open",
+            "--limit",
+            "100",
+            "--json",
+            "repository,number,title,author,updatedAt,url",
+            "--jq",
+            jq,
+        ])
+        .output()
+        .map_err(|e| format!("Couldn't run gh: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(err
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("gh failed")
+            .to_string());
+    }
+    let mut found = parse_review_requests(&String::from_utf8_lossy(&out.stdout));
+    found.sort_by_key(|r| std::cmp::Reverse(r.updated));
+    Ok(found)
+}
+
 /// Whether GitHub would let the PR merge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mergeable {
@@ -1147,6 +1212,19 @@ pub fn list_runs(
     Ok(parse_runs(&gh(dir, &repo, &args)?))
 }
 
+/// The runs that are failing now: for each workflow on one of `branches`,
+/// its latest run, if that failed. A re-run that passes, or a newer push
+/// that does, takes the failure off the list. `runs` is newest first, as
+/// `list_runs` gives them.
+pub fn failing_runs(runs: Vec<Run>, branches: &[String]) -> Vec<Run> {
+    let mut seen = std::collections::HashSet::new();
+    runs.into_iter()
+        .filter(|r| branches.contains(&r.branch))
+        .filter(|r| seen.insert((r.workflow.clone(), r.branch.clone())))
+        .filter(|r| r.status == Status::Failure)
+        .collect()
+}
+
 /// The names of the repository's active workflows, sorted.
 pub fn list_workflows(dir: &Path) -> Result<Vec<String>, String> {
     let repo = repo(dir)?;
@@ -1794,6 +1872,49 @@ mod tests {
         assert_eq!(d.jobs[1].status, Status::Running);
         assert_eq!(d.jobs[1].steps[0].status, Status::Running);
         assert_eq!(parse_runs(out).len(), 1);
+    }
+
+    #[test]
+    fn failing_runs_are_the_latest_per_workflow_and_branch() {
+        let run = |id: u64, workflow: &str, branch: &str, status: Status| Run {
+            id,
+            number: id,
+            workflow: workflow.into(),
+            title: String::new(),
+            branch: branch.into(),
+            sha: String::new(),
+            event: "push".into(),
+            status,
+            attempt: 1,
+            created: 0,
+            updated: 0,
+            url: String::new(),
+        };
+        // Newest first.
+        let runs = vec![
+            run(6, "CI", "feat/x", Status::Success),
+            run(5, "CI", "agent/7-fix", Status::Failure),
+            run(4, "Lint", "feat/x", Status::Failure),
+            run(3, "CI", "feat/x", Status::Failure),
+            run(2, "CI", "someone-else", Status::Failure),
+            run(1, "CI", "agent/7-fix", Status::Running),
+        ];
+        let branches = vec!["feat/x".to_string(), "agent/7-fix".to_string()];
+        let ids: Vec<u64> = failing_runs(runs, &branches).iter().map(|r| r.id).collect();
+        assert_eq!(ids, [5, 4]);
+    }
+
+    #[test]
+    fn parses_review_requests() {
+        let out = "rr\to/r\t12\tFix the \\tthing\tada\t2026-10-30T10:00:00Z\thttps://github.com/o/r/pull/12\n\
+                   rr\to/r\tnope\tbad\tada\t\t\n\
+                   other line\n";
+        let found = parse_review_requests(out);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].repo, "o/r");
+        assert_eq!(found[0].number, 12);
+        assert_eq!(found[0].title, "Fix the \tthing");
+        assert_eq!(found[0].updated, parse_time("2026-10-30T10:00:00Z"));
     }
 
     #[test]
