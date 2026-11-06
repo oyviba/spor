@@ -475,6 +475,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           transcript: t.transcript,
           runs: t.runs.map((r, i) => ({ ...r, prompt: r.prompt || promptOf(t, i) })),
           conflicts: t.summary.id === "dark-mode-dashboard" ? ["src/styles/theme.css"] : [],
+          undoes: [],
           undoable: last && !last.undone && last.state !== "running" ? last.index : null,
           asks: t.asks ?? [],
           listening: t.summary.run?.state === "running",
@@ -622,8 +623,8 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
       }
       case "push_task": {
         const t = find(id);
-        const k = t.summary.stats.unpushed;
-        t.summary.stats = { ...t.summary.stats, unpushed: 0 };
+        const k = t.summary.stats.unpushed + (args.commitUncommitted && t.summary.stats.uncommitted > 0 ? 1 : 0);
+        t.summary.stats = { ...t.summary.stats, unpushed: 0, ...(args.commitUncommitted ? { uncommitted: 0 } : {}) };
         return k ? `Pushed ${k} commits to #${t.summary.pull}` : `${t.summary.branch} is up to date`;
       }
       case "task_pulls":

@@ -35,6 +35,7 @@ interface Props {
   onLand: (merge: boolean, commitUncommitted: boolean) => unknown;
   onDiscard: () => unknown;
   onAskRebase: () => void;
+  onAskRestore: () => void;
   onOpenFolder: () => unknown;
   onCopy: (text: string, what: string) => void;
   onShowBranch: () => void;
@@ -145,6 +146,7 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
             onLand={p.onLand}
             onDiscard={p.onDiscard}
             onAskRebase={p.onAskRebase}
+            onAskRestore={p.onAskRestore}
             onShowBranch={p.onShowBranch}
             {...p.github}
           />

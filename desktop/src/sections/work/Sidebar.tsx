@@ -1,6 +1,6 @@
 import type { WorkItem, Shelf, Filter } from "./items";
 import { unseen } from "./items";
-import { statusOf } from "../agents/status";
+import { isOpen, statusOf } from "../agents/status";
 import { ago } from "../agents/transcript";
 import { pullStatus } from "../pulls/PullsSection";
 import { useNow } from "../../shared/hooks";
@@ -56,7 +56,7 @@ export function Sidebar(p: Props) {
     const time = i.kind === "task" ? ago(i.task.run?.ended ?? i.task.run?.started ?? i.task.created, at) : ago(i.updated, at);
     const stats =
       i.kind === "task"
-        ? !i.task.landed && i.task.stats.files > 0 && i.task.stats
+        ? isOpen(i.task) && i.task.stats.files > 0 && i.task.stats
         : i.kind === "branch"
           ? i.branch.files > 0 && i.branch
           : i.pull;
@@ -84,7 +84,9 @@ export function Sidebar(p: Props) {
             {i.kind === "task"
               ? i.task.landed
                 ? `landed on ${i.task.base}`
-                : i.task.branch
+                : i.task.closed
+                  ? "pull request closed"
+                  : i.task.branch
               : i.kind === "branch"
                 ? i.branch.name
                 : `#${i.pull.number} · ${i.pull.author}`}

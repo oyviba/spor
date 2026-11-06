@@ -387,6 +387,121 @@ impl Repo {
         }
     }
 
+    /// The tree merging `a` and `b` would give, without touching anything;
+    /// None when the merge would conflict.
+    pub fn merged_tree(&self, a: &str, b: &str) -> Option<String> {
+        let out = self
+            .run(&["merge-tree", "--write-tree", "--no-messages", a, b])
+            .ok()?;
+        if out.status.code() != Some(0) {
+            return None;
+        }
+        let tree = String::from_utf8_lossy(&out.stdout);
+        tree.lines().next().map(str::to_string)
+    }
+
+    /// The oldest commit `branch`'s reflog remembers: for a branch created
+    /// here, what it was created from. None without a reflog.
+    pub fn first_logged(&self, branch: &str) -> Option<String> {
+        let reference = format!("refs/heads/{branch}");
+        let out = self
+            .run_ok(&["log", "-g", "--format=%H", &reference, "--"])
+            .ok()?;
+        out.lines().last().map(str::to_string)
+    }
+
+    /// The commits `range` (e.g. `main..feature`) holds.
+    pub fn commits_in(&self, range: &str) -> Vec<String> {
+        self.run_ok(&["rev-list", range, "--"])
+            .map(|s| s.lines().map(str::to_string).collect())
+            .unwrap_or_default()
+    }
+
+    /// The files that differ between two revisions (or trees).
+    pub fn changed_paths(&self, from: &str, to: &str) -> Vec<String> {
+        self.run_ok(&[
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--no-ext-diff",
+            "--name-only",
+            from,
+            to,
+            "--",
+        ])
+        .map(|s| s.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+    }
+
+    /// Lines of `from` that are gone in `to`, per file in `paths`: each
+    /// file's removed runs as (first line, count), one-based in `from`.
+    pub fn removed_lines(
+        &self,
+        from: &str,
+        to: &str,
+        paths: &[String],
+    ) -> Vec<(String, Vec<(usize, usize)>)> {
+        if paths.is_empty() {
+            return Vec::new();
+        }
+        let mut args = vec![
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--no-ext-diff",
+            "--no-renames",
+            "--no-prefix",
+            "-U0",
+            from,
+            to,
+            "--",
+        ];
+        args.extend(paths.iter().map(String::as_str));
+        let Ok(out) = self.run_ok(&args) else {
+            return Vec::new();
+        };
+        parse_removed(&out)
+    }
+
+    /// Every line `to` has that `from` doesn't, anywhere, trimmed: to tell
+    /// code that moved from code that went.
+    pub fn added_lines(&self, from: &str, to: &str) -> std::collections::HashSet<String> {
+        let out = self
+            .run_ok(&[
+                "diff",
+                "--no-ext-diff",
+                "--no-renames",
+                "-U0",
+                from,
+                to,
+                "--",
+            ])
+            .unwrap_or_default();
+        out.lines()
+            .filter(|l| !l.starts_with("+++ "))
+            .filter_map(|l| l.strip_prefix('+'))
+            .map(|l| l.trim().to_string())
+            .collect()
+    }
+
+    /// Who wrote `path`'s lines in `runs` (first line, count) as of `rev`.
+    pub fn blame_runs(&self, rev: &str, path: &str, runs: &[(usize, usize)]) -> Vec<BlameLine> {
+        let ranges: Vec<String> = runs
+            .iter()
+            .filter(|(_, n)| *n > 0)
+            .map(|(start, n)| format!("-L{start},+{n}"))
+            .collect();
+        if ranges.is_empty() {
+            return Vec::new();
+        }
+        let mut args = vec!["blame", "--porcelain"];
+        args.extend(ranges.iter().map(String::as_str));
+        args.extend([rev, "--", path]);
+        self.run_ok(&args)
+            .map(|out| parse_blame(&out))
+            .unwrap_or_default()
+    }
+
     /// Merge `branch` with a merge commit even when it could fast-forward.
     pub fn merge_no_ff(&self, branch: &str, message: &str) -> Result<Outcome, String> {
         let out = self.run(&["merge", "--no-ff", "-m", message, branch])?;
@@ -1379,6 +1494,37 @@ fn parse_worktrees(out: &str) -> Vec<Worktree> {
 /// `<sha> <orig-line> <final-line> [<group-size>]`, followed by the commit's
 /// fields the first time that commit appears, then the line itself after a
 /// tab.
+/// The removed runs in a `-U0 --no-prefix` diff, per file: from each
+/// `@@ -start,count +… @@` (count 1 when left out, 0 for pure additions).
+fn parse_removed(out: &str) -> Vec<(String, Vec<(usize, usize)>)> {
+    let mut files: Vec<(String, Vec<(usize, usize)>)> = Vec::new();
+    // Between `diff --git` and the first hunk; after that a `--- ` line is
+    // a removed line that started with `-- `.
+    let mut header = false;
+    for line in out.lines() {
+        if line.starts_with("diff --git ") {
+            header = true;
+        } else if let Some(path) = line.strip_prefix("--- ").filter(|_| header) {
+            // `/dev/null` for an added file, which removes nothing.
+            files.push((path.to_string(), Vec::new()));
+        } else if let Some(hunk) = line.strip_prefix("@@ -") {
+            header = false;
+            let old = hunk.split(' ').next().unwrap_or("");
+            let (start, count) = match old.split_once(',') {
+                Some((s, c)) => (s.parse().unwrap_or(0), c.parse().unwrap_or(0)),
+                None => (old.parse().unwrap_or(0), 1),
+            };
+            if let Some((_, runs)) = files.last_mut() {
+                if count > 0 && start > 0 {
+                    runs.push((start, count));
+                }
+            }
+        }
+    }
+    files.retain(|(path, runs)| path != "/dev/null" && !runs.is_empty());
+    files
+}
+
 fn parse_blame(out: &str) -> Vec<BlameLine> {
     #[derive(Default, Clone)]
     struct Info {

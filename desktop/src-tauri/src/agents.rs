@@ -260,12 +260,21 @@ pub(crate) struct TaskDetail {
     runs: Vec<RunInfo>,
     /// Files that would conflict if the task landed on its base now.
     conflicts: Vec<String>,
+    /// Work that came to the base after the task started and landing it
+    /// would take back out, per file (`Tasks::undoes`).
+    undoes: Vec<Undone>,
     /// The run "Undo this run" would take back, if any.
     undoable: Option<usize>,
     /// Questions the agent is waiting on.
     asks: Vec<AskInfo>,
     /// The running agent can be answered, steered and interrupted.
     listening: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct Undone {
+    path: String,
+    lines: usize,
 }
 
 #[derive(Serialize)]
@@ -386,6 +395,15 @@ pub(crate) fn task_detail(app: State<App>, id: String) -> Result<TaskDetail, Str
             .collect(),
         listening: runs.listening(),
         runs: runs.list().into_iter().map(RunInfo::from).collect(),
+        undoes: if conflicts.is_empty() {
+            tasks
+                .undoes(&task)
+                .into_iter()
+                .map(|(path, lines)| Undone { path, lines })
+                .collect()
+        } else {
+            Vec::new()
+        },
         conflicts,
     })
 }
@@ -735,11 +753,17 @@ fn remote(app: &App) -> Result<String, String> {
 
 /// Push the agent's new commits to the task's pull request.
 #[tauri::command(async)]
-pub(crate) fn push_task(app: State<App>, id: String) -> Result<String, String> {
+pub(crate) fn push_task(
+    app: State<App>,
+    id: String,
+    commit_uncommitted: Option<bool>,
+) -> Result<String, String> {
     let (tasks, task) = app.task(&id)?;
-    let n = tasks.stats(&task).unpushed;
+    let stats = tasks.stats(&task);
+    let commit = commit_uncommitted.unwrap_or(false) && stats.uncommitted > 0;
+    let n = stats.unpushed + usize::from(commit);
     tasks
-        .push(&task, &remote(&app)?)
+        .push(&task, &remote(&app)?, commit)
         .map_err(|e| first_line(&e))?;
     Ok(match (n, task.pull) {
         (0, _) => format!("{} is up to date", task.branch),

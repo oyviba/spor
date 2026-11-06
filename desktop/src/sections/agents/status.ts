@@ -7,6 +7,10 @@ import { activityAt } from "../work/items";
 
 import type { Status } from "../../shared/StatusPill";
 
+/** Not landed or closed yet. */
+export function isOpen(t: TaskSummary): boolean {
+  return !t.landed && !t.closed;
+}
 
 /** Once it's a pull request and you've seen the agent's work, what the PR
  * is waiting on (#24). */
@@ -21,7 +25,7 @@ function pullStatus(pr: Pull): Status {
 }
 
 export function statusOf(t: TaskSummary, seenAt: number | undefined, nowMs: number, pull?: Pull): Status | null {
-  if (t.landed) return null;
+  if (!isOpen(t)) return null;
   if (t.stats.missing) return { label: "Folder gone", tone: "amber", live: false };
   const run = t.run;
   if (t.asks > 0) return { label: "Needs you", tone: "amber", live: false };
