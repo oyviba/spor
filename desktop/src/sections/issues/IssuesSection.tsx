@@ -9,7 +9,8 @@ import { Markdown } from "../../shared/Markdown";
 import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
-import { ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
+import { isOpen } from "../agents/status";
+import { ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
 import { ArrowUp, Bot, Branch, External, MessageSquare, Tag, Users } from "../../shared/Icons";
 
 type Filter = "assigned" | "yours" | "open" | "closed";
@@ -76,7 +77,7 @@ export function IssuesSection() {
 
   // The newest task on an issue: an open one, else the last that landed.
   const taskFor = (n: number) =>
-    tasks.find((t) => t.issue === n && !t.landed) ?? tasks.find((t) => t.issue === n);
+    tasks.find((t) => t.issue === n && isOpen(t)) ?? tasks.find((t) => t.issue === n);
   const shown = detail?.issue.number === selected ? detail : null;
   const task = shown ? taskFor(shown.issue.number) : undefined;
 
@@ -131,7 +132,7 @@ export function IssuesSection() {
                         <MessageSquare size={10} /> {i.comments}
                       </span>
                     )}
-                    <StatusPill status={issueStatus(i, t && !t.landed ? t : undefined)} />
+                    <StatusPill status={issueStatus(i, t && isOpen(t) ? t : undefined)} />
                   </div>
                 </button>
               );
@@ -154,7 +155,7 @@ export function IssuesSection() {
                   <h2 title={shown.issue.title}>
                     {shown.issue.title} <span className="muted num">#{shown.issue.number}</span>
                   </h2>
-                  <StatusPill status={issueStatus(shown.issue, task && !task.landed ? task : undefined)} />
+                  <StatusPill status={issueStatus(shown.issue, task && isOpen(task) ? task : undefined)} />
                 </>
               }
             />
@@ -166,7 +167,7 @@ export function IssuesSection() {
               </div>
               <IssueCard detail={shown} task={task} onChanged={loadDetail} />
             </div>
-            {shown.issue.open && !(task && !task.landed) && (
+            {shown.issue.open && !(task && isOpen(task)) && (
               <StartTask
                 key={shown.issue.number}
                 detail={shown}
@@ -237,7 +238,7 @@ function IssueCard({ detail, task, onChanged }: { detail: IssueDetail; task?: Ta
           <button className="inspector-row action" onClick={() => shell.go({ section: "agents", taskId: task.id })}>
             <Bot size={13} />
             <span className="truncate">
-              {task.landed ? "Landed by" : "Agent task:"} <b>{task.id}</b>
+              {task.landed ? "Landed by" : task.closed ? "Closed task:" : "Agent task:"} <b>{task.id}</b>
             </span>
           </button>
         )}
@@ -344,7 +345,10 @@ function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarted: (t: 
               <option value="none">No agent — I'll run one</option>
             </select>
             {settings.agent === "claude" && (
-              <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
+              <>
+                <ModelPicker settings={settings} onSettings={setSettings} />
+                <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
+              </>
             )}
             <span className="flex-1" />
             <AttachButton onFiles={attachments.add} />

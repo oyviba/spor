@@ -1,5 +1,5 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import type { AgentChoice, Ask, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
+import type { AgentChoice, Ask, Effort, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
 import { useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
@@ -10,7 +10,28 @@ export interface AgentSettings {
   agent: "claude" | "command" | "none";
   template: string;
   mode: Mode;
+  /** Claude's model and effort; "" leaves it to Claude Code's own settings. */
+  model: string;
+  effort: Effort | "";
 }
+
+/** Claude Code's aliases for the latest of each model. */
+export const MODELS: { id: string; label: string }[] = [
+  { id: "", label: "Default model" },
+  { id: "fable", label: "Fable" },
+  { id: "opus", label: "Opus" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "haiku", label: "Haiku" },
+];
+
+export const EFFORTS: { id: Effort | ""; label: string }[] = [
+  { id: "", label: "Default effort" },
+  { id: "low", label: "Low effort" },
+  { id: "medium", label: "Medium effort" },
+  { id: "high", label: "High effort" },
+  { id: "xhigh", label: "Extra high effort" },
+  { id: "max", label: "Max effort" },
+];
 
 export const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "supervised", label: "Supervised", hint: "Asks before commands and file edits" },
@@ -26,9 +47,48 @@ export function useAgentSettings(): [AgentSettings, (s: AgentSettings) => void] 
     agent: "claude",
     template: "",
     mode: "acceptEdits",
+    model: "",
+    effort: "",
   });
   const mode = stored.mode ?? (stored.allowCommands ? "full" : "acceptEdits");
-  return [{ agent: stored.agent, template: stored.template, mode }, set];
+  return [
+    { agent: stored.agent, template: stored.template, mode, model: stored.model ?? "", effort: stored.effort ?? "" },
+    set,
+  ];
+}
+
+/** Which Claude model a new task runs, and how hard it thinks. */
+export function ModelPicker({ settings, onSettings }: { settings: AgentSettings; onSettings: (s: AgentSettings) => void }) {
+  return (
+    <>
+      <select
+        className="chip-select"
+        value={settings.model}
+        onChange={(e) => onSettings({ ...settings, model: e.target.value })}
+        title="The model Claude Code runs. Default: whatever Claude Code is set to"
+        aria-label="Model"
+      >
+        {MODELS.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+      <select
+        className="chip-select"
+        value={settings.effort}
+        onChange={(e) => onSettings({ ...settings, effort: e.target.value as Effort | "" })}
+        title="How hard Claude thinks. Default: whatever Claude Code is set to"
+        aria-label="Effort"
+      >
+        {EFFORTS.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+    </>
+  );
 }
 
 export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
@@ -51,7 +111,9 @@ export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode)
 }
 
 export function choiceOf(s: AgentSettings): AgentChoice {
-  return s.agent === "command" ? { kind: "command", template: s.template } : { kind: s.agent };
+  if (s.agent === "command") return { kind: "command", template: s.template };
+  if (s.agent === "claude") return { kind: "claude", model: s.model, effort: s.effort };
+  return { kind: "none" };
 }
 
 interface Props {

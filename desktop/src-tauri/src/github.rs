@@ -319,6 +319,14 @@ pub(crate) fn job_log(app: State<App>, id: u64) -> Result<Vec<LogLine>, String> 
         .collect())
 }
 
+/// A failed job (its failing step and the end of its log), as a follow-up
+/// for the agent working on its branch.
+#[tauri::command(async)]
+pub(crate) fn job_feedback(app: State<App>, run: u64, job: u64) -> Result<String, String> {
+    let failure = gh::fetch_job_failure(&root(&app)?, run, job).map_err(|e| first_line(&e))?;
+    gh::failure_feedback(&[failure], None).ok_or_else(|| "Nothing failed".to_string())
+}
+
 // ---- Issues ----------------------------------------------------------------
 
 #[derive(Serialize)]

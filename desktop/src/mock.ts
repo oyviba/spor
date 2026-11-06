@@ -64,6 +64,7 @@ const summary = (id: string, prompt: string, created: number, over: Partial<Task
   worktree: `/Users/you/code/postplan.spor/${id}`,
   created,
   landed: null,
+  closed: false,
   stats: stats(),
   run: null,
   runs: 0,
@@ -372,7 +373,12 @@ function start(t: MockTask, prompt: string, agent: AgentChoice) {
   const r = run({
     index: t.runs.length,
     agent: agent.kind === "command" ? "command" : "claude",
-    label: agent.kind === "command" ? "Custom command" : "Claude Code",
+    label:
+      agent.kind === "command"
+        ? "Custom command"
+        : ["Claude Code", agent.kind === "claude" && agent.model, agent.kind === "claude" && agent.effort && `${agent.effort} effort`]
+            .filter(Boolean)
+            .join(" · "),
     state: "running",
     exit_code: null,
     started: now(),
@@ -413,6 +419,8 @@ const SLOW: Record<string, number> = {
   issue_action: 1200,
   run_action: 1200,
   review_feedback: 800,
+  check_feedback: 900,
+  job_feedback: 700,
   push_tag: 1200,
   delete_remote_branch: 1200,
   pulls: 900,
@@ -443,8 +451,8 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         return { ...repo, root: args.path as string };
       case "list_tasks":
         return [
-          ...tasks.filter((t) => !t.summary.landed).sort((a, b) => b.summary.created - a.summary.created),
-          ...tasks.filter((t) => t.summary.landed),
+          ...tasks.filter((t) => !(t.summary.landed || t.summary.closed)).sort((a, b) => b.summary.created - a.summary.created),
+          ...tasks.filter((t) => t.summary.landed || t.summary.closed),
         ].map((t) => structuredClone(t.summary));
       case "task_detail": {
         const t = find(id);
@@ -568,7 +576,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
       case "create_issue_task": {
         const n = args.number as number;
         const d = issues.find((x) => x.issue.number === n)!;
-        if (tasks.some((t) => t.summary.issue === n && !t.summary.landed)) throw `#${n} already has a task`;
+        if (tasks.some((t) => t.summary.issue === n && !(t.summary.landed || t.summary.closed))) throw `#${n} already has a task`;
         const prompt = (args.prompt as string).trim();
         const sid = `${n}-${slug(d.issue.title)}`;
         const t: MockTask = {
@@ -606,11 +614,24 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         return k ? `Pushed ${k} commits to #${t.summary.pull}` : `${t.summary.branch} is up to date`;
       }
       case "task_pulls":
-        return Object.values(taskPulls).filter((p) => tasks.some((t) => t.summary.id === p.task && !t.summary.landed));
+        return Object.values(taskPulls).filter((p) => tasks.some((t) => t.summary.id === p.task && !(t.summary.landed || t.summary.closed)));
       case "review_feedback": {
         const t = find(id);
         if (t.summary.pull == null) throw `${id} has no pull request`;
         return `Review on pull request #${t.summary.pull}:\n\ngrace (requested changes):\n> Keep \`next\` relative — reject \`//evil.example\` too.\n\nOn the diff:\n- \`src/routes/login.ts:12\` — Add a test for a protocol-relative URL. (grace)\n\nAddress each point (or say why not), make sure it still builds and the tests pass, and commit.`;
+      }
+      case "check_feedback": {
+        const t = find(id);
+        if (t.summary.pull == null) throw `${id} has no pull request`;
+        return `CI failed on pull request #${t.summary.pull}:\n\n\`CI / test\` failed at step “Run tests”.\nThe end of its log:\n\`\`\`\nFAIL src/routes/login.test.ts\n  ✕ rejects protocol-relative URLs\n\`\`\`\n\nFind the cause, fix it, make sure it builds and the tests pass locally, and commit.`;
+      }
+      case "close_task": {
+        const t = find(id);
+        const index = tasks.indexOf(t);
+        const message = `Closed ${id} — its pull request was closed`;
+        undoable = { message, task: structuredClone(t), index };
+        t.summary.closed = true;
+        return message;
       }
       case "settle_task": {
         const t = find(id);
@@ -767,6 +788,10 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       return args.action === "cancel" ? "Cancelling the run" : "Re-running";
     case "job_log":
       return f.jobLogs[args.id as number] ?? [];
+    case "job_feedback": {
+      const lines = (f.jobLogs[args.job as number] ?? []) as { text: string }[];
+      return `CI failed:\n\nThe end of its log:\n\`\`\`\n${lines.slice(-200).map((l) => l.text).join("\n")}\n\`\`\`\n\nFind the cause, fix it, make sure it builds and the tests pass locally, and commit.`;
+    }
     case "askpass_pending":
       return null;
     case "askpass_answer":

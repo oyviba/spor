@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { RepoInfo } from "../../types";
-import { ModePicker, type AgentSettings } from "./Composer";
+import { ModelPicker, ModePicker, type AgentSettings } from "./Composer";
 import { ArrowUp, Branch } from "../../shared/Icons";
 import { Button } from "../../shared/Button";
 import { useShell } from "../../shared/app";
@@ -79,7 +79,10 @@ export function NewTask({ repo, settings, onSettings, onCreate }: Props) {
               <option value="none">No agent — I'll run one</option>
             </select>
             {settings.agent === "claude" && (
-              <ModePicker mode={settings.mode} onChange={(mode) => onSettings({ ...settings, mode })} />
+              <>
+                <ModelPicker settings={settings} onSettings={onSettings} />
+                <ModePicker mode={settings.mode} onChange={(mode) => onSettings({ ...settings, mode })} />
+              </>
             )}
             <span className="flex-1" />
             <AttachButton onFiles={attachments.add} />
