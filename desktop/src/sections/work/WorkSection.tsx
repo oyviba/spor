@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import type { LineComment, Pull, RunPatch, TaskDetail, TaskPull, TaskSummary, WorkBranch } from "../../types";
 import { activityAt, matches, moveTo, shelve, workItems, type Filter, type WorkItem } from "./items";
+import { isOpen } from "../agents/status";
+import { catchUpPrompt } from "../agents/prompts";
 import { useChanged, usePoll, useRepoChanges, useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { EmptyState } from "../../shared/Layout";
@@ -100,7 +102,7 @@ export function WorkSection() {
   // Open tasks' pull requests (one `gh` call), and a note when one merges.
   const [pulls, setPulls] = useState<Record<string, TaskPull>>({});
   const merged = useRef<Set<string> | null>(null);
-  const openTasks = tasks.filter((t) => !t.landed).length;
+  const openTasks = tasks.filter(isOpen).length;
   const refreshPulls = useCallback(async () => {
     let list: TaskPull[];
     try {
@@ -109,14 +111,18 @@ export function WorkSection() {
       return; // Not GitHub, or no `gh`: tasks just have no PRs.
     }
     setPulls(Object.fromEntries(list.map((p) => [p.task, p])));
-    const now = new Set(list.filter((p) => p.pull.state === "merged").map((p) => p.task));
+    const now = new Set(list.filter((p) => p.pull.state === "merged" || p.pull.state === "closed").map((p) => p.task));
     if (merged.current)
       for (const p of list)
         if (now.has(p.task) && !merged.current.has(p.task))
-          toast(`#${p.pull.number} merged — ${p.task} can be cleaned up`, "ok", false, {
-            label: "Clean up",
-            run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`),
-          });
+          toast(
+            `#${p.pull.number} ${p.pull.state === "merged" ? "merged" : "was closed"} — ${p.task} can be cleaned up`,
+            "ok",
+            false,
+            p.pull.state === "merged"
+              ? { label: "Clean up", run: () => settle(p.task, p.merge_commit ?? `#${p.pull.number}`) }
+              : { label: "Close task", run: () => close(p.task) },
+          );
     merged.current = now;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   usePoll(refreshPulls, 30_000, [repo.root, openTasks], openTasks > 0);
@@ -201,7 +207,7 @@ export function WorkSection() {
   useEffect(() => {
     for (const [id, messages] of Object.entries(queue)) {
       const t = tasks.find((x) => x.id === id);
-      if (!t || t.landed) {
+      if (!t || !isOpen(t)) {
         if (!t && tasks.length > 0) setQueue(({ [id]: _, ...rest }) => rest);
         continue;
       }
@@ -298,10 +304,17 @@ export function WorkSection() {
       await refreshPulls();
     });
 
+  const close = (id: string) =>
+    shell.act(() => api.closeTask(id), { pending: "Cleaning up…" }).then(async () => {
+      await refreshTasks();
+      await refreshPulls();
+    });
+
   const github = (id: string) => ({
     pull: pulls[id],
-    onShowIssue: (n: number) => shell.go({ section: "issues", number: n }),
-    onShowPull: (n: number) => shell.go({ section: "pulls", number: n }),
+    // The work item's own issue and PR: show them, not the item again.
+    onShowIssue: (n: number) => shell.go({ section: "issues", number: n }, { browse: true }),
+    onShowPull: (n: number) => shell.go({ section: "pulls", number: n }, { browse: true }),
     onPublish: (draft: boolean, commitUncommitted: boolean) =>
       shell
         .act(() => api.publishTask(id, draft, commitUncommitted), {
@@ -319,17 +332,18 @@ export function WorkSection() {
         await send(text);
         toast(shown?.task.run?.state === "running" ? "The review is queued for when the agent is done" : `Sent the review to ${id}`);
       }, fail),
+    onSendFailure: () =>
+      api.checkFeedback(id).then(async (text) => {
+        await send(text);
+        toast(shown?.task.run?.state === "running" ? "The failure is queued for when the agent is done" : `Sent the failure to ${id}`);
+      }, fail),
     onSettle: (commit: string) => settle(id, commit),
+    onClose: () => close(id),
   });
 
   const askRebase = () => {
     if (!shown) return;
-    const base = shown.task.base;
-    send(
-      `${base} has moved on and this branch now conflicts with it in ${shown.conflicts.join(", ")}. ` +
-        `Rebase onto ${base} (git rebase ${base}), resolve the conflicts keeping both sides' intent, ` +
-        `make sure it still builds and the tests pass, and commit.`,
-    );
+    send(catchUpPrompt(shown.task.base, shown.conflicts, shown.task.pull != null));
   };
 
   const taskComments = selectedId ? (comments[selectedId] ?? []) : [];
