@@ -237,7 +237,7 @@ try {
   console.log("Inbox");
   await toastGone();
   await section("Inbox", ".task-row");
-  await w.until(`return document.querySelectorAll(".task-list .task-row").length === 2`, "the Inbox's rows", 10000);
+  await w.until(`return $$(".task-list .task-row").length === 2`, "the Inbox's rows", 10000);
   const inbox = await w.text(".task-list");
   check(inbox.includes("CI failed on agent/let-greet-take-optional"), "the Inbox lists the failed run on the agent's branch");
   check(inbox.includes("#12") && !inbox.includes("#11"), "…and #12's review request, but not the merged #11");

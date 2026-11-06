@@ -55,7 +55,7 @@ try {
   await w.shot("2a-asking");
 
   console.log("The Inbox has it (#42)");
-  await w.js(`document.querySelector('.rail-item[aria-label="Inbox"]').click()`);
+  await w.js(`$('.rail-item[aria-label="Inbox"]').click()`);
   await w.waitFor(".list-label.needs-you");
   check((await w.text(".task-list")).includes("Let greet() take an optional title"), "the Inbox lists the question");
   await w.clickText(".task-row", "Let greet()");
