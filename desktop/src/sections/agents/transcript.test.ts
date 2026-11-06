@@ -83,8 +83,8 @@ test("consecutive tool calls merge into one block", () => {
 test("questions take their answers, and a refusal keeps the run open", () => {
   const items: Item[] = [
     { kind: "prompt", text: "a" },
-    { kind: "ask", id: "q1", tool: "Bash", detail: "make test" },
-    { kind: "answer", id: "q1", allow: false, message: "use cargo" },
+    { kind: "ask", id: "q1", tool: "Bash", detail: "make test", session: null },
+    { kind: "answer", id: "q1", allow: false, message: "use cargo", always: false },
     { kind: "steer", text: "also docs" },
     { kind: "text", text: "ok" },
     { kind: "done", ok: true, summary: "ok", cost_usd: null, turns: null, seconds: 3 },
@@ -95,7 +95,7 @@ test("questions take their answers, and a refusal keeps the run open", () => {
     id: "q1",
     tool: "Bash",
     detail: "make test",
-    answer: { allow: false, message: "use cargo" },
+    answer: { allow: false, message: "use cargo", always: false },
   });
   assert.deepEqual(run.blocks[1], { kind: "steer", text: "also docs" });
   assert.equal(run.fold, null);

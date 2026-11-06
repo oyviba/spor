@@ -1,25 +1,33 @@
 //! The Tauri app's backend: spor's core (`spor::git`, `spor::tasks`,
-//! `spor::agent`, `spor::github`, `spor::graph`) exposed as commands, one
-//! module per section of the app. Commands stay thin: the work is in the
+//! `spor::agent`, `spor::github`, `spor::graph`, `spor::askpass`) exposed as
+//! commands, one module per section of the app. Commands stay thin: the work is in the
 //! core, and these only turn it into JSON and record what Undo needs.
 
 mod agents;
 mod changes;
 mod github;
 mod history;
+mod inbox;
 mod undo;
+mod watch;
+mod work;
 
 use serde::Serialize;
 use spor::git::Repo;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Default)]
 pub(crate) struct App {
     repo: Mutex<Option<Repo>>,
     undo: undo::Stack,
+    /// Credential prompts from git and ssh waiting for the user, by id.
+    /// Dropping one answers Cancel, so they're kept until answered.
+    asks: Mutex<(u64, std::collections::BTreeMap<u64, spor::askpass::Request>)>,
+    /// The open repository's watcher, sending the UI its changes.
+    watch: Mutex<Option<watch::Watch>>,
 }
 
 impl App {
@@ -39,6 +47,9 @@ struct RepoInfo {
     branch: Option<String>,
     branches: Vec<String>,
     default_base: Option<String>,
+    /// Where new tasks start unless another branch is picked: origin's
+    /// copy of the default branch (`origin/main`) when there is one.
+    default_start: Option<String>,
     claude: bool,
 }
 
@@ -61,6 +72,7 @@ fn repo_info(repo: &Repo) -> RepoInfo {
         branch: repo.tracking().ok().and_then(|t| t.branch),
         branches,
         default_base: repo.default_base_branch(),
+        default_start: repo.default_start(),
         claude: spor::agent::available("claude"),
     }
 }
@@ -71,18 +83,19 @@ fn current_repo(app: State<App>) -> Option<RepoInfo> {
 }
 
 #[tauri::command(async)]
-fn open_repo(app: State<App>, path: String) -> Result<RepoInfo, String> {
+fn open_repo(handle: AppHandle, app: State<App>, path: String) -> Result<RepoInfo, String> {
     let path = expand_home(path.trim());
     let repo = Repo::discover(&path).map_err(|e| first_line(&e))?;
     let info = repo_info(&repo);
+    watch_repo(&handle, &repo);
     tidy(&repo);
     *app.repo.lock().unwrap() = Some(repo);
     app.undo.clear();
     Ok(info)
 }
 
-/// Opening a repository starts with nothing to undo, so the checkpoints of
-/// landed and discarded tasks have outlived their undo window (#41).
+/// Opening a repository starts with nothing to undo, so the run checkpoints
+/// of tasks that are done have outlived their undo window (#41).
 fn tidy(repo: &Repo) {
     let repo = repo.clone();
     std::thread::spawn(move || {
@@ -92,16 +105,13 @@ fn tidy(repo: &Repo) {
     });
 }
 
-/// What the window chrome shows about the repository, and fingerprints the
-/// sections compare to know when to reload: `refs` changes when any branch,
-/// tag or HEAD moves; `index` when anything is staged, committed or checked
-/// out. Cheap enough to poll every couple of seconds.
 /// A notification from the operating system, for when the window is in
 /// the background (an agent needs you, #41).
 #[tauri::command]
-fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+fn notify_os(handle: AppHandle, title: String, body: String) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt as _;
-    app.notification()
+    handle
+        .notification()
         .builder()
         .title(title)
         .body(body)
@@ -109,6 +119,25 @@ fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), Stri
         .map_err(|e| e.to_string())
 }
 
+/// Send the UI an event when `repo` changes (see `watch`), in place of the
+/// last repository's watcher. Without one the UI's slow poll still works.
+fn watch_repo(handle: &AppHandle, repo: &Repo) {
+    let app = handle.state::<App>();
+    let mut current = app.watch.lock().unwrap();
+    *current = None;
+    let to = handle.clone();
+    match watch::start(repo, move |change| {
+        let _ = to.emit(change.event(), ());
+    }) {
+        Ok(w) => *current = Some(w),
+        Err(e) => eprintln!("spor: {e}"),
+    }
+}
+
+/// What the window chrome shows about the repository, and fingerprints the
+/// sections compare to know when to reload: `refs` changes when any branch,
+/// tag or HEAD moves; `index` when anything is staged, committed or checked
+/// out. Reloaded when the watcher says refs or the index changed.
 #[derive(Serialize)]
 struct RepoState {
     branch: Option<String>,
@@ -191,6 +220,158 @@ fn open_url(url: String) -> Result<(), String> {
         .map_err(|e| format!("Couldn't open the link: {e}"))
 }
 
+#[derive(Serialize)]
+struct Credential {
+    id: u64,
+    prompt: String,
+    /// Typed hidden (a passphrase or password, not a username).
+    secret: bool,
+    /// ssh asking yes/no whether to trust a host it hasn't seen.
+    confirm: bool,
+}
+
+/// The oldest credential prompt from a fetch, pull or push that's waiting
+/// for the user, if any. The window polls this.
+#[tauri::command(async)]
+fn askpass_pending(app: State<App>) -> Option<Credential> {
+    let mut asks = app.asks.lock().unwrap();
+    while let Some(request) = spor::askpass::next_request() {
+        asks.0 += 1;
+        let id = asks.0;
+        asks.1.insert(id, request);
+    }
+    asks.1.iter().next().map(|(id, r)| Credential {
+        id: *id,
+        prompt: r.prompt.clone(),
+        secret: r.is_secret(),
+        confirm: r.is_confirmation(),
+    })
+}
+
+/// Answer a credential prompt; `None` cancels it.
+#[tauri::command(async)]
+fn askpass_answer(app: State<App>, id: u64, answer: Option<String>) {
+    if let Some(request) = app.asks.lock().unwrap().1.remove(&id) {
+        request.answer(answer);
+    }
+}
+
+#[derive(Serialize)]
+struct LegacyWorkspace {
+    name: String,
+    color: usize,
+    repos: Vec<String>,
+    last: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LegacyWorkspaces {
+    list: Vec<LegacyWorkspace>,
+    active: usize,
+}
+
+/// The old native app's (GPUI) workspaces, from its `workspaces` file in
+/// the config directory, so switching apps keeps them. Folders that are
+/// gone are left out. `None` when there's no file.
+#[tauri::command(async)]
+fn legacy_workspaces() -> Option<LegacyWorkspaces> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let base = if cfg!(target_os = "macos") {
+        home.map(|h| h.join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.map(|h| h.join(".config")))
+    }?;
+    let text = std::fs::read_to_string(base.join("spor").join("workspaces")).ok()?;
+    let exists = |p: &str| std::path::Path::new(p).is_dir();
+    let mut list: Vec<LegacyWorkspace> = Vec::new();
+    let mut active = 0;
+    for line in text.lines() {
+        let mut fields = line.split('\t');
+        match (fields.next(), fields.next()) {
+            (Some("active"), Some(n)) => active = n.parse().unwrap_or(0),
+            (Some("workspace"), Some(name)) => {
+                let color = fields.next().and_then(|c| c.parse().ok());
+                list.push(LegacyWorkspace {
+                    name: name.to_string(),
+                    color: color.unwrap_or(list.len()),
+                    repos: Vec::new(),
+                    last: None,
+                });
+            }
+            (Some("repo"), Some(path)) if exists(path) => {
+                if let Some(ws) = list.last_mut() {
+                    ws.repos.push(path.to_string());
+                }
+            }
+            (Some("last"), Some(path)) if exists(path) => {
+                if let Some(ws) = list.last_mut() {
+                    ws.last = Some(path.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    if list.is_empty() {
+        return None;
+    }
+    active = active.min(list.len() - 1);
+    Some(LegacyWorkspaces { list, active })
+}
+
+#[derive(Serialize)]
+struct RepoHead {
+    path: String,
+    /// The folder is a repository (it may have moved or been deleted).
+    exists: bool,
+    branch: Option<String>,
+    ahead: usize,
+    behind: usize,
+    /// Changed files, staged or not.
+    changes: usize,
+}
+
+/// A line about each repository for the workspace's list: its branch, how
+/// far it is from its upstream, and how many files it has changed. Local
+/// only (no fetching), so it's quick.
+#[tauri::command(async)]
+fn repo_heads(paths: Vec<String>) -> Vec<RepoHead> {
+    paths
+        .into_iter()
+        .map(|path| match Repo::discover(std::path::Path::new(&path)) {
+            Ok(repo) => {
+                let t = repo.tracking().unwrap_or_default();
+                let changes = repo
+                    .status()
+                    .map(|s| {
+                        s.iter()
+                            .map(|e| e.path.as_str())
+                            .collect::<std::collections::HashSet<_>>()
+                            .len()
+                    })
+                    .unwrap_or(0);
+                RepoHead {
+                    path,
+                    exists: true,
+                    branch: t.branch,
+                    ahead: t.ahead,
+                    behind: t.behind,
+                    changes,
+                }
+            }
+            Err(_) => RepoHead {
+                path,
+                exists: false,
+                branch: None,
+                ahead: 0,
+                behind: 0,
+                changes: 0,
+            },
+        })
+        .collect()
+}
+
 fn fingerprint(value: &impl Hash) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut h);
@@ -221,6 +402,10 @@ pub(crate) fn name_of(value: &impl std::fmt::Debug) -> String {
 }
 
 pub fn run() {
+    // Started from the Dock or Finder, macOS gives the app a bare PATH that
+    // hides gh, claude and Homebrew's git; take the login shell's instead.
+    // First, before any threads.
+    spor::env::fix_path();
     // Claude Code runs under this same executable as its host, so agents
     // can ask before acting and be steered (spor::host, #20).
     if let Ok(me) = std::env::current_exe() {
@@ -241,20 +426,32 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(app)
+        .setup(|tauri| {
+            let handle = tauri.handle();
+            let repo = handle.state::<App>().repo.lock().unwrap().clone();
+            if let Some(repo) = repo {
+                watch_repo(handle, &repo);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             current_repo,
             open_repo,
             repo_state,
             undo,
             open_url,
-            notify,
+            notify_os,
+            askpass_pending,
+            askpass_answer,
+            legacy_workspaces,
+            repo_heads,
+            inbox::inbox_tasks,
+            inbox::inbox_github,
             agents::list_tasks,
             agents::task_detail,
             agents::task_patch,
             agents::create_task,
             agents::send_to_agent,
-            agents::with_comments,
-            agents::ask_to_rebase,
             agents::stop_agent,
             agents::land_task,
             agents::discard_task,
@@ -264,12 +461,21 @@ pub fn run() {
             agents::answer_ask,
             agents::set_mode,
             agents::steer,
+            agents::attach_image,
             agents::skip_setup,
             agents::rerun_setup,
             agents::queue_follow_up,
             agents::unqueue,
             agents::send_queued,
             agents::clean_up_tasks,
+            agents::create_issue_task,
+            agents::publish_task,
+            agents::push_task,
+            agents::task_pulls,
+            agents::review_feedback,
+            agents::check_feedback,
+            agents::close_task,
+            agents::settle_task,
             history::graph,
             history::search_commits,
             history::commit_detail,
@@ -280,6 +486,24 @@ pub fn run() {
             history::cherry_pick,
             history::revert,
             history::merge_branch,
+            history::rename_branch,
+            history::delete_remote_branch,
+            history::rebase_onto,
+            history::reset_to,
+            history::checkout_commit,
+            history::tags,
+            history::create_tag,
+            history::delete_tag,
+            history::push_tag,
+            history::worktrees,
+            history::remove_worktree,
+            history::rewrite_plan,
+            history::rewrite,
+            history::pr_badges,
+            history::pull_request_url,
+            history::blame,
+            history::merge_into,
+            history::pull_request_between,
             changes::status,
             changes::file_diff,
             changes::stage,
@@ -292,6 +516,12 @@ pub fn run() {
             changes::stashes,
             changes::stash,
             changes::stash_pop,
+            changes::stash_apply,
+            changes::stash_drop,
+            changes::skip_operation,
+            changes::conflict_regions,
+            changes::resolve_regions,
+            changes::auto_fetch,
             changes::resolve,
             changes::continue_operation,
             changes::abort_operation,
@@ -304,6 +534,12 @@ pub fn run() {
             github::run_detail,
             github::run_action,
             github::job_log,
+            github::job_feedback,
+            github::issues,
+            github::issue_detail,
+            github::issue_action,
+            work::work_branches,
+            work::branch_patch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Spor");

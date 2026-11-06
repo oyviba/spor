@@ -1,5 +1,5 @@
-// Small stroke icons (24-unit grid, Lucide-style), so the prototype has no
-// icon dependency.
+// Small stroke icons (24-unit grid), drawn after Lucide (ISC, see
+// LICENSE-LUCIDE beside this file), so the app has no icon dependency.
 
 import type { SVGProps } from "react";
 
@@ -84,14 +84,29 @@ export const History = (p: P) => (
 export const PullRequest = (p: P) => (
   <Svg {...p}><circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="M6 8.5v7M18 15.5V9a3 3 0 0 0-3-3h-4M13 3.5 10.5 6 13 8.5" /></Svg>
 );
+export const IssueIcon = (p: P) => (
+  <Svg {...p}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /></Svg>
+);
 export const Play = (p: P) => (
   <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="m10 8.5 5.5 3.5-5.5 3.5Z" /></Svg>
+);
+export const InboxIcon = (p: P) => (
+  <Svg {...p}><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z" /></Svg>
 );
 export const Refresh = (p: P) => (
   <Svg {...p}><path d="M21 12a9 9 0 0 1-15.5 6.3L3 16M3 12a9 9 0 0 1 15.5-6.3L21 8M21 3v5h-5M3 21v-5h5" /></Svg>
 );
 export const ArrowDown = (p: P) => <Svg {...p}><path d="m19 12-7 7-7-7M12 5v14" /></Svg>;
 export const Undo = (p: P) => <Svg {...p}><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></Svg>;
+export const Gear = (p: P) => (
+  <Svg {...p}>
+    <path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2Z" />
+    <circle cx="12" cy="12" r="3" />
+  </Svg>
+);
+export const ImageIcon = (p: P) => (
+  <Svg {...p}><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" /></Svg>
+);
 export const Minus = (p: P) => <Svg {...p}><path d="M5 12h14" /></Svg>;
 export const CornerDownRight = (p: P) => <Svg {...p}><path d="m15 10 5 5-5 5" /><path d="M4 4v7a4 4 0 0 0 4 4h12" /></Svg>;
 export const Tag = (p: P) => (

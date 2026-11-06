@@ -7,7 +7,7 @@ use serde::Serialize;
 use spor::github as gh;
 use tauri::State;
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub(crate) struct Pull {
     number: u64,
     title: String,
@@ -317,4 +317,114 @@ pub(crate) fn job_log(app: State<App>, id: u64) -> Result<Vec<LogLine>, String> 
             text: l.text,
         })
         .collect())
+}
+
+/// A failed job (its failing step and the end of its log), as a follow-up
+/// for the agent working on its branch.
+#[tauri::command(async)]
+pub(crate) fn job_feedback(app: State<App>, run: u64, job: u64) -> Result<String, String> {
+    let failure = gh::fetch_job_failure(&root(&app)?, run, job).map_err(|e| first_line(&e))?;
+    gh::failure_feedback(&[failure], None).ok_or_else(|| "Nothing failed".to_string())
+}
+
+// ---- Issues ----------------------------------------------------------------
+
+#[derive(Serialize)]
+pub(crate) struct Issue {
+    number: u64,
+    title: String,
+    author: String,
+    open: bool,
+    labels: Vec<String>,
+    assignees: Vec<String>,
+    comments: usize,
+    updated: i64,
+    url: String,
+}
+
+impl From<gh::Issue> for Issue {
+    fn from(i: gh::Issue) -> Self {
+        Self {
+            number: i.number,
+            title: i.title,
+            author: i.author,
+            open: i.open,
+            labels: i.labels,
+            assignees: i.assignees,
+            comments: i.comments,
+            updated: i.updated,
+            url: i.url,
+        }
+    }
+}
+
+/// `filter`: assigned, yours, open, closed.
+#[tauri::command(async)]
+pub(crate) fn issues(app: State<App>, filter: String) -> Result<Vec<Issue>, String> {
+    let filter = match filter.as_str() {
+        "assigned" => gh::IssueFilter::Assigned,
+        "yours" => gh::IssueFilter::Yours,
+        "closed" => gh::IssueFilter::Closed,
+        _ => gh::IssueFilter::Open,
+    };
+    Ok(gh::list_issues(&root(&app)?, filter)
+        .map_err(|e| first_line(&e))?
+        .into_iter()
+        .map(Issue::from)
+        .collect())
+}
+
+#[derive(Serialize)]
+pub(crate) struct IssueDetail {
+    issue: Issue,
+    body: String,
+    comments: Vec<Comment>,
+    /// The prompt an agent task on it starts from.
+    prompt: String,
+}
+
+#[tauri::command(async)]
+pub(crate) fn issue_detail(app: State<App>, number: u64) -> Result<IssueDetail, String> {
+    let d = gh::issue_detail(&root(&app)?, number).map_err(|e| first_line(&e))?;
+    let prompt = d.task_prompt();
+    Ok(IssueDetail {
+        issue: d.issue.into(),
+        body: d.body,
+        comments: d
+            .comments
+            .into_iter()
+            .map(|c| Comment {
+                author: c.author,
+                body: c.body,
+                at: c.at,
+                verdict: None,
+            })
+            .collect(),
+        prompt,
+    })
+}
+
+/// `action`: comment (with `body`), close, reopen.
+#[tauri::command(async)]
+pub(crate) fn issue_action(
+    app: State<App>,
+    number: u64,
+    action: String,
+    body: Option<String>,
+) -> Result<String, String> {
+    let dir = root(&app)?;
+    let n = number;
+    match action.as_str() {
+        "comment" => {
+            let b = body.unwrap_or_default();
+            if b.trim().is_empty() {
+                return Err("Write a comment first".into());
+            }
+            gh::comment_on_issue(&dir, n, &b).map(|_| format!("Commented on #{n}"))
+        }
+        "close" => gh::set_issue_open(&dir, n, false).map(|_| format!("Closed #{n}")),
+        "reopen" => gh::set_issue_open(&dir, n, true).map(|_| format!("Reopened #{n}")),
+        other => return Err(format!("Unknown action {other}")),
+    }
+    .map_err(|e| first_line(&e))
 }

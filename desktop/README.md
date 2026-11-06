@@ -1,21 +1,41 @@
 # Spor desktop (Tauri)
 
-Spor's app as a web UI on Tauri, over the same Rust core (`spor::git`,
-`spor::graph`, `spor::github`, `spor::tasks`, `spor::agent`) that the
-terminal and GPUI builds use. It began as a trial of the Agents feature and
-now has all five sections. Each is built from the same four pieces: a list
+Spor's app: a web UI on Tauri over the Rust core in the repository root
+(`spor::git`, `spor::graph`, `spor::github`, `spor::tasks`, `spor::agent`,
+`spor::askpass`). The rail is ordered by the questions you come with (#83):
+**Inbox** (what needs me?), **Work** (what's in flight?), **Changes** (what's
+in my checkout?) and **History** (what happened?). Below a divider,
+**Issues**, **Pull requests** and **Actions** are browsers for what belongs
+to no work item yet. Each section is built from the same four pieces: a list
 in the sidebar, a page, a details card on the right, and a bar or composer
 at the bottom.
 
 | Section | ⌘ | Sidebar | Page | Details card | Bottom |
 |---|---|---|---|---|---|
-| **Changes** | 1 | Conflicts, staged and unstaged files | The file's diff: click lines, shift-click to extend, then stage, unstage or discard them | Branch and upstream, Fetch / Pull / Push, stashes | Commit box (⌘↩), amend |
-| **History** | 2 | Search, branches (local, agent, remote) | The commit graph, and a commit's diff | The commit: message, parents, Branch here, Cherry-pick, Revert | |
-| **Pull requests** | 3 | Review / Yours / Open / Closed | Conversation · Files · Checks | Branches, checks, conflicts, linked agent task, merge, check out, close | Comment / Approve, with line comments from Files |
-| **Actions** | 4 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | Run, commit, linked agent task, re-run, cancel | |
-| **Agents** | 5 | Tasks, with Working / Settled shelves | Conversation · Changes | Folder, branch, conflicts, land, discard | Composer |
+| **Inbox** | 1 | What needs you in every workspace: answers, finished runs, failed CI, review requests | | | |
+| **Work** | 2 | Every work item: agents' tasks, your branches with commits ahead of the base, and open PRs from anyone. Shelves: Needs you, In progress, In review, Settled (folded); filters Mine / Agents / Teammates; right-click to move one up or down. *New…* (⌘N): a branch, an agent task, or from an issue | A task: Conversation · Changes. A PR: Conversation · Files · Checks. A branch: Commits · Changes | A task: folder, branch, conflicts, its issue and PR, open a PR, land, discard. A branch: open a PR, switch to it | A task's composer, or a PR's comment box |
+| **Changes** | 3 | Conflicts, staged and unstaged files | The file's diff (unified or side by side): click lines, shift-click to extend, then stage, unstage or discard them; a conflicted file's regions, a side picked for each | Branch and upstream, Fetch / Pull / Push, its PR, stashes (pop, apply, drop) | Commit box (⌘↩), amend |
+| **History** | 4 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
+| **Issues** (browser) | 5 | Assigned / Yours / Open / Closed | The issue and its comments | Labels, assignees, its agent task and PR, close or reopen | *Start agent task*: the issue as the prompt (editable), the base and the agent |
+| **Pull requests** (browser) | 6 | Review / Yours / Open / Closed | Conversation · Files · Checks | Branches, checks, conflicts, linked agent task, merge, check out, close | Comment / Approve, with line comments from Files |
+| **Actions** (browser) | 7 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | Run, commit, linked agent task, re-run, cancel | |
 
 What one app makes possible:
+
+- **One inbox** (#42). Across every repository of every workspace:
+  agents waiting on an answer, finished agent runs you haven't looked at, failed runs on your
+  branches (agent branches included) and pull requests waiting for your
+  review. Each row opens in the right section of the right repository, and
+  goes once it's dealt with; nothing is stored. Agent tasks are read from
+  each repository's `.git/spor/tasks` every few seconds; GitHub is one
+  `gh search prs` per host and one `gh run list` per repository, every two
+  minutes and whenever the Inbox is opened. The Inbox's count is the
+  rail's only badge: one number for how many things need you.
+- **Links open the work, not the list** (#83). A pull request, an issue or a
+  CI run that belongs to a work item opens that item in Work, whether you
+  click it in the Inbox, the palette or another section. Only what belongs
+  to none stays in its browser. Links that name the browser (*Open in
+  Actions* on a PR's check, a work item's own issue or PR) go there.
 
 - **One undo stack.** Every change (stage, discard, commit, amend, pull,
   branch, switch, merge, cherry-pick, revert, land) records how to take it
@@ -25,13 +45,52 @@ What one app makes possible:
   failing log. A task's branch opens in History, and a run's commit too.
 - **One conflict banner.** A merge or rebase that stops shows on every
   section, with *Resolve in Changes*, *Continue* and *Abort*.
+- **From issue to merged PR** (#47, #24). *Start agent task* on an issue
+  gives the agent the issue and its comments, on `agent/<number>-<slug>`.
+  *Open pull request* (or a draft) on the task pushes its branch and opens
+  a PR whose title and description Claude Code writes from the branch and
+  the agent's session (read-only; the prompt's if it can't), and which says
+  `Closes #n`; landing locally puts `Closes #n`
+  in the commit instead. The task then shows its PR's state, offers *Push*
+  when the agent has commits the PR doesn't (*Commit and push* when it left
+  work uncommitted), *Squash and merge* (which cleans the task up once
+  GitHub has merged it; ⌘Z brings it back; *Land* is hidden while a PR is open,
+  so the two can't diverge), and *Send review to agent*
+  (on the task, or on the PR page) sends reviews and line comments made
+  since the agent last ran, as `file:line — comment`. When the PR merges, a
+  notification offers *Clean up*: the task is marked landed and its folder
+  and branch go (⌘Z brings them back). PRs opened from a task's branch some
+  other way are linked too.
 - **Stash and switch.** A switch that uncommitted changes would block says
-  so and offers to stash them, as the GPUI app does.
+  so and offers to stash them.
+- **Credentials.** Fetch, pull and push run git with this app as its
+  askpass helper (`spor::askpass`): a passphrase, password or new-host
+  question comes up as a dialog. The background fetch (every five minutes)
+  never asks; it just fails quietly without stored credentials.
+- **Live, without polling.** The backend watches the repository
+  (`src-tauri/src/watch.rs`) and tells the window what changed: refs, the
+  index, the working tree (what `.gitignore` doesn't exclude) or agent
+  tasks, the last two at most once a second. Each section reloads on the
+  changes it shows, and every 30 s anyway in case an event went missing.
+- **⌘K palette and workspaces.** Commands, sections, branches and every
+  workspace's repositories by typing. Workspaces sit at the top of the rail;
+  beside it, the workspace's repositories, the open one marked, with their
+  branch, changed files and what there is to pull or push (⌘⇧E hides the
+  column; the repository name at the top of every sidebar lists them too).
+  The first launch imports the old native (GPUI) app's
+  workspaces (`shared/workspaces.ts`).
+- **Settings (⌘,).** Appearance and themes (`shared/theme.ts`, with the
+  editor in `shared/ThemeEditor.tsx`), diffs, the graph's options, and
+  shortcuts. Settings are one object in localStorage (`shared/settings.ts`);
+  every command and its default shortcut is in one table in `App.tsx`, read
+  by the key handler, the palette and the Shortcuts page (`shared/keys.ts`
+  resolves them). When the rail's defaults moved (#83), the shortcuts you
+  had changed were kept, and the first launch after says so once, pointing
+  to ⌘/.
 
 The graph's lanes are laid out by `spor::graph::assign_lanes`, and the
-segments for each row are worked out in Rust (`src-tauri/src/history.rs`,
-mirroring `src/gui/graph.rs`). The UI only draws them as SVG, and only for
-the rows in view.
+segments for each row are worked out in Rust (`src-tauri/src/history.rs`).
+The UI only draws them as SVG, and only for the rows in view.
 
 ## Run it
 
@@ -54,54 +113,61 @@ finishes while you watch.
 
 ## Tests
 
-- `pnpm test`: the transcript folding and summaries.
-- `e2e/run.mjs` (agent tasks) and `e2e/sections.mjs` (Changes, History, a
-  conflicting merge, stashes, pull requests and Actions) drive the real app
-  through WebDriver and check the repository with git at every step. They
-  need `tauri-driver` (`cargo install tauri-driver`) and, on Linux,
-  `WebKitWebDriver` (`webkit2gtk-driver`). Point them at **throwaway**
-  repositories: they commit, merge and land.
+- `pnpm test`: the transcript folding and summaries, shortcut parsing and
+  keeping your shortcuts when the defaults move, how reloads coalesce, the
+  Inbox's rows, and which links open a work item.
+- `cargo test` in `src-tauri`: the watcher, on scratch repositories.
+- `e2e/run.mjs` (agent tasks), `e2e/setup.mjs` (setup scripts) and
+  `e2e/sections.mjs` (Changes, History, renaming and tagging, a conflicting
+  merge, stashes, pull requests, the Inbox and Actions) drive the real app through WebDriver and check the
+  repository with git at every step. CI runs all three on Linux under Xvfb.
+
+  They need no real agent or GitHub: `e2e/bin` has stand-ins. `claude` is a
+  Python script that speaks Claude Code's stream-json both ways (it edits,
+  asks before running the tests, takes steering), and `gh` answers from
+  `e2e/fixtures/gh.json`, running spor's own `--jq` expressions through
+  `jq` and recording what's done in `$FAKE_GH_STATE`. Spor's parsers treat
+  them exactly like the real tools. `e2e/make-repos.sh` builds the scratch
+  repositories each suite expects, and `e2e/run-all.sh` puts it together:
 
   ```sh
-  tauri-driver &
-  SPOR_REPO=/tmp/scratch node e2e/run.mjs "$PWD/src-tauri/target/debug/spor-desktop" shots/
-  SPOR_REPO=/tmp/demo FAKE_GH_STATE=/tmp/gh.json node e2e/sections.mjs "$PWD/src-tauri/target/debug/spor-desktop" shots/
+  cargo install tauri-driver   # Linux also needs WebKitWebDriver (webkit2gtk-driver)
+  pnpm build && (cd src-tauri && cargo build --features tauri/custom-protocol)
+  xvfb-run -a e2e/run-all.sh src-tauri/target/debug/spor-desktop e2e-shots   # or: … e2e-shots sections
   ```
 
-  `sections.mjs` describes the repository it expects at its top. Neither
-  needs a real agent or GitHub. Put stand-ins first on `PATH`: a `claude`
-  that prints Claude Code's `stream-json` events, and a `gh` that prints what
-  `gh … --jq` would. Spor's parsers treat them exactly like the real tools.
+  `custom-protocol` builds the UI into the app; without it a debug build
+  loads it from `pnpm dev`. Screenshots of each step land in `e2e-shots/`.
 
 ## Layout
 
 ```
 src-tauri/src/
-  lib.rs        setup, repository state for the chrome, undo, open_url
+  lib.rs        setup, repository state for the chrome, undo, open_url, the askpass bridge
+  watch.rs      watching the repository: refs-, index-, worktree- and tasks-changed events
   undo.rs       the undo stack
-  history.rs    graph (lanes → segments), commits, branches, switch, merge, cherry-pick, revert
+  history.rs    graph (lanes → segments), commits, branches, tags, worktrees, switch, merge,
+                cherry-pick, revert, rebase, reset, rewrite, PR badges
   changes.rs    status, diffs, staging lines, discard, commit, sync, stashes, conflicts
-  github.rs     pull requests and Actions, through spor's gh wrappers
-  agents.rs     agent tasks
+  github.rs     issues, pull requests and Actions, through spor's gh wrappers
+  agents.rs     agent tasks, and their pull requests
+  inbox.rs      what needs you across every workspace's repositories
+  work.rs       your own branches, for Work
 src/
-  App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–5, ⌘Z
-  shared/       DiffView, details card, status pills, CI status, icons, hooks
-  sections/     changes/ history/ pulls/ actions/ agents/
+  App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–7, ⌘Z, ⌘K,
+                background fetch, credential prompts, recent repositories
+  shared/       DiffView, details card, menus and dialogs, palette, status pills, CI status, icons, hooks
+  sections/     inbox/ work/ changes/ history/ issues/ pulls/ actions/ (and agents/, a task's page)
 ```
 
-`src-tauri` is its own Cargo workspace, so the root crate and its
-single-dependency terminal build don't change.
+`src-tauri` is its own Cargo workspace, so the root crate stays a
+dependency-free library.
 
 ## Not here yet
 
-From the GPUI app: interactive rebase, the theme editor, the keymap editor,
-workspaces (several repositories open), tags, commit search by path, blame,
-and the askpass bridge. Without that bridge, a fetch or push that needs a
-password fails with git's message instead of asking.
+A signed, notarized Mac app (#62): CI's `Spor.app` is ad-hoc signed.
 
-From the agent issues: permission prompts and steering (#20). For now a
-follow-up typed while an agent works is queued and sent when the run ends.
-
-Polling, not events: the window polls the repository's state every 2 s
-(cheap: refs and the index's mtime) and each section reloads when that
-changes. A file watcher would be better.
+On Linux the watcher uses inotify, which needs a
+watch per folder: a working tree with more folders than
+`fs.inotify.max_user_watches` isn't watched, and the window reloads only
+every 30 s.

@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""A stand-in for the GitHub CLI, for the end-to-end suites.
+
+It answers the `gh` calls spor makes (pull requests, Actions runs, job
+logs) from `e2e/fixtures/gh.json`, and runs each `--jq` expression through
+the real `jq`, so its output is exactly what `gh … --jq` prints. What's
+done (comments, merges, approvals, re-runs, cancels) is recorded in the
+JSON file $FAKE_GH_STATE, which the suites read to check it happened,
+and which later calls read back: a merged PR reads as merged.
+"""
+
+import copy
+import json
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+FIXTURES = os.path.join(HERE, "..", "fixtures", "gh.json")
+STATE = os.environ.get("FAKE_GH_STATE")
+EMPTY = {"comments": {}, "merged": [], "approved": [], "closed": [], "reruns": [], "cancelled": []}
+
+
+def load_state():
+    if STATE and os.path.exists(STATE):
+        with open(STATE) as f:
+            return {**EMPTY, **json.load(f)}
+    return copy.deepcopy(EMPTY)
+
+
+def save_state(state):
+    if STATE:
+        with open(STATE, "w") as f:
+            json.dump(state, f, indent=2)
+
+
+def fail(message, code=1):
+    sys.stderr.write(message + "\n")
+    sys.exit(code)
+
+
+def options(argv):
+    """Split argv into positionals and --flag values; drop what gh -R etc. take."""
+    pos, opts = [], {}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-R", "--repo", "--hostname"):
+            i += 2
+            continue
+        if a.startswith("--") and "=" in a:
+            k, v = a[2:].split("=", 1)
+            opts[k] = v
+        elif a.startswith("--"):
+            takes_value = i + 1 < len(argv) and not argv[i + 1].startswith("--") and a not in (
+                "--approve",
+                "--squash",
+                "--merge",
+                "--rebase",
+                "--failed",
+                "--allow-escape-sequences",
+            )
+            opts[a[2:]] = argv[i + 1] if takes_value else True
+            i += 1 if takes_value else 0
+        else:
+            pos.append(a)
+        i += 1
+    return pos, opts
+
+
+def out(data, opts):
+    """Print `data` as `gh --json … --jq …` would."""
+    jq = opts.get("jq")
+    if not jq:
+        print(json.dumps(data, indent=2))
+        return
+    done = subprocess.run(["jq", "-r", jq], input=json.dumps(data), capture_output=True, text=True)
+    if done.returncode != 0:
+        fail(done.stderr.strip() or "jq failed")
+    sys.stdout.write(done.stdout)
+
+
+def pulls(fixtures, state):
+    """The fixture's pull requests, with what's been done to them."""
+    result = []
+    for p in copy.deepcopy(fixtures["pulls"]):
+        n = str(p["number"])
+        p["comments"] = p.get("comments", []) + state["comments"].get(n, [])
+        if p["number"] in state["merged"]:
+            p["state"] = "MERGED"
+        elif p["number"] in state["closed"]:
+            p["state"] = "CLOSED"
+        if p["number"] in state["approved"]:
+            p["reviewDecision"] = "APPROVED"
+        result.append(p)
+    return result
+
+
+def runs(fixtures, state):
+    result = []
+    for r in copy.deepcopy(fixtures["runs"]):
+        if r["databaseId"] in state["cancelled"]:
+            r["status"], r["conclusion"] = "completed", "cancelled"
+        elif r["databaseId"] in state["reruns"]:
+            r["status"], r["conclusion"] = "in_progress", ""
+            r["attempt"] = r.get("attempt", 1) + 1
+            for job in r.get("jobs", []):
+                if job.get("conclusion") == "failure":
+                    job["status"], job["conclusion"] = "in_progress", ""
+        result.append(r)
+    return result
+
+
+def find(items, key, value):
+    for item in items:
+        if str(item[key]) == str(value):
+            return item
+    fail(f"could not find {value}")
+
+
+def main():
+    with open(FIXTURES) as f:
+        fixtures = json.load(f)
+    state = load_state()
+    pos, opts = options(sys.argv[1:])
+    if not pos:
+        fail("usage: gh <command>")
+    cmd = pos[:2]
+
+    if cmd == ["auth", "status"]:
+        print("Logged in to github.com as you (stand-in)")
+    elif cmd == ["pr", "list"]:
+        wanted = opts.get("state", "open").upper()
+        items = [
+            p
+            for p in pulls(fixtures, state)
+            if wanted == "ALL" or p["state"] == wanted or (wanted == "CLOSED" and p["state"] == "MERGED")
+        ]
+        if opts.get("author") == "@me":
+            items = [p for p in items if p["author"]["login"] == fixtures["me"]]
+        if "review-requested:@me" in str(opts.get("search", "")):
+            items = [p for p in items if fixtures["me"] in p.get("reviewRequests", [])]
+        out(items, opts)
+    elif cmd == ["pr", "view"]:
+        out(find(pulls(fixtures, state), "number", pos[2]), opts)
+    elif cmd == ["pr", "diff"]:
+        sys.stdout.write(find(fixtures["pulls"], "number", pos[2]).get("diff", ""))
+    elif cmd == ["pr", "comment"]:
+        state["comments"].setdefault(pos[2], []).append(
+            {"author": {"login": fixtures["me"]}, "body": opts["body"], "createdAt": "2026-11-04T12:00:00Z"}
+        )
+        save_state(state)
+    elif cmd == ["pr", "merge"]:
+        state["merged"].append(int(pos[2]))
+        save_state(state)
+    elif cmd == ["pr", "review"]:
+        state["approved"].append(int(pos[2]))
+        save_state(state)
+    elif cmd == ["pr", "close"]:
+        state["closed"].append(int(pos[2]))
+        save_state(state)
+    elif cmd == ["pr", "reopen"]:
+        state["closed"] = [n for n in state["closed"] if n != int(pos[2])]
+        save_state(state)
+    elif cmd in (["pr", "ready"], ["pr", "checkout"]):
+        pass
+    elif cmd == ["search", "prs"]:
+        items = [
+            p
+            for p in pulls(fixtures, state)
+            if p["state"] == "OPEN" and fixtures["me"] in p.get("reviewRequests", [])
+        ]
+        for p in items:
+            owner, name = p["url"].split("/")[3:5]
+            p["repository"] = {"name": name, "nameWithOwner": f"{owner}/{name}"}
+        out(items, opts)
+    elif cmd == ["run", "list"]:
+        items = runs(fixtures, state)
+        if "branch" in opts:
+            items = [r for r in items if r["headBranch"] == opts["branch"]]
+        if "workflow" in opts:
+            items = [r for r in items if r["workflowName"] == opts["workflow"]]
+        out(items, opts)
+    elif cmd == ["run", "view"]:
+        out(find(runs(fixtures, state), "databaseId", pos[2]), opts)
+    elif cmd == ["run", "rerun"]:
+        state["reruns"].append(int(pos[2]))
+        save_state(state)
+    elif cmd == ["run", "cancel"]:
+        state["cancelled"].append(int(pos[2]))
+        save_state(state)
+    elif cmd == ["workflow", "list"]:
+        out([{"name": n} for n in sorted({r["workflowName"] for r in fixtures["runs"]})], opts)
+    elif pos[0] == "api" and "/actions/jobs/" in pos[1] and pos[1].endswith("/logs"):
+        job = pos[1].split("/actions/jobs/")[1].split("/")[0]
+        log = fixtures["logs"].get(job)
+        if log is None:
+            fail("HTTP 404: Not Found")
+        sys.stdout.write(log)
+    else:
+        fail(f"the stand-in gh doesn't know `gh {' '.join(pos)}`")
+
+
+main()

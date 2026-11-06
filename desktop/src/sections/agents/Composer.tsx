@@ -1,15 +1,37 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import type { AgentChoice, Ask, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
+import type { AgentChoice, Ask, Effort, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
 import { useStored } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
-import { api } from "../../api";
+import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
+import { Button } from "../../shared/Button";
 import { AgentIcon, Alert, ArrowUp, Check, Clock, CornerDownRight, MessageSquare, Square, X } from "../../shared/Icons";
 
 export interface AgentSettings {
   agent: "claude" | "command" | "none";
   template: string;
   mode: Mode;
+  /** Claude's model and effort; "" leaves it to Claude Code's own settings. */
+  model: string;
+  effort: Effort | "";
 }
+
+/** Claude Code's aliases for the latest of each model. */
+export const MODELS: { id: string; label: string }[] = [
+  { id: "", label: "Default model" },
+  { id: "fable", label: "Fable" },
+  { id: "opus", label: "Opus" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "haiku", label: "Haiku" },
+];
+
+export const EFFORTS: { id: Effort | ""; label: string }[] = [
+  { id: "", label: "Default effort" },
+  { id: "low", label: "Low effort" },
+  { id: "medium", label: "Medium effort" },
+  { id: "high", label: "High effort" },
+  { id: "xhigh", label: "Extra high effort" },
+  { id: "max", label: "Max effort" },
+];
 
 export const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "supervised", label: "Supervised", hint: "Asks before commands and file edits" },
@@ -25,9 +47,48 @@ export function useAgentSettings(): [AgentSettings, (s: AgentSettings) => void] 
     agent: "claude",
     template: "",
     mode: "acceptEdits",
+    model: "",
+    effort: "",
   });
   const mode = stored.mode ?? (stored.allowCommands ? "full" : "acceptEdits");
-  return [{ agent: stored.agent, template: stored.template, mode }, set];
+  return [
+    { agent: stored.agent, template: stored.template, mode, model: stored.model ?? "", effort: stored.effort ?? "" },
+    set,
+  ];
+}
+
+/** Which Claude model a new task runs, and how hard it thinks. */
+export function ModelPicker({ settings, onSettings }: { settings: AgentSettings; onSettings: (s: AgentSettings) => void }) {
+  return (
+    <>
+      <select
+        className="chip-select"
+        value={settings.model}
+        onChange={(e) => onSettings({ ...settings, model: e.target.value })}
+        title="The model Claude Code runs. Default: whatever Claude Code is set to"
+        aria-label="Model"
+      >
+        {MODELS.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+      <select
+        className="chip-select"
+        value={settings.effort}
+        onChange={(e) => onSettings({ ...settings, effort: e.target.value as Effort | "" })}
+        title="How hard Claude thinks. Default: whatever Claude Code is set to"
+        aria-label="Effort"
+      >
+        {EFFORTS.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+    </>
+  );
 }
 
 export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
@@ -50,7 +111,9 @@ export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode)
 }
 
 export function choiceOf(s: AgentSettings): AgentChoice {
-  return s.agent === "command" ? { kind: "command", template: s.template } : { kind: s.agent };
+  if (s.agent === "command") return { kind: "command", template: s.template };
+  if (s.agent === "claude") return { kind: "claude", model: s.model, effort: s.effort };
+  return { kind: "none" };
 }
 
 interface Props {
@@ -65,22 +128,32 @@ interface Props {
   onUnqueue: (index: number) => void;
   /** Questions the agent is waiting on (it runs under the host). */
   asks: Ask[];
-  onAnswer: (ask: Ask, allow: boolean, message?: string) => void;
+  onAnswer: (ask: Ask, allow: boolean, message?: string) => unknown;
+  onAllowForSession: (ask: Ask) => unknown;
   /** The running agent's mode, changeable while it works; null otherwise. */
   liveMode: Mode | null;
   onLiveMode: (m: Mode) => void;
   /** Start the task's own prompt (no runs yet). */
-  onStart: () => void;
+  onStart: () => unknown;
   /** A follow-up; queued by the caller when the agent is working. */
-  onSend: (text: string) => void;
+  onSend: (text: string) => unknown;
   /** The running agent can take a message into the turn it's on (#22). */
   canSteer: boolean;
-  onSteer: (text: string) => void;
-  onStop: () => void;
+  onSteer: (text: string) => unknown;
+  onStop: () => unknown;
 }
 
 export interface ComposerHandle {
   focus: () => void;
+}
+
+/** "Comments on the changes:", as the agent is sent them. */
+export function withComments(text: string, comments: LineComment[]): string {
+  if (comments.length === 0) return text.trim();
+  const notes = comments
+    .map((c) => `- ${c.file}:${c.line}${c.side === "old" ? " (removed line)" : ""}: ${c.text}`)
+    .join("\n");
+  return `${text.trim()}${text.trim() ? "\n\n" : ""}Comments on the changes:\n${notes}`;
 }
 
 /** "run `make test`", "edit greet.py": what a tool use is, for a question. */
@@ -103,13 +176,17 @@ export function verbOf(tool: string): string {
 }
 
 export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, ref) {
-  const { fail } = useShell();
   const [text, setText] = useState("");
+  // Sending, starting or stopping (the button spins); answering a question
+  // (its buttons wait). By click or by key, nothing goes twice.
+  const [sending, setSending] = useState(false);
+  const [answering, setAnswering] = useState<"deny" | "allow" | "session" | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   useImperativeHandle(ref, () => ({ focus: () => input.current?.focus() }));
+  const attachments = useAttachments(useShell().fail);
 
   const running = p.latest?.state === "running";
-  const hasContent = text.trim().length > 0 || p.comments.length > 0;
+  const hasContent = text.trim().length > 0 || p.comments.length > 0 || attachments.images.length > 0;
   const neverRan = p.latest == null;
   const ask = p.asks[0];
   // While it works, a message waits for the next turn (queue) or goes into
@@ -132,24 +209,36 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
           ? "start"
           : "send";
   const action = actionFor(false);
-  const disabled = (action === "send" && !hasContent) || (action === "start" && p.settings.agent === "none");
+  const disabled =
+    (action === "send" && !hasContent) ||
+    (action === "start" && p.settings.agent === "none") ||
+    (action !== "stop" && attachments.saving);
 
   const submit = (flip = false) => {
     const act = actionFor(flip);
-    if (disabled) return;
-    if (act === "stop") return p.onStop();
-    if (act === "start") return p.onStart();
-    const sent = text;
-    setText("");
-    // The core formats the comments, as it does for the GPUI app.
-    api.withComments(sent, p.comments).then((message) => {
-      if (act === "reply") p.onAnswer(ask!, false, message);
-      else if (act === "steer") p.onSteer(message);
-      else p.onSend(message);
-    }, (e) => {
-      setText(sent);
-      fail(e);
-    });
+    if (disabled || sending) return;
+    const message = withImages(withComments(text, p.comments), attachments.images);
+    const result =
+      act === "stop"
+        ? p.onStop()
+        : act === "start"
+          ? p.onStart()
+          : act === "reply"
+            ? p.onAnswer(ask!, false, message)
+            : act === "steer"
+              ? p.onSteer(message)
+              : p.onSend(message);
+    if (act !== "stop" && act !== "start") {
+      setText("");
+      attachments.clear();
+    }
+    setSending(true);
+    Promise.resolve(result).finally(() => setSending(false));
+  };
+  const answer = (how: NonNullable<typeof answering>, run: () => unknown) => {
+    if (answering) return;
+    setAnswering(how);
+    Promise.resolve(run()).finally(() => setAnswering(null));
   };
 
   const placeholder = ask
@@ -181,7 +270,10 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
             ))}
           </div>
         )}
-        <div className={`composer${ask ? " asking" : ""}`}>
+        <div
+          className={`composer${ask ? " asking" : ""}${attachments.dragging ? " dropping" : ""}`}
+          {...attachments.handlers}
+        >
           {ask && (
             <div className="ask-card" role="alert">
               <Alert size={14} />
@@ -192,12 +284,33 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
                 </div>
                 {ask.detail && <code className="ask-detail">{ask.detail}</code>}
               </div>
-              <button className="ghost small" onClick={() => p.onAnswer(ask, false)}>
+              <Button
+                className="ghost small"
+                busy={answering === "deny"}
+                disabled={answering != null}
+                onClick={() => answer("deny", () => p.onAnswer(ask, false))}
+              >
                 <X size={11} /> Deny
-              </button>
-              <button className="primary small" onClick={() => p.onAnswer(ask, true)}>
+              </Button>
+              {ask.session && (
+                <Button
+                  className="ghost small"
+                  busy={answering === "session"}
+                  disabled={answering != null}
+                  onClick={() => answer("session", () => p.onAllowForSession(ask))}
+                  title={`Allow it, and don't ask again this session about ${ask.session.replace(/`/g, "")}`}
+                >
+                  Allow for this session
+                </Button>
+              )}
+              <Button
+                className="primary small"
+                busy={answering === "allow"}
+                disabled={answering != null}
+                onClick={() => answer("allow", () => p.onAnswer(ask, true))}
+              >
                 <Check size={11} /> Allow
-              </button>
+              </Button>
             </div>
           )}
           {p.comments.length > 0 && (
@@ -218,6 +331,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
               ))}
             </div>
           )}
+          <AttachmentStrip images={attachments.images} onRemove={attachments.remove} />
           <textarea
             ref={input}
             value={text}
@@ -273,6 +387,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
               </button>
             )}
             <span className="flex-1" />
+            {(p.latest?.agent ?? p.settings.agent) !== "none" && <AttachButton onFiles={attachments.add} />}
             <span className="hint-keys">
               {action === "queue" || action === "steer"
                 ? `↩ ${action}${other !== action ? ` · ⌘↩ ${other}` : ""}`
@@ -280,10 +395,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
                   ? "↩ deny with this reply"
                   : "↩ send · ⇧↩ new line"}
             </span>
-            <button
+            <Button
               className={`send ${action}`}
               onClick={() => submit()}
               disabled={disabled}
+              busy={sending}
               title={
                 action === "stop"
                   ? "Stop the agent: it ends the turn and keeps the conversation"
@@ -309,7 +425,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
               ) : (
                 <ArrowUp size={14} />
               )}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

@@ -1,5 +1,5 @@
 //! Claude Code under the agent host (#20): questions, answers, steering and
-//! interrupts, through the real host (the `spor` binary) and a fake
+//! interrupts, through the real host (the `spor-agent-host` binary) and a fake
 //! `claude` that speaks stream-json both ways.
 //!
 //! Its own test binary: opting in to the host is process-wide.
@@ -37,14 +37,14 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
-/// The host is the `spor` binary; `claude` is a fake that reads stream-json
+/// The host is the `spor-agent-host` binary; `claude` is a fake that reads stream-json
 /// on stdin. What it does depends on the prompt: "ask" asks to run a
 /// command, "steer" waits for a second message, "interrupt" waits to be
 /// interrupted.
 fn setup() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        spor::host::set_program(PathBuf::from(env!("CARGO_BIN_EXE_spor")));
+        spor::host::set_program(PathBuf::from(env!("CARGO_BIN_EXE_spor-agent-host")));
         let bin = std::env::temp_dir().join(format!("spor-fake-stream-claude-{}", std::process::id()));
         std::fs::create_dir_all(&bin).unwrap();
         let script = r#"#!/bin/sh
@@ -62,6 +62,11 @@ case "$first" in
       *'"behavior":"allow"'*) echo "$answer" > answer.txt; say "Ran make test." ;;
       *) echo "$answer" > denied.txt; say "Skipped it." ;;
     esac ;;
+  *suggest*)
+    echo '{"type":"control_request","request_id":"req-2","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"npm test -- --watch=false"},"permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test:*"}],"behavior":"allow","destination":"session"}],"tool_use_id":"t2"}}'
+    read -r answer
+    echo "$answer" > answer.txt
+    say "Ran the tests." ;;
   *steer*)
     say "Working on it."
     read -r next
@@ -223,12 +228,14 @@ fn a_question_waits_for_an_answer() {
     assert!(t.contains(&Entry::Ask {
         id: "req-1".into(),
         tool: "Bash".into(),
-        detail: "make test".into()
+        detail: "make test".into(),
+        session: None,
     }));
     assert!(t.contains(&Entry::Answer {
         id: "req-1".into(),
         allow: true,
-        message: String::new()
+        message: String::new(),
+        always: false,
     }));
     assert!(t.contains(&Entry::Text("Ran make test.".into())));
     assert!(runs.asks().is_empty());
@@ -252,8 +259,50 @@ fn a_question_can_be_refused_with_a_reason() {
     assert!(texts(&runs).contains(&Entry::Answer {
         id: "req-1".into(),
         allow: false,
-        message: "Use cargo test instead".into()
+        message: "Use cargo test instead".into(),
+        always: false,
     }));
+}
+
+#[test]
+fn a_question_can_be_allowed_for_the_session() {
+    let f = fixture();
+    let (task, runs) = start(&f, "please suggest a rule");
+    wait_for("the question", || !runs.asks().is_empty());
+    let ask = runs.asks().remove(0);
+    assert_eq!(ask.session.as_deref(), Some("`npm test` commands"));
+    runs.allow_for_session(&ask.id).unwrap();
+    assert_eq!(done(&runs), RunState::Finished);
+    let sent = std::fs::read_to_string(task.worktree.join("answer.txt")).unwrap();
+    // The suggested rules go back with the allow.
+    let reply = spor::json::Json::parse(sent.trim()).unwrap();
+    let response = reply.get("response").get("response");
+    let update = &response.get("updatedPermissions").array()[0];
+    assert_eq!(update.get("type").str(), Some("addRules"), "{sent}");
+    assert_eq!(update.get("destination").str(), Some("session"));
+    let rule = &update.get("rules").array()[0];
+    assert_eq!(rule.get("toolName").str(), Some("Bash"));
+    assert_eq!(rule.get("ruleContent").str(), Some("npm test:*"));
+    assert!(sent.contains(r#""updatedInput":{"command":"npm test -- --watch=false"}"#));
+    assert!(texts(&runs).contains(&Entry::Answer {
+        id: ask.id.clone(),
+        allow: true,
+        message: String::new(),
+        always: true,
+    }));
+}
+
+#[test]
+fn without_suggestions_it_can_only_be_allowed_once() {
+    let f = fixture();
+    let (_task, runs) = start(&f, "please ask first");
+    wait_for("the question", || !runs.asks().is_empty());
+    assert_eq!(runs.asks()[0].session, None);
+    let err = runs.allow_for_session("req-1").unwrap_err();
+    assert_eq!(err, "This can only be allowed once");
+    // Still waiting, and still answerable.
+    runs.answer("req-1", true, "").unwrap();
+    assert_eq!(done(&runs), RunState::Finished);
 }
 
 #[test]

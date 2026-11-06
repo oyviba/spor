@@ -16,6 +16,9 @@ pub enum TaskState {
     Open,
     /// Merged into its base as this commit; its branch and worktree are gone.
     Landed(String),
+    /// Its pull request was closed without merging; its branch and worktree
+    /// are gone.
+    Closed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,19 +26,32 @@ pub struct Task {
     /// Short and readable, from the prompt: `fix-login-redirect`.
     pub id: String,
     pub prompt: String,
-    /// The branch it started from and lands on.
+    /// The branch it lands on (and its pull request goes into).
     pub base: String,
+    /// Where it started when that isn't `base` itself: `origin/main`, so a
+    /// task starts from what the remote has, not a local copy that may be
+    /// behind. Its work is what it has on top of this.
+    pub from: Option<String>,
     pub branch: String,
     pub worktree: PathBuf,
     /// Unix time it was created.
     pub created: i64,
     pub state: TaskState,
+    /// The GitHub issue it was started from.
+    pub issue: Option<u64>,
+    /// The pull request its branch was published as.
+    pub pull: Option<u64>,
 }
 
 impl Task {
     /// The task's working tree as a repository.
     pub fn repo(&self) -> Repo {
         Repo::new(&self.worktree)
+    }
+
+    /// The ref its work is measured from: `from`, or else `base`.
+    pub fn start(&self) -> &str {
+        self.from.as_deref().unwrap_or(&self.base)
     }
 
     /// The prompt's first line, for lists and commit subjects.
@@ -46,6 +62,54 @@ impl Task {
         } else {
             line.to_string()
         }
+    }
+
+    /// The landing commit's message: the title, the prompt (an issue's
+    /// whole text is left out: the issue has it), `Closes #n`, and the
+    /// `Spor-Task` trailer.
+    pub fn land_message(&self) -> String {
+        let mut parts = vec![self.title()];
+        match self.issue {
+            Some(n) => parts.push(format!("Closes #{n}")),
+            None if self.prompt.trim() != self.title() => {
+                parts.push(self.prompt.trim().to_string())
+            }
+            None => {}
+        }
+        parts.push(format!("Spor-Task: {}", self.id));
+        parts.join("\n\n")
+    }
+
+    /// The description of the pull request it's published as: `Closes #n`
+    /// for an issue, then `description` (one written for the work), else
+    /// the rest of the prompt (an issue's text is left out: the issue has
+    /// it).
+    pub fn pull_request_body(&self, description: Option<&str>) -> String {
+        let mut parts = Vec::new();
+        if let Some(n) = self.issue {
+            parts.push(format!("Closes #{n}"));
+        }
+        match (description.map(str::trim), self.issue) {
+            (Some(d), _) if !d.is_empty() => parts.push(d.to_string()),
+            (_, Some(_)) => {}
+            _ => {
+                let rest = self
+                    .prompt
+                    .trim()
+                    .lines()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !rest.trim().is_empty() {
+                    parts.push(rest.trim().to_string());
+                }
+            }
+        }
+        parts.push(format!(
+            "---\n_Made by an agent in spor task `{}`._",
+            self.id
+        ));
+        parts.join("\n\n")
     }
 
     /// A shell command that starts Claude Code on the prompt in the task's
@@ -76,6 +140,8 @@ pub struct TaskStats {
     pub last_commit: i64,
     /// Its folder is gone (deleted by hand, say).
     pub missing: bool,
+    /// Commits its published branch doesn't have yet (0 when unpublished).
+    pub unpushed: usize,
 }
 
 impl TaskStats {
@@ -103,17 +169,6 @@ pub struct Undoable {
     pub base_before: Option<String>,
 }
 
-impl Undoable {
-    /// What was done, for the undo entry and its toast: "Landed fix-login
-    /// on main", "Discarded fix-login".
-    pub fn label(&self) -> String {
-        match self.base_before {
-            Some(_) => format!("Landed {} on {}", self.task.id, self.task.base),
-            None => format!("Discarded {}", self.task.id),
-        }
-    }
-}
-
 /// The tasks of one repository.
 #[derive(Debug, Clone)]
 pub struct Tasks {
@@ -131,7 +186,7 @@ impl Tasks {
         })
     }
 
-    /// Open tasks first (newest first), then landed ones.
+    /// Open tasks first (newest first), then landed and closed ones.
     pub fn list(&self) -> Vec<Task> {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return Vec::new();
@@ -143,9 +198,9 @@ impl Tasks {
             .filter_map(|text| parse_task(&text))
             .collect();
         tasks.sort_by(|a, b| {
-            let landed = |t: &Task| matches!(t.state, TaskState::Landed(_));
-            landed(a)
-                .cmp(&landed(b))
+            let settled = |t: &Task| t.state != TaskState::Open;
+            settled(a)
+                .cmp(&settled(b))
                 .then(b.created.cmp(&a.created))
                 .then(a.id.cmp(&b.id))
         });
@@ -158,13 +213,44 @@ impl Tasks {
     }
 
     /// Start a task: a branch from `base` checked out in a folder of its own.
+    /// `base` may be a remote-tracking branch (`origin/main`): the task
+    /// starts there and lands on the local branch of that name.
     pub fn create(&self, prompt: &str, base: &str) -> Result<Task, String> {
+        self.create_with(prompt, base, &slug(prompt), None)
+    }
+
+    /// Start a task on a GitHub issue: its id (and branch) begin with the
+    /// issue's number, and it remembers the issue so its pull request and
+    /// landing commit close it.
+    pub fn create_for_issue(
+        &self,
+        prompt: &str,
+        base: &str,
+        issue: u64,
+        title: &str,
+    ) -> Result<Task, String> {
+        let id = format!("{issue}-{}", slug(title));
+        let id = id.trim_end_matches("-task");
+        self.create_with(prompt, base, id, Some(issue))
+    }
+
+    fn create_with(
+        &self,
+        prompt: &str,
+        base: &str,
+        id: &str,
+        issue: Option<u64>,
+    ) -> Result<Task, String> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
             return Err("Describe the task first".into());
         }
         let base_sha = self.repo.resolve(base)?;
-        let id = self.unique_id(&slug(prompt));
+        let (base, from) = match self.repo.remote_branch(base) {
+            Some(local) => (local, Some(base.to_string())),
+            None => (base.to_string(), None),
+        };
+        let id = self.unique_id(id);
         let branch = format!("agent/{id}");
         let worktree = self.worktree_dir()?.join(&id);
         std::fs::create_dir_all(worktree.parent().unwrap_or(&worktree))
@@ -175,11 +261,14 @@ impl Tasks {
         let task = Task {
             id,
             prompt: prompt.to_string(),
-            base: base.to_string(),
+            base,
+            from,
             branch,
             worktree,
             created: now(),
             state: TaskState::Open,
+            issue,
+            pull: None,
         };
         self.save(&task)?;
         Ok(task)
@@ -232,28 +321,29 @@ impl Tasks {
         self.unlist(id)
     }
 
-    /// Clean up after landed and discarded tasks (#41): their run
-    /// checkpoints (`refs/spor/tasks/<id>/…`), and a discarded task's
-    /// transcripts. Undo can't bring those back afterwards, so apps do this
-    /// when nothing is left to undo (at start) or when asked. Returns how
-    /// many tasks it cleaned up after.
+    /// Clean up after tasks that are done (landed, closed or discarded,
+    /// #41): their run checkpoints (`refs/spor/tasks/<id>/…`), and a
+    /// discarded task's transcripts. Undo can't bring those back
+    /// afterwards, so the app does this when nothing is left to undo (when
+    /// it opens a repository) or when asked. Returns how many tasks it
+    /// cleaned up after.
     pub fn clean_up(&self) -> usize {
-        let open: std::collections::HashSet<String> = self
-            .list()
-            .into_iter()
+        let listed = self.list();
+        let open: std::collections::HashSet<&str> = listed
+            .iter()
             .filter(|t| t.state == TaskState::Open)
-            .map(|t| t.id)
+            .map(|t| t.id.as_str())
             .collect();
-        let listed: std::collections::HashSet<String> =
-            self.list().into_iter().map(|t| t.id).collect();
-        let mut ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let known: std::collections::HashSet<&str> = listed.iter().map(|t| t.id.as_str()).collect();
+        let mut ids = std::collections::BTreeSet::new();
         // Tasks with checkpoints.
+        let prefix = crate::agent::checkpoint_prefix("");
         ids.extend(
-            crate::checkpoint::list(self.repo.root(), "refs/spor/tasks/")
+            crate::checkpoint::list(self.repo.root(), &prefix)
                 .iter()
-                .filter_map(|r| r.strip_prefix("refs/spor/tasks/"))
+                .filter_map(|r| r.strip_prefix(&prefix))
                 .filter_map(|r| r.split('/').next())
-                .filter(|id| !open.contains(*id))
+                .filter(|id| !open.contains(id))
                 .map(String::from),
         );
         // Discarded tasks' transcripts.
@@ -262,7 +352,7 @@ impl Tasks {
             for e in entries.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
                 if let Some(id) = name.strip_suffix(".d") {
-                    if !listed.contains(id) {
+                    if !known.contains(id) {
                         ids.insert(id.to_string());
                         gone_dirs.push(e.path());
                     }
@@ -295,6 +385,29 @@ impl Tasks {
         self.dir.join(format!("{id}.d"))
     }
 
+    /// Where images attached to prompts are kept: `.git/spor/attachments/`,
+    /// beside the tasks, so they stay out of every folder and commit.
+    pub fn attachments_dir(&self) -> PathBuf {
+        self.dir.with_file_name("attachments")
+    }
+
+    /// Keep an image attached to a prompt, for an agent to look at. It's
+    /// named by its content, so attaching the same picture twice keeps it
+    /// once. PNG, JPEG, GIF and WebP only: what Claude can read.
+    pub fn attach(&self, data: &[u8]) -> Result<PathBuf, String> {
+        let ext = image_kind(data).ok_or("Only PNG, JPEG, GIF and WebP images can be attached")?;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        data.hash(&mut hasher);
+        let dir = self.attachments_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("{:016x}.{ext}", hasher.finish()));
+        if !path.exists() {
+            std::fs::write(&path, data).map_err(|e| e.to_string())?;
+        }
+        Ok(path)
+    }
+
     pub fn stats(&self, task: &Task) -> TaskStats {
         if task.state != TaskState::Open {
             return TaskStats::default();
@@ -307,8 +420,8 @@ impl Tasks {
             };
         }
         let start = wt
-            .merge_base(&task.base, "HEAD")
-            .unwrap_or_else(|_| task.base.clone());
+            .merge_base(task.start(), "HEAD")
+            .unwrap_or_else(|_| task.start().to_string());
         let (files, additions, deletions) = wt.numstat_since(&start);
         let status = wt.status().unwrap_or_default();
         let mut uncommitted: Vec<&str> = status.iter().map(|e| e.path.as_str()).collect();
@@ -336,17 +449,66 @@ impl Tasks {
             files: files + untracked.len(),
             additions: additions + untracked_lines,
             deletions,
-            base_moved: wt.count_commits(&format!("HEAD..{}", task.base)) > 0,
+            base_moved: wt.count_commits(&format!("HEAD..{}", task.start())) > 0,
             last_commit: wt.commit_time("HEAD"),
             missing: false,
+            unpushed: wt.count_commits("@{upstream}..HEAD"),
         }
+    }
+
+    /// What landing the task (or merging its pull request) would take away
+    /// from its base that came to the base after the task started: lines
+    /// added there since, that the result wouldn't have. That's almost
+    /// always files written back from an older copy after a rebase or a
+    /// merge, which quietly reverts other work. Lines that moved elsewhere
+    /// don't count. Per file, most lines first.
+    /// Nothing when the merge would conflict (that shows as conflicts) or
+    /// the branch's reflog doesn't say where it started.
+    pub fn undoes(&self, task: &Task) -> Vec<(String, usize)> {
+        if task.state != TaskState::Open || !task.worktree.exists() {
+            return Vec::new();
+        }
+        // Where the branch was created from, by its reflog.
+        let Some(start) = self.repo.first_logged(&task.branch) else {
+            return Vec::new();
+        };
+        let arrived: std::collections::HashSet<String> = self
+            .repo
+            .commits_in(&format!("{start}..{}", task.base))
+            .into_iter()
+            .collect();
+        if arrived.is_empty() {
+            return Vec::new();
+        }
+        let Some(tree) = task.repo().merged_tree(&task.base, "HEAD") else {
+            return Vec::new();
+        };
+        let touched = self.repo.changed_paths(&start, &task.base);
+        // A line that's somewhere else in the result moved; it didn't go.
+        let added = self.repo.added_lines(&task.base, &tree);
+        let mut undone: Vec<(String, usize)> = self
+            .repo
+            .removed_lines(&task.base, &tree, &touched)
+            .into_iter()
+            .filter_map(|(path, runs)| {
+                let n = self
+                    .repo
+                    .blame_runs(&task.base, &path, &runs)
+                    .iter()
+                    .filter(|l| arrived.contains(&l.hash) && !added.contains(l.text.trim()))
+                    .count();
+                (n > 0).then_some((path, n))
+            })
+            .collect();
+        undone.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        undone
     }
 
     /// Everything the task changed since it left its base, uncommitted work
     /// and new files included.
     pub fn patch(&self, task: &Task) -> Result<String, String> {
         let wt = task.repo();
-        let start = wt.merge_base(&task.base, "HEAD")?;
+        let start = wt.merge_base(task.start(), "HEAD")?;
         wt.patch_since(&start)
     }
 
@@ -389,7 +551,10 @@ impl Tasks {
 
     /// Put the task's work on its base, which must be checked out here.
     /// The task's branch is rebased onto the base first if the base has
-    /// moved, so landing itself never conflicts; with `commit_uncommitted`
+    /// moved, so landing itself never conflicts. A task started from the
+    /// remote's copy of the base (`from`) needs the base to have what it
+    /// started from, or the squash would carry the remote's commits too:
+    /// pull first. With `commit_uncommitted`
     /// uncommitted work in its folder is committed first, otherwise it's
     /// refused. Afterwards the folder and branch are removed.
     pub fn land(
@@ -417,8 +582,7 @@ impl Tasks {
             if !commit_uncommitted {
                 return Err(format!("{} has uncommitted changes", task.id));
             }
-            wt.stage_all()?;
-            wt.commit(&format!("Uncommitted work from {}", task.id))?;
+            commit_all(&wt, task)?;
         }
         if self
             .repo
@@ -427,7 +591,20 @@ impl Tasks {
         {
             return Err(format!("{} has nothing to land", task.id));
         }
-        if stats.base_moved {
+        if let Some(from) = &task.from {
+            let fork = self.repo.merge_base(from, &task.branch)?;
+            let missing = self.repo.count_commits(&format!("{}..{fork}", task.base));
+            if missing > 0 {
+                return Err(format!(
+                    "{} is {missing} {} behind {from}, where {} started — pull {} first, then land",
+                    task.base,
+                    if missing == 1 { "commit" } else { "commits" },
+                    task.id,
+                    task.base
+                ));
+            }
+        }
+        if wt.count_commits(&format!("HEAD..{}", task.base)) > 0 {
             match wt.rebase(&task.base)? {
                 Outcome::Done => {}
                 Outcome::Conflicts(files) => {
@@ -443,17 +620,7 @@ impl Tasks {
         }
         let base_before = self.repo.head_sha()?;
         let branch_sha = self.repo.resolve(&task.branch)?;
-        let message = format!(
-            "{}\n\n{}\n\nSpor-Task: {}",
-            task.title(),
-            task.prompt.trim(),
-            task.id
-        );
-        let message = if task.prompt.trim() == task.title() {
-            format!("{}\n\nSpor-Task: {}", task.title(), task.id)
-        } else {
-            message
-        };
+        let message = task.land_message();
         let outcome = match mode {
             LandMode::Squash => {
                 let o = self.repo.squash_merge(&task.branch)?;
@@ -480,6 +647,136 @@ impl Tasks {
             task: task.clone(),
             branch_sha,
             base_before: Some(base_before),
+        })
+    }
+
+    /// Push the task's branch to `remote` and open a pull request for it
+    /// on GitHub, into its base. With `commit_uncommitted`, uncommitted
+    /// work in its folder is committed first; otherwise it's refused. With
+    /// `describe`, Claude Code writes the PR's title and description from
+    /// the work (and the agent's session); if it can't, the PR gets the
+    /// prompt's. The task remembers the PR. Returns its number and URL.
+    pub fn publish(
+        &self,
+        task: &Task,
+        remote: &str,
+        draft: bool,
+        commit_uncommitted: bool,
+        describe: bool,
+    ) -> Result<(u64, String), String> {
+        if task.state != TaskState::Open {
+            return Err(format!("{} is already settled", task.id));
+        }
+        let stats = self.stats(task);
+        if stats.missing {
+            return Err(format!("{}'s folder is gone", task.id));
+        }
+        let wt = task.repo();
+        if stats.uncommitted > 0 {
+            if !commit_uncommitted {
+                return Err(format!("{} has uncommitted changes", task.id));
+            }
+            commit_all(&wt, task)?;
+        }
+        if self
+            .repo
+            .count_commits(&format!("{}..{}", task.start(), task.branch))
+            == 0
+        {
+            return Err(format!("{} has no commits to publish", task.id));
+        }
+        self.push(task, remote, false)?;
+        let described = describe
+            .then(|| crate::agent::describe_pull(self, task).ok())
+            .flatten();
+        let (title, description) = match &described {
+            Some((t, d)) => (t.clone(), Some(d.as_str())),
+            None => (task.title(), None),
+        };
+        let (number, url) = crate::github::create_pull(
+            &task.worktree,
+            &task.branch,
+            &task.base,
+            &title,
+            &task.pull_request_body(description),
+            draft,
+        )?;
+        self.save(&Task {
+            pull: Some(number),
+            ..task.clone()
+        })?;
+        Ok((number, url))
+    }
+
+    /// Push the task's branch to `remote` (setting it as the upstream), so
+    /// its pull request gets the agent's latest commits. A key passphrase
+    /// or password comes up in the app, as for any other push.
+    /// Push the task's branch to `remote`. With `commit_uncommitted`,
+    /// uncommitted work in its folder is committed first, so it goes too.
+    pub fn push(&self, task: &Task, remote: &str, commit_uncommitted: bool) -> Result<(), String> {
+        if task.state != TaskState::Open || !task.worktree.exists() {
+            return Err(format!("{} has no folder to push from", task.id));
+        }
+        let wt = task.repo();
+        if commit_uncommitted && !wt.status()?.is_empty() {
+            commit_all(&wt, task)?;
+        }
+        crate::askpass::git_network(
+            &task.worktree,
+            &["push", "--set-upstream", remote, &task.branch],
+        )
+        .map(drop)
+    }
+
+    /// Remember the pull request a task's branch was published as (one
+    /// opened outside spor, found by its branch).
+    pub fn link_pull(&self, task: &Task, number: u64) -> Result<(), String> {
+        if task.pull == Some(number) {
+            return Ok(());
+        }
+        self.save(&Task {
+            pull: Some(number),
+            ..task.clone()
+        })
+    }
+
+    /// The task's pull request was merged on the host as `commit`: mark it
+    /// landed, and remove its folder and branch, which aren't needed any
+    /// more. Refused while its folder has work the PR doesn't. Undoable
+    /// with [`Tasks::restore`], like a discard.
+    pub fn settle(&self, task: &Task, commit: &str) -> Result<Undoable, String> {
+        self.settle_as(task, TaskState::Landed(commit.to_string()))
+    }
+
+    /// The task's pull request was closed without merging: mark it closed,
+    /// and remove its folder and branch, as [`Tasks::settle`] does.
+    pub fn close(&self, task: &Task) -> Result<Undoable, String> {
+        self.settle_as(task, TaskState::Closed)
+    }
+
+    fn settle_as(&self, task: &Task, state: TaskState) -> Result<Undoable, String> {
+        if task.state != TaskState::Open {
+            return Err(format!("{} is already settled", task.id));
+        }
+        let branch_sha = self.repo.resolve(&task.branch)?;
+        if task.worktree.exists() {
+            if !task.repo().status()?.is_empty() {
+                return Err(format!(
+                    "{} has uncommitted changes the pull request doesn't have — commit or discard them first",
+                    task.id
+                ));
+            }
+            self.repo.remove_worktree(&task.worktree, false)?;
+        }
+        self.repo.delete_branch(&task.branch, true)?;
+        self.save(&Task {
+            state,
+            ..task.clone()
+        })?;
+        Ok(Undoable {
+            task: task.clone(),
+            branch_sha,
+            base_before: None,
         })
     }
 
@@ -519,6 +816,12 @@ impl Tasks {
 }
 
 /// Lines in a file's contents, counting a last line without a newline.
+/// Commit everything in the task's folder, as work the agent left uncommitted.
+fn commit_all(wt: &Repo, task: &Task) -> Result<(), String> {
+    wt.stage_all()?;
+    wt.commit(&format!("Uncommitted work from {}", task.id))
+}
+
 fn bytecount_lines(bytes: &[u8]) -> usize {
     let newlines = bytes.iter().filter(|&&b| b == b'\n').count();
     newlines + usize::from(bytes.last().is_some_and(|&b| b != b'\n'))
@@ -562,6 +865,7 @@ fn render_task(t: &Task) -> String {
     let state = match &t.state {
         TaskState::Open => "open".to_string(),
         TaskState::Landed(sha) => format!("landed {sha}"),
+        TaskState::Closed => "closed".to_string(),
     };
     let fields = [
         ("id", t.id.clone()),
@@ -572,9 +876,16 @@ fn render_task(t: &Task) -> String {
         ("created", t.created.to_string()),
         ("state", state),
     ];
+    let optional = [("issue", t.issue), ("pull", t.pull)];
     fields
         .iter()
         .map(|(k, v)| format!("{k}\t{}\n", escape(v)))
+        .chain(t.from.iter().map(|f| format!("from\t{}\n", escape(f))))
+        .chain(
+            optional
+                .iter()
+                .filter_map(|(k, v)| v.map(|n| format!("{k}\t{n}\n"))),
+        )
         .collect()
 }
 
@@ -584,18 +895,23 @@ fn parse_task(text: &str) -> Option<Task> {
             .find_map(|l| l.strip_prefix(key)?.strip_prefix('\t'))
             .map(unescape)
     };
-    let state = match get("state")?.split_once(' ') {
+    let state = get("state")?;
+    let state = match state.split_once(' ') {
         Some(("landed", sha)) => TaskState::Landed(sha.to_string()),
+        None if state == "closed" => TaskState::Closed,
         _ => TaskState::Open,
     };
     Some(Task {
         id: get("id")?,
         prompt: get("prompt")?,
         base: get("base")?,
+        from: get("from"),
         branch: get("branch")?,
         worktree: PathBuf::from(get("worktree")?),
         created: get("created")?.parse().unwrap_or(0),
         state,
+        issue: get("issue").and_then(|n| n.parse().ok()),
+        pull: get("pull").and_then(|n| n.parse().ok()),
     })
 }
 
@@ -623,9 +939,33 @@ fn unescape(s: &str) -> String {
     out
 }
 
+/// An image's extension, from its first bytes.
+fn image_kind(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("jpg")
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attached_images_are_known_by_their_bytes() {
+        assert_eq!(image_kind(b"\x89PNG\r\n\x1a\n...."), Some("png"));
+        assert_eq!(image_kind(&[0xff, 0xd8, 0xff, 0xe0]), Some("jpg"));
+        assert_eq!(image_kind(b"GIF89a.."), Some("gif"));
+        assert_eq!(image_kind(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(image_kind(b"<svg>"), None);
+    }
 
     #[test]
     fn slugs() {
@@ -644,12 +984,20 @@ mod tests {
             id: "x".into(),
             prompt: "Line one\n\twith a tab \\ and a backslash".into(),
             base: "main".into(),
+            from: Some("origin/main".into()),
             branch: "agent/x".into(),
             worktree: PathBuf::from("/tmp/r.spor/x"),
             created: 42,
             state: TaskState::Landed("abc".into()),
+            issue: Some(7),
+            pull: Some(12),
         };
-        assert_eq!(parse_task(&render_task(&task)), Some(task));
+        assert_eq!(parse_task(&render_task(&task)), Some(task.clone()));
+        let closed = Task {
+            state: TaskState::Closed,
+            ..task
+        };
+        assert_eq!(parse_task(&render_task(&closed)), Some(closed));
     }
 
     #[test]
@@ -658,10 +1006,13 @@ mod tests {
             id: "x".into(),
             prompt: "Don't break it".into(),
             base: "main".into(),
+            from: None,
             branch: "agent/x".into(),
             worktree: PathBuf::from("/tmp/my repo.spor/x"),
             created: 0,
             state: TaskState::Open,
+            issue: None,
+            pull: None,
         };
         assert_eq!(
             task.agent_command(),

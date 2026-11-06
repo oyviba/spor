@@ -33,10 +33,10 @@ impl Repo {
 pub fn repo(dir: &Path) -> Result<Repo, String> {
     let info = remote::detect_in(dir).ok_or("This repository has no origin remote")?;
     if info.host != Host::GitHub {
-        return Err("Pull requests and Actions work with GitHub repositories".into());
+        return Err("This needs a repository on GitHub — origin is somewhere else".into());
     }
     remote::cli_tool(&info.host).ok_or(
-        "Install the GitHub CLI (gh) and run `gh auth login` to see pull requests and Actions",
+        "Spor couldn't find the GitHub CLI (gh). Install it and sign in with `gh auth login`",
     )?;
     let host = info
         .web_url
@@ -352,6 +352,71 @@ pub fn list_pulls(dir: &Path, filter: PullFilter) -> Result<Vec<Pull>, String> {
     Ok(pulls)
 }
 
+/// An open pull request somewhere on a host that waits for your review.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReviewRequest {
+    /// `owner/name`.
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub updated: i64,
+    pub url: String,
+}
+
+fn parse_review_requests(out: &str) -> Vec<ReviewRequest> {
+    out.lines()
+        .filter_map(
+            |line| match line.split('\t').collect::<Vec<_>>().as_slice() {
+                ["rr", repo, number, title, author, updated, url, ..] => Some(ReviewRequest {
+                    repo: repo.to_string(),
+                    number: number.parse().ok()?,
+                    title: unescape(title),
+                    author: author.to_string(),
+                    updated: parse_time(updated),
+                    url: url.to_string(),
+                }),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+/// Every open pull request on `host` (`github.com`, or an Enterprise host)
+/// that waits for your review, across all repositories: one search, not one
+/// call per repository.
+pub fn review_requests(host: &str) -> Result<Vec<ReviewRequest>, String> {
+    let jq = r#".[] | ["rr", .repository.nameWithOwner, (.number|tostring), .title, (.author.login // ""), .updatedAt, .url] | @tsv"#;
+    let out = Command::new("gh")
+        .env("GH_HOST", host)
+        .args([
+            "search",
+            "prs",
+            "--review-requested=@me",
+            "--state=open",
+            "--limit",
+            "100",
+            "--json",
+            "repository,number,title,author,updatedAt,url",
+            "--jq",
+            jq,
+        ])
+        .output()
+        .map_err(|e| format!("Couldn't run gh: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(err
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("gh failed")
+            .to_string());
+    }
+    let mut found = parse_review_requests(&String::from_utf8_lossy(&out.stdout));
+    found.sort_by_key(|r| std::cmp::Reverse(r.updated));
+    Ok(found)
+}
+
 /// Whether GitHub would let the PR merge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mergeable {
@@ -594,6 +659,27 @@ pub fn merge_pull(dir: &Path, number: u64, method: MergeMethod) -> Result<(), St
         ],
     )
     .map(drop)
+    .map_err(|e| merge_refusal(number, &e))
+}
+
+/// gh's reasons for not merging, said as what to do about them. Anything
+/// else is passed on as it is.
+fn merge_refusal(number: u64, err: &str) -> String {
+    if err.contains("merge commit cannot be cleanly created") {
+        format!(
+            "#{number} conflicts with its base branch. Merge the base into it, \
+             resolve the conflicts and push, then merge again"
+        )
+    } else if err.contains("head branch is not up to date") {
+        format!("#{number} is behind its base branch, which must be merged into it first")
+    } else if err.contains("base branch policy prohibits the merge") {
+        format!(
+            "#{number} isn't allowed to merge yet: it needs the reviews or checks \
+             its base branch requires"
+        )
+    } else {
+        err.to_string()
+    }
 }
 
 /// Check the PR's branch out locally (works for forks too).
@@ -635,6 +721,417 @@ pub fn set_pull_open(dir: &Path, number: u64, open: bool) -> Result<(), String> 
     let repo = repo(dir)?;
     let verb = if open { "reopen" } else { "close" };
     gh(dir, &repo, &["pr", verb, &number.to_string()]).map(drop)
+}
+
+/// Open a pull request from `head` (already pushed) into `base`. Returns
+/// its number and URL.
+pub fn create_pull(
+    dir: &Path,
+    head: &str,
+    base: &str,
+    title: &str,
+    body: &str,
+    draft: bool,
+) -> Result<(u64, String), String> {
+    let repo = repo(dir)?;
+    let mut args = vec![
+        "pr", "create", "--head", head, "--base", base, "--title", title, "--body", body,
+    ];
+    if draft {
+        args.push("--draft");
+    }
+    let out = gh(dir, &repo, &args)?;
+    // `gh pr create` prints the new PR's URL.
+    let url = out
+        .lines()
+        .map(str::trim)
+        .rfind(|l| l.starts_with("https://"))
+        .ok_or("gh didn't say which pull request it opened")?
+        .to_string();
+    let number = pull_number_from_url(&url).ok_or_else(|| format!("Couldn't read {url}"))?;
+    Ok((number, url))
+}
+
+/// `https://github.com/o/r/pull/12` → 12.
+fn pull_number_from_url(url: &str) -> Option<u64> {
+    let (_, rest) = url.split_once("/pull/")?;
+    rest.split(['/', '#', '?']).next()?.parse().ok()
+}
+
+/// A pull request whose head is an agent task's branch, with the commit it
+/// was merged as.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BranchPull {
+    pub pull: Pull,
+    pub merge_commit: Option<String>,
+}
+
+fn parse_branch_pulls(out: &str) -> Vec<BranchPull> {
+    let mut found: Vec<BranchPull> = Vec::new();
+    for line in out.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        match f.as_slice() {
+            ["pr", rest @ ..] => {
+                if let Some(pull) = parse_pull(rest) {
+                    found.push(BranchPull {
+                        pull,
+                        merge_commit: None,
+                    });
+                }
+            }
+            ["merge", number, sha, ..] if !sha.is_empty() => {
+                let number: u64 = number.parse().unwrap_or(0);
+                if let Some(bp) = found.iter_mut().find(|b| b.pull.number == number) {
+                    bp.merge_commit = Some(sha.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Pull requests (open, merged and closed) whose head branch starts with
+/// `prefix`, newest first: one call for every agent task's PR.
+pub fn pulls_for_branches(dir: &Path, prefix: &str) -> Result<Vec<BranchPull>, String> {
+    let repo = repo(dir)?;
+    let fields = format!("{PULL_FIELDS},mergeCommit");
+    let jq = format!(
+        r#".[] | select(.headRefName | startswith("{prefix}")) | ({}), (["merge", (.number|tostring), (.mergeCommit.oid // "")] | @tsv)"#,
+        pull_jq("pr")
+    );
+    let out = gh(
+        dir,
+        &repo,
+        &[
+            "pr", "list", "--state", "all", "--limit", "200", "--json", &fields, "--jq", &jq,
+        ],
+    )?;
+    let mut pulls = parse_branch_pulls(&out);
+    pulls.sort_by_key(|b| std::cmp::Reverse(b.pull.updated));
+    Ok(pulls)
+}
+
+/// A comment on a line of the PR's diff.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineNote {
+    pub author: String,
+    pub path: String,
+    /// The line in the PR's version of the file; 0 when GitHub no longer
+    /// knows where it is (the line has changed since).
+    pub line: u64,
+    pub body: String,
+    pub at: i64,
+}
+
+fn parse_line_notes(out: &str) -> Vec<LineNote> {
+    out.lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split('\t').collect();
+            match f.as_slice() {
+                ["note", author, path, line, body, at, ..] => Some(LineNote {
+                    author: author.to_string(),
+                    path: unescape(path),
+                    line: line.parse().unwrap_or(0),
+                    body: unescape(body),
+                    at: parse_time(at),
+                }),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The comments on lines of the PR's diff, oldest first.
+pub fn line_notes(dir: &Path, number: u64) -> Result<Vec<LineNote>, String> {
+    let repo = repo(dir)?;
+    let path = format!("repos/{}/{}/pulls/{number}/comments", repo.owner, repo.name);
+    let jq = r#".[] | ["note", (.user.login // ""), .path, ((.line // .original_line // 0)|tostring), .body, .created_at] | @tsv"#;
+    let out = gh(dir, &repo, &["api", "--paginate", &path, "--jq", jq])?;
+    let mut notes = parse_line_notes(&out);
+    notes.sort_by_key(|n| n.at);
+    Ok(notes)
+}
+
+/// What reviewers said on a PR since `since` (Unix seconds), written as a
+/// follow-up for the agent that made it: reviews and comments, then the
+/// line comments as `file:line — comment`. None when there's nothing new.
+pub fn review_feedback(detail: &PullDetail, notes: &[LineNote], since: i64) -> Option<String> {
+    let said: Vec<String> = detail
+        .timeline
+        .iter()
+        .filter(|c| c.at >= since && !c.body.trim().is_empty())
+        .map(|c| {
+            let how = match c.verdict {
+                Some(Verdict::ChangesRequested) => " (requested changes)",
+                Some(Verdict::Approved) => " (approved)",
+                _ => "",
+            };
+            format!("{}{how}:\n{}", c.author, quote(c.body.trim()))
+        })
+        .collect();
+    let lines: Vec<String> = notes
+        .iter()
+        .filter(|n| n.at >= since)
+        .map(|n| {
+            let place = if n.line > 0 {
+                format!("{}:{}", n.path, n.line)
+            } else {
+                n.path.clone()
+            };
+            format!(
+                "- `{place}` — {} ({})",
+                n.body.trim().replace('\n', " "),
+                n.author
+            )
+        })
+        .collect();
+    if said.is_empty() && lines.is_empty() {
+        return None;
+    }
+    let mut out = format!(
+        "Review on pull request #{} ({}):\n",
+        detail.pull.number, detail.pull.url
+    );
+    for s in &said {
+        out.push('\n');
+        out.push_str(s);
+        out.push('\n');
+    }
+    if !lines.is_empty() {
+        out.push_str("\nOn the diff:\n");
+        out.push_str(&lines.join("\n"));
+        out.push('\n');
+    }
+    out.push_str(
+        "\nAddress each point (or say why not), make sure it still builds and the tests pass, and commit.",
+    );
+    Some(out)
+}
+
+/// Markdown block quote.
+fn quote(text: &str) -> String {
+    text.lines()
+        .map(|l| format!("> {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// ── Issues ───────────────────────────────────────────────────────────────────
+
+/// Which issues the list shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueFilter {
+    /// Open ones assigned to you.
+    Assigned,
+    /// Open ones you opened.
+    Yours,
+    Open,
+    Closed,
+}
+
+/// An issue as the list shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub open: bool,
+    pub labels: Vec<String>,
+    pub assignees: Vec<String>,
+    pub comments: usize,
+    pub updated: i64,
+    pub url: String,
+}
+
+const ISSUE_FIELDS: &str = "number,title,author,state,labels,assignees,comments,updatedAt,url";
+
+fn issue_jq(tag: &str) -> String {
+    format!(
+        r#"["{tag}", (.number|tostring), .title, (.author.login // ""), .state, ([.labels[]?.name] | join(",")), ([.assignees[]?.login] | join(",")), (.comments|length|tostring), .updatedAt, .url] | @tsv"#
+    )
+}
+
+fn split_list(field: &str) -> Vec<String> {
+    field
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(unescape)
+        .collect()
+}
+
+fn parse_issue(f: &[&str]) -> Option<Issue> {
+    if f.len() < 9 {
+        return None;
+    }
+    Some(Issue {
+        number: f[0].parse().ok()?,
+        title: unescape(f[1]),
+        author: f[2].to_string(),
+        open: f[3] != "CLOSED",
+        labels: split_list(f[4]),
+        assignees: split_list(f[5]),
+        comments: f[6].parse().unwrap_or(0),
+        updated: parse_time(f[7]),
+        url: f[8].to_string(),
+    })
+}
+
+fn parse_issues(out: &str) -> Vec<Issue> {
+    out.lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split('\t').collect();
+            (f.first() == Some(&"issue")).then(|| parse_issue(&f[1..]))?
+        })
+        .collect()
+}
+
+/// The issues `filter` picks, most recently updated first.
+pub fn list_issues(dir: &Path, filter: IssueFilter) -> Result<Vec<Issue>, String> {
+    let repo = repo(dir)?;
+    let jq = format!(".[] | {}", issue_jq("issue"));
+    let mut args = vec!["issue", "list", "--limit", "100", "--json", ISSUE_FIELDS];
+    match filter {
+        IssueFilter::Assigned => args.extend(["--state", "open", "--assignee", "@me"]),
+        IssueFilter::Yours => args.extend(["--state", "open", "--author", "@me"]),
+        IssueFilter::Open => args.extend(["--state", "open"]),
+        IssueFilter::Closed => args.extend(["--state", "closed"]),
+    }
+    args.extend(["--jq", &jq]);
+    let mut issues = parse_issues(&gh(dir, &repo, &args)?);
+    issues.sort_by_key(|i| std::cmp::Reverse(i.updated));
+    Ok(issues)
+}
+
+/// Everything the issue page shows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IssueDetail {
+    pub issue: Issue,
+    pub body: String,
+    pub comments: Vec<Comment>,
+}
+
+/// The longest a comment gets in a task's prompt, and all of them together.
+const PROMPT_COMMENT: usize = 4000;
+const PROMPT_COMMENTS: usize = 20_000;
+
+impl IssueDetail {
+    /// The prompt an agent task starts from: the issue's title (the task's
+    /// title, so its first line), where it is, what it says, and what was
+    /// said about it.
+    pub fn task_prompt(&self) -> String {
+        let i = &self.issue;
+        let mut out = format!(
+            "{} (#{})\n\nGitHub issue #{}: {}\n",
+            i.title.trim(),
+            i.number,
+            i.number,
+            i.url
+        );
+        if !i.labels.is_empty() {
+            out.push_str(&format!("Labels: {}\n", i.labels.join(", ")));
+        }
+        let body = self.body.trim();
+        out.push('\n');
+        out.push_str(if body.is_empty() {
+            "(No description.)"
+        } else {
+            body
+        });
+        out.push('\n');
+        let mut room = PROMPT_COMMENTS;
+        let mut said = Vec::new();
+        // The latest discussion matters most: keep from the end.
+        for c in self.comments.iter().rev() {
+            let text = c.body.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let text: String = if text.chars().count() > PROMPT_COMMENT {
+                text.chars().take(PROMPT_COMMENT).chain(['…']).collect()
+            } else {
+                text.to_string()
+            };
+            let entry = format!("{} wrote:\n{}", c.author, quote(&text));
+            if entry.len() > room {
+                break;
+            }
+            room -= entry.len();
+            said.push(entry);
+        }
+        if !said.is_empty() {
+            said.reverse();
+            out.push_str("\nComments on the issue:\n\n");
+            out.push_str(&said.join("\n\n"));
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "\nResolve this issue in this folder. Keep the change focused on it, add or update tests where it makes sense, make sure it builds and the tests pass, and commit. The pull request will close #{}.",
+            i.number
+        ));
+        out
+    }
+}
+
+fn parse_issue_detail(out: &str) -> Option<IssueDetail> {
+    let mut issue = None;
+    let mut body = String::new();
+    let mut comments = Vec::new();
+    for line in out.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        match f.as_slice() {
+            ["issue", rest @ ..] => issue = parse_issue(rest),
+            ["body", b, ..] => body = unescape(b),
+            ["comment", author, b, at, ..] => comments.push(Comment {
+                author: author.to_string(),
+                body: unescape(b),
+                at: parse_time(at),
+                verdict: None,
+            }),
+            _ => {}
+        }
+    }
+    comments.sort_by_key(|c| c.at);
+    Some(IssueDetail {
+        issue: issue?,
+        body,
+        comments,
+    })
+}
+
+/// An issue with its description and comments.
+pub fn issue_detail(dir: &Path, number: u64) -> Result<IssueDetail, String> {
+    let repo = repo(dir)?;
+    let number = number.to_string();
+    let fields = format!("{ISSUE_FIELDS},body");
+    let jq = format!(
+        r#"({}), (["body", .body] | @tsv), (.comments[]? | ["comment", (.author.login // ""), .body, .createdAt] | @tsv)"#,
+        issue_jq("issue")
+    );
+    let out = gh(
+        dir,
+        &repo,
+        &["issue", "view", &number, "--json", &fields, "--jq", &jq],
+    )?;
+    parse_issue_detail(&out).ok_or_else(|| format!("Couldn't read issue #{number}"))
+}
+
+/// Add a comment to an issue.
+pub fn comment_on_issue(dir: &Path, number: u64, body: &str) -> Result<(), String> {
+    let repo = repo(dir)?;
+    gh(
+        dir,
+        &repo,
+        &["issue", "comment", &number.to_string(), "--body", body],
+    )
+    .map(drop)
+}
+
+/// Close an issue (as completed), or reopen a closed one.
+pub fn set_issue_open(dir: &Path, number: u64, open: bool) -> Result<(), String> {
+    let repo = repo(dir)?;
+    let verb = if open { "reopen" } else { "close" };
+    gh(dir, &repo, &["issue", verb, &number.to_string()]).map(drop)
 }
 
 // ── Actions ──────────────────────────────────────────────────────────────────
@@ -713,6 +1210,19 @@ pub fn list_runs(
     }
     args.extend(["--jq", &jq]);
     Ok(parse_runs(&gh(dir, &repo, &args)?))
+}
+
+/// The runs that are failing now: for each workflow on one of `branches`,
+/// its latest run, if that failed. A re-run that passes, or a newer push
+/// that does, takes the failure off the list. `runs` is newest first, as
+/// `list_runs` gives them.
+pub fn failing_runs(runs: Vec<Run>, branches: &[String]) -> Vec<Run> {
+    let mut seen = std::collections::HashSet::new();
+    runs.into_iter()
+        .filter(|r| branches.contains(&r.branch))
+        .filter(|r| seen.insert((r.workflow.clone(), r.branch.clone())))
+        .filter(|r| r.status == Status::Failure)
+        .collect()
 }
 
 /// The names of the repository's active workflows, sorted.
@@ -974,6 +1484,119 @@ pub fn job_log(dir: &Path, job_id: u64) -> Result<Vec<LogLine>, String> {
     gh(dir, &repo, &["api", &path]).map(|raw| parse_log(&raw))
 }
 
+/// How many log lines go to the agent per failed job.
+pub const FAILURE_LOG_LINES: usize = 200;
+
+/// A failed Actions job, as the agent is told about it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JobFailure {
+    pub workflow: String,
+    pub job: String,
+    /// The step that failed, when GitHub says.
+    pub step: Option<String>,
+    pub url: String,
+    /// The end of its log (see [`failure_tail`]).
+    pub log: Vec<String>,
+}
+
+/// The part of a log that explains a failure: up to its last error (the
+/// runner's cleanup steps after it are noise), at most `max` lines.
+pub fn failure_tail(log: &[LogLine], max: usize) -> Vec<String> {
+    let end = log
+        .iter()
+        .rposition(|l| l.kind == LogKind::Error)
+        .map_or(log.len(), |i| i + 1);
+    log[end.saturating_sub(max)..end]
+        .iter()
+        .map(|l| match l.kind {
+            LogKind::Group => format!("▸ {}", l.text),
+            _ => l.text.clone(),
+        })
+        .collect()
+}
+
+/// A failed job of `run` (its steps say which one failed), with the end of
+/// its `log`.
+pub fn job_failure(run: &RunDetail, job_id: u64, log: &[LogLine]) -> Option<JobFailure> {
+    let job = run.jobs.iter().find(|j| j.id == job_id)?;
+    Some(JobFailure {
+        workflow: run.run.workflow.clone(),
+        job: job.name.clone(),
+        step: job
+            .steps
+            .iter()
+            .find(|s| s.status == Status::Failure)
+            .map(|s| s.name.clone()),
+        url: job.url.clone(),
+        log: failure_tail(log, FAILURE_LOG_LINES),
+    })
+}
+
+/// Fetch a failed job's run and log, for [`failure_feedback`].
+pub fn fetch_job_failure(dir: &Path, run_id: u64, job_id: u64) -> Result<JobFailure, String> {
+    let run = run_detail(dir, run_id)?;
+    let log = job_log(dir, job_id)?;
+    job_failure(&run, job_id, &log).ok_or_else(|| format!("Run {run_id} has no job {job_id}"))
+}
+
+/// Failed Actions jobs written as a follow-up for the agent: for each, the
+/// job and its failing step, and the end of its log. `pull`: the pull
+/// request the checks are on. None when nothing failed.
+pub fn failure_feedback(failures: &[JobFailure], pull: Option<&Pull>) -> Option<String> {
+    if failures.is_empty() {
+        return None;
+    }
+    let mut out = match pull {
+        Some(p) => format!("CI failed on pull request #{} ({}):\n", p.number, p.url),
+        None => "CI failed:\n".to_string(),
+    };
+    for f in failures {
+        let name = if f.workflow.is_empty() {
+            f.job.clone()
+        } else {
+            format!("{} / {}", f.workflow, f.job)
+        };
+        out.push_str(&format!("\n`{name}` failed"));
+        if let Some(step) = &f.step {
+            out.push_str(&format!(" at step “{step}”"));
+        }
+        out.push_str(&format!(" ({}).\n", f.url));
+        if !f.log.is_empty() {
+            out.push_str(&format!(
+                "The end of its log:\n```\n{}\n```\n",
+                f.log.join("\n")
+            ));
+        }
+    }
+    out.push_str(
+        "\nFind the cause, fix it, make sure it builds and the tests pass locally, and commit.",
+    );
+    Some(out)
+}
+
+/// The failed Actions jobs among a PR's checks, fetched for
+/// [`failure_feedback`]. Checks that aren't Actions jobs (other apps,
+/// commit statuses) have no log to send and are left out.
+pub fn pull_failures(dir: &Path, detail: &PullDetail) -> Result<Vec<JobFailure>, String> {
+    let mut runs: Vec<RunDetail> = Vec::new();
+    let mut out = Vec::new();
+    for check in detail.checks.iter().filter(|c| c.status == Status::Failure) {
+        let (Some(run_id), Some(job_id)) = (check.run_id, check.job_id) else {
+            continue;
+        };
+        if !runs.iter().any(|r| r.run.id == run_id) {
+            runs.push(run_detail(dir, run_id)?);
+        }
+        let run = runs
+            .iter()
+            .find(|r| r.run.id == run_id)
+            .expect("fetched above");
+        let log = job_log(dir, job_id)?;
+        out.extend(job_failure(run, job_id, &log));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1085,6 +1708,153 @@ mod tests {
     }
 
     #[test]
+    fn pull_numbers_from_urls() {
+        assert_eq!(
+            pull_number_from_url("https://github.com/o/r/pull/12"),
+            Some(12)
+        );
+        assert_eq!(
+            pull_number_from_url("https://ghe.example.com/o/r/pull/7#x"),
+            Some(7)
+        );
+        assert_eq!(
+            pull_number_from_url("https://github.com/o/r/issues/7"),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_branch_pulls_with_merge_commits() {
+        let out = "pr\t12\tFix it\toyviba\tagent/fix-it\tmain\tMERGED\t\tSUCCESS\t2026-10-30T10:00:00Z\t3\t1\thttps://github.com/o/r/pull/12\n\
+                   merge\t12\tabc123\n\
+                   pr\t13\tOther\toyviba\tagent/other\tmain\tOPEN\t\t\t2026-10-31T10:00:00Z\t1\t0\thttps://github.com/o/r/pull/13\n\
+                   merge\t13\t\n";
+        let pulls = parse_branch_pulls(out);
+        assert_eq!(pulls.len(), 2);
+        assert_eq!(pulls[0].pull.state, PrState::Merged);
+        assert_eq!(pulls[0].merge_commit.as_deref(), Some("abc123"));
+        assert_eq!(pulls[1].merge_commit, None);
+    }
+
+    fn detail(timeline: Vec<Comment>) -> PullDetail {
+        PullDetail {
+            pull: Pull {
+                number: 12,
+                title: "Fix it".into(),
+                author: "a".into(),
+                head: "agent/fix-it".into(),
+                base: "main".into(),
+                state: PrState::Open,
+                review: ReviewState::ChangesRequested,
+                checks: ChecksState::None,
+                updated: 0,
+                additions: 0,
+                deletions: 0,
+                url: "https://github.com/o/r/pull/12".into(),
+            },
+            body: String::new(),
+            mergeable: Mergeable::Yes,
+            changed_files: 0,
+            commits: 0,
+            checks: Vec::new(),
+            timeline,
+        }
+    }
+
+    #[test]
+    fn merge_refusals_say_what_to_do() {
+        let dirty =
+            "X Pull request o/r#73 is not mergeable: the merge commit cannot be cleanly created.";
+        assert!(merge_refusal(73, dirty).starts_with("#73 conflicts with its base branch"));
+        let behind = "X Pull request o/r#5 is not mergeable: the head branch is not up to date with the base branch.";
+        assert!(merge_refusal(5, behind).contains("behind"));
+        assert_eq!(merge_refusal(5, "HTTP 502"), "HTTP 502");
+    }
+
+    #[test]
+    fn review_feedback_takes_what_is_new() {
+        let d = detail(vec![
+            Comment {
+                author: "old".into(),
+                body: "Seen already".into(),
+                at: 10,
+                verdict: None,
+            },
+            Comment {
+                author: "alice".into(),
+                body: "Not like this.\nLike that.".into(),
+                at: 100,
+                verdict: Some(Verdict::ChangesRequested),
+            },
+        ]);
+        let notes = parse_line_notes(
+            "note\tbob\tsrc/a.rs\t42\tRename this\\nplease\t2026-10-30T10:00:00Z\n\
+             note\tbob\tsrc/b.rs\t0\tGone\t2026-10-30T10:00:00Z\n",
+        );
+        assert_eq!(notes[0].body, "Rename this\nplease");
+        let text = review_feedback(&d, &notes, 50).unwrap();
+        assert!(!text.contains("Seen already"));
+        assert!(text.contains("alice (requested changes):\n> Not like this.\n> Like that."));
+        assert!(text.contains("- `src/a.rs:42` — Rename this please (bob)"));
+        assert!(text.contains("- `src/b.rs` — Gone (bob)"));
+        assert_eq!(review_feedback(&d, &[], 1000), None);
+    }
+
+    #[test]
+    fn parses_issues_and_builds_a_prompt() {
+        let out = "issue\t7\tLogin fails on Safari\toyviba\tOPEN\tbug,ui\toyviba\t2\t2026-10-30T10:00:00Z\thttps://github.com/o/r/issues/7\n\
+                   body\tSteps:\\n1. Open it\n\
+                   comment\tbob\tSame here\t2026-10-30T12:00:00Z\n\
+                   comment\talice\tI think it's the cookie\t2026-10-30T11:00:00Z\n";
+        let d = parse_issue_detail(out).unwrap();
+        assert_eq!(d.issue.number, 7);
+        assert!(d.issue.open);
+        assert_eq!(d.issue.labels, ["bug", "ui"]);
+        assert_eq!(d.issue.assignees, ["oyviba"]);
+        assert_eq!(d.body, "Steps:\n1. Open it");
+        assert_eq!(d.comments[0].author, "alice");
+        let prompt = d.task_prompt();
+        assert!(prompt.starts_with("Login fails on Safari (#7)\n"));
+        assert!(prompt.contains("https://github.com/o/r/issues/7"));
+        assert!(prompt.contains("Labels: bug, ui"));
+        assert!(prompt.contains("Steps:\n1. Open it"));
+        let (a, b) = (
+            prompt.find("alice wrote").unwrap(),
+            prompt.find("bob wrote").unwrap(),
+        );
+        assert!(a < b, "comments stay in order");
+        assert!(prompt.ends_with("The pull request will close #7."));
+
+        let list = parse_issues("issue\t8\tClosed one\tx\tCLOSED\t\t\t0\t2026-10-30T10:00:00Z\thttps://github.com/o/r/issues/8\njunk\n");
+        assert_eq!(list.len(), 1);
+        assert!(!list[0].open);
+        assert!(list[0].labels.is_empty());
+    }
+
+    #[test]
+    fn issue_prompts_keep_the_latest_comments() {
+        let comment = |n: i64| Comment {
+            author: format!("u{n}"),
+            body: "x".repeat(3000),
+            at: n,
+            verdict: None,
+        };
+        let d = IssueDetail {
+            issue: parse_issues(
+                "issue\t1\tBig\tx\tOPEN\t\t\t0\t\thttps://github.com/o/r/issues/1\n",
+            )
+            .remove(0),
+            body: String::new(),
+            comments: (0..20).map(comment).collect(),
+        };
+        let prompt = d.task_prompt();
+        assert!(prompt.contains("u19 wrote"));
+        assert!(!prompt.contains("u0 wrote"));
+        assert!(prompt.contains("(No description.)"));
+        assert!(prompt.len() < 25_000);
+    }
+
+    #[test]
     fn parses_runs_and_jobs() {
         let out = "run\t555\t42\tCI\tAdd a thing\tmain\tabc123\tpush\tcompleted\tfailure\t2\t2026-10-30T10:00:00Z\t2026-10-30T10:06:00Z\thttps://github.com/o/r/actions/runs/555\n\
                    job\t901\tcheck\tcompleted\tsuccess\t2026-10-30T10:00:10Z\t2026-10-30T10:03:00Z\thttps://github.com/o/r/actions/runs/555/job/901\n\
@@ -1102,6 +1872,110 @@ mod tests {
         assert_eq!(d.jobs[1].status, Status::Running);
         assert_eq!(d.jobs[1].steps[0].status, Status::Running);
         assert_eq!(parse_runs(out).len(), 1);
+    }
+
+    #[test]
+    fn failing_runs_are_the_latest_per_workflow_and_branch() {
+        let run = |id: u64, workflow: &str, branch: &str, status: Status| Run {
+            id,
+            number: id,
+            workflow: workflow.into(),
+            title: String::new(),
+            branch: branch.into(),
+            sha: String::new(),
+            event: "push".into(),
+            status,
+            attempt: 1,
+            created: 0,
+            updated: 0,
+            url: String::new(),
+        };
+        // Newest first.
+        let runs = vec![
+            run(6, "CI", "feat/x", Status::Success),
+            run(5, "CI", "agent/7-fix", Status::Failure),
+            run(4, "Lint", "feat/x", Status::Failure),
+            run(3, "CI", "feat/x", Status::Failure),
+            run(2, "CI", "someone-else", Status::Failure),
+            run(1, "CI", "agent/7-fix", Status::Running),
+        ];
+        let branches = vec!["feat/x".to_string(), "agent/7-fix".to_string()];
+        let ids: Vec<u64> = failing_runs(runs, &branches).iter().map(|r| r.id).collect();
+        assert_eq!(ids, [5, 4]);
+    }
+
+    #[test]
+    fn parses_review_requests() {
+        let out = "rr\to/r\t12\tFix the \\tthing\tada\t2026-10-30T10:00:00Z\thttps://github.com/o/r/pull/12\n\
+                   rr\to/r\tnope\tbad\tada\t\t\n\
+                   other line\n";
+        let found = parse_review_requests(out);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].repo, "o/r");
+        assert_eq!(found[0].number, 12);
+        assert_eq!(found[0].title, "Fix the \tthing");
+        assert_eq!(found[0].updated, parse_time("2026-10-30T10:00:00Z"));
+    }
+
+    #[test]
+    fn failure_tail_ends_at_the_last_error() {
+        let log = parse_log(
+            "##[group]Run cargo test\n\
+             ok 1\n\
+             error[E0425]: cannot find value `x`\n\
+             ##[error]Process completed with exit code 101.\n\
+             ##[group]Post Run actions/checkout@v4\n\
+             Cleaning up orphan processes\n",
+        );
+        assert_eq!(
+            failure_tail(&log, 200),
+            [
+                "▸ Run cargo test",
+                "ok 1",
+                "error[E0425]: cannot find value `x`",
+                "Process completed with exit code 101."
+            ]
+        );
+        assert_eq!(
+            failure_tail(&log, 2),
+            [
+                "error[E0425]: cannot find value `x`",
+                "Process completed with exit code 101."
+            ]
+        );
+        // No error line: the plain end of the log.
+        let quiet = parse_log("a\nb\nc\n");
+        assert_eq!(failure_tail(&quiet, 2), ["b", "c"]);
+        assert!(failure_tail(&[], 200).is_empty());
+    }
+
+    #[test]
+    fn failure_feedback_names_the_job_and_step() {
+        let run = parse_run_detail(
+            "run\t555\t42\tCI\tAdd a thing\tagent/x\tabc123\tpull_request\tcompleted\tfailure\t1\t2026-10-30T10:00:00Z\t2026-10-30T10:06:00Z\thttps://github.com/o/r/actions/runs/555\n\
+             job\t901\ttest\tcompleted\tfailure\t\t\thttps://github.com/o/r/actions/runs/555/job/901\n\
+             step\t1\tSet up job\tcompleted\tsuccess\n\
+             step\t2\tRun tests\tcompleted\tfailure\n\
+             step\t3\tPost checkout\tcompleted\tsuccess\n",
+        )
+        .unwrap();
+        let log = parse_log(&(0..300).map(|n| format!("line {n}\n")).collect::<String>());
+        let failure = job_failure(&run, 901, &log).unwrap();
+        assert_eq!(failure.step.as_deref(), Some("Run tests"));
+        assert_eq!(failure.log.len(), FAILURE_LOG_LINES);
+        assert_eq!(failure.log.last().map(String::as_str), Some("line 299"));
+        assert_eq!(job_failure(&run, 1, &log), None);
+
+        let pull = detail(Vec::new()).pull;
+        let text = failure_feedback(&[failure], Some(&pull)).unwrap();
+        assert!(text.starts_with("CI failed on pull request #12 (https://github.com/o/r/pull/12):"));
+        assert!(text.contains(
+            "`CI / test` failed at step “Run tests” (https://github.com/o/r/actions/runs/555/job/901)."
+        ));
+        assert!(text.contains("```\nline 100\n"));
+        assert!(!text.contains("line 99\n"));
+        assert!(text.ends_with("and commit."));
+        assert_eq!(failure_feedback(&[], Some(&pull)), None);
     }
 
     #[test]

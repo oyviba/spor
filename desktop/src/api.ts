@@ -1,39 +1,83 @@
 import type {
-  LineComment,
   AgentChoice,
+  BlameRow,
   BranchInfo,
   CommitDetail,
+  ConflictPart,
+  Credential,
   FileEntry,
   Graph,
+  InboxGithub,
+  InboxTask,
+  Issue,
+  IssueDetail,
   LogLine,
   Mode,
+  PlanAction,
+  PlanCommit,
+  PrBadge,
   Pull,
   PullDetail,
   RepoInfo,
+  RepoHead,
   RepoState,
   Run,
   RunDetail,
   StashInfo,
   RunPatch,
+  TagInfo,
   TaskDetail,
   TaskSummary,
+  TaskPull,
+  WorktreeInfo,
+  WorkBranch,
 } from "./types";
 import type { Place } from "./shared/DiffView";
 
-type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+type Invoke = <T>(cmd: string, args?: Record<string, unknown> | Uint8Array) => Promise<T>;
 
 /** True inside the Tauri window; false in a plain browser (`pnpm dev`). */
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 let invokeImpl: Invoke | null = null;
 
-async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+async function call<T>(cmd: string, args?: Record<string, unknown> | Uint8Array): Promise<T> {
   if (!invokeImpl) {
     invokeImpl = inTauri
       ? (await import("@tauri-apps/api/core")).invoke
       : (await import("./mock")).invoke;
   }
   return invokeImpl<T>(cmd, args);
+}
+
+/** What the backend's watcher says changed (`src-tauri/src/watch.rs`):
+ * refs (HEAD, branches, tags), the index, the working tree, or agent tasks. */
+export type RepoChange = "refs" | "index" | "worktree" | "tasks";
+
+type Listen = (event: string, fn: () => void) => Promise<() => void>;
+let listenImpl: Listen | null = null;
+
+/** Call `fn` whenever the repository changes in one of the `changes` ways.
+ * Returns the function that stops listening. */
+export function onRepoChange(changes: RepoChange[], fn: () => void): () => void {
+  let stopped = false;
+  const stops: (() => void)[] = [];
+  (async () => {
+    if (!listenImpl) {
+      listenImpl = inTauri
+        ? (await import("@tauri-apps/api/event")).listen
+        : (await import("./mock")).listen;
+    }
+    for (const change of changes) {
+      const stop = await listenImpl(`${change}-changed`, fn);
+      if (stopped) stop();
+      else stops.push(stop);
+    }
+  })();
+  return () => {
+    stopped = true;
+    stops.forEach((stop) => stop());
+  };
 }
 
 export const api = {
@@ -43,6 +87,19 @@ export const api = {
   /** Pops the shared undo stack: any section's last change. */
   undo: () => call<string>("undo"),
   openUrl: (url: string) => call<void>("open_url", { url }),
+  /** The oldest passphrase/password prompt from git or ssh, if one waits. */
+  askpassPending: () => call<Credential | null>("askpass_pending"),
+  /** `null` cancels. */
+  askpassAnswer: (id: number, answer: string | null) => call<void>("askpass_answer", { id, answer }),
+  /** The old native (GPUI) app's workspaces, to carry over; null when it had none. */
+  legacyWorkspaces: () =>
+    call<{ list: { name: string; color: number; repos: string[]; last: string | null }[]; active: number } | null>("legacy_workspaces"),
+  /** Branch, ahead/behind and changed files of each repository, for the workspace's list. */
+  repoHeads: (paths: string[]) => call<RepoHead[]>("repo_heads", { paths }),
+  /** The open tasks of every repository in `roots` (no network). */
+  inboxTasks: (roots: string[]) => call<InboxTask[]>("inbox_tasks", { roots }),
+  /** Review requests and failing runs on your branches, across `roots`. */
+  inboxGithub: (roots: string[]) => call<InboxGithub>("inbox_github", { roots }),
 
   // History
   graph: (limit: number) => call<Graph>("graph", { limit }),
@@ -57,6 +114,31 @@ export const api = {
   cherryPick: (hash: string) => call<string>("cherry_pick", { hash }),
   revert: (hash: string) => call<string>("revert", { hash }),
   mergeBranch: (branch: string) => call<string>("merge_branch", { branch }),
+  renameBranch: (old: string, name: string) => call<string>("rename_branch", { old, new: name }),
+  /** `origin/feat/x`: delete `feat/x` on origin. */
+  deleteRemoteBranch: (name: string) => call<string>("delete_remote_branch", { name }),
+  rebaseOnto: (onto: string) => call<string>("rebase_onto", { onto }),
+  resetTo: (hash: string, mode: "soft" | "mixed" | "hard") => call<string>("reset_to", { hash, mode }),
+  checkoutCommit: (hash: string, stash = false) => call<string>("checkout_commit", { hash, stash }),
+  tags: () => call<TagInfo[]>("tags"),
+  createTag: (name: string, hash: string, message: string | null) => call<string>("create_tag", { name, hash, message }),
+  deleteTag: (name: string) => call<string>("delete_tag", { name }),
+  pushTag: (name: string, del = false) => call<string>("push_tag", { name, delete: del }),
+  worktrees: () => call<WorktreeInfo[]>("worktrees"),
+  removeWorktree: (path: string) => call<string>("remove_worktree", { path }),
+  /** The commits after `base` an interactive rebase would rewrite, oldest first. */
+  rewritePlan: (base: string) => call<PlanCommit[]>("rewrite_plan", { base }),
+  rewrite: (base: string, plan: { hash: string; action: PlanAction; message: string | null }[]) =>
+    call<string>("rewrite", { base, plan }),
+  prBadges: () => call<PrBadge[]>("pr_badges"),
+  /** The current branch's PR page, or the page to open one. */
+  pullRequestUrl: () => call<string>("pull_request_url"),
+  /** Merge `source` into `target`, checking `target` out first if it isn't. */
+  mergeInto: (source: string, target: string) => call<string>("merge_into", { source, target }),
+  /** The host's page for a pull request from `source` into `target`. */
+  pullRequestBetween: (source: string, target: string) => call<string>("pull_request_between", { source, target }),
+  /** Who last changed each line, as of `rev` (the working tree when null). */
+  blame: (path: string, rev: string | null) => call<BlameRow[]>("blame", { path, rev }),
 
   // Changes
   status: () => call<FileEntry[]>("status"),
@@ -72,6 +154,14 @@ export const api = {
   stashes: () => call<StashInfo[]>("stashes"),
   stash: (message: string | null) => call<string>("stash", { message }),
   stashPop: (index: number) => call<string>("stash_pop", { index }),
+  stashApply: (index: number) => call<string>("stash_apply", { index }),
+  stashDrop: (index: number) => call<string>("stash_drop", { index }),
+  skipOperation: () => call<string>("skip_operation"),
+  conflictRegions: (path: string) => call<ConflictPart[]>("conflict_regions", { path }),
+  /** A side per region, in order; writes the file and marks it resolved. */
+  resolveRegions: (path: string, choices: string[]) => call<string>("resolve_regions", { path, choices }),
+  /** Quiet background fetch: never prompts, never complains. */
+  autoFetch: () => call<void>("auto_fetch"),
   resolve: (path: string, how: "ours" | "theirs" | "resolved") => call<void>("resolve", { path, how }),
   continueOperation: () => call<string>("continue_operation"),
   abortOperation: () => call<string>("abort_operation"),
@@ -87,6 +177,12 @@ export const api = {
   runDetail: (id: number) => call<RunDetail>("run_detail", { id }),
   runAction: (id: number, action: "rerun" | "rerun_failed" | "cancel") => call<string>("run_action", { id, action }),
   jobLog: (id: number) => call<LogLine[]>("job_log", { id }),
+  /** A failed job (its failing step, the end of its log) as a follow-up for an agent. */
+  jobFeedback: (run: number, job: number) => call<string>("job_feedback", { run, job }),
+  issues: (filter: "assigned" | "yours" | "open" | "closed") => call<Issue[]>("issues", { filter }),
+  issueDetail: (number: number) => call<IssueDetail>("issue_detail", { number }),
+  issueAction: (number: number, action: "comment" | "close" | "reopen", body?: string) =>
+    call<string>("issue_action", { number, action, body: body ?? null }),
 
   // Agents
   listTasks: () => call<TaskSummary[]>("list_tasks"),
@@ -94,16 +190,32 @@ export const api = {
   taskPatch: (id: string) => call<string>("task_patch", { id }),
   createTask: (prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
     call<TaskSummary>("create_task", { prompt, base, agent, mode }),
+  /** A task on a GitHub issue; `prompt` is the issue's (editable) prompt. */
+  createIssueTask: (number: number, prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
+    call<TaskSummary>("create_issue_task", { number, prompt, base, agent, mode }),
+  /** Push the task's branch and open a pull request for it. */
+  publishTask: (id: string, draft: boolean, commitUncommitted: boolean) =>
+    call<string>("publish_task", { id, draft, commitUncommitted }),
+  /** Push the agent's new commits to the task's pull request; with
+   * `commitUncommitted`, what it left uncommitted is committed and goes too. */
+  pushTask: (id: string, commitUncommitted = false) => call<string>("push_task", { id, commitUncommitted }),
+  /** Every open task's pull request (one `gh` call). */
+  taskPulls: () => call<TaskPull[]>("task_pulls"),
+  /** New review on the task's PR, written as a follow-up for its agent. */
+  reviewFeedback: (id: string) => call<string>("review_feedback", { id }),
+  /** The failed Actions jobs on the task's PR, written as a follow-up for its agent. */
+  checkFeedback: (id: string) => call<string>("check_feedback", { id }),
+  /** Its PR was closed unmerged: mark it closed and remove its folder and branch (⌘Z undoes). */
+  closeTask: (id: string) => call<string>("close_task", { id }),
+  /** Its PR merged: mark it landed and remove its folder and branch (⌘Z undoes). */
+  settleTask: (id: string, commit: string) => call<string>("settle_task", { id, commit }),
   /** `message` null starts the task's own prompt; otherwise it's a follow-up. */
   sendToAgent: (id: string, message: string | null, agent: AgentChoice, mode: Mode) =>
     call<void>("send_to_agent", { id, message, agent, mode }),
-  /** A message with line comments after it, as the agent gets them. */
-  withComments: (text: string, comments: LineComment[]) => call<string>("with_comments", { text, comments }),
-  /** Ask the agent to rebase onto the base and resolve the conflicts. */
-  askToRebase: (id: string, agent: AgentChoice, mode: Mode) => call<void>("ask_to_rebase", { id, agent, mode }),
-  /** Answer a question the agent asked; `message` says what to do instead. */
-  answerAsk: (id: string, requestId: string, allow: boolean, message = "") =>
-    call<void>("answer_ask", { id, requestId, allow, message }),
+  /** Answer a question the agent asked; `message` says what to do instead,
+   * `always` allows it for the rest of the session (#40). */
+  answerAsk: (id: string, requestId: string, allow: boolean, message = "", always = false) =>
+    call<void>("answer_ask", { id, requestId, allow, message, always }),
   /** Start the next agent without the folder's setup script (#23). */
   skipSetup: (id: string) => call<void>("skip_setup", { id }),
   /** Run the setup script again, before the next agent. */
@@ -113,10 +225,13 @@ export const api = {
   unqueue: (id: string, index: number) => call<void>("unqueue", { id, index }),
   /** Send the oldest queued follow-up if the agent is idle; true if one went. */
   sendQueued: (id: string, agent: AgentChoice, mode: Mode) => call<boolean>("send_queued", { id, agent, mode }),
-  /** Delete landed and discarded tasks' checkpoints and transcripts. */
+  /** Delete the run checkpoints of tasks that are done, and discarded tasks' transcripts. */
   cleanUpTasks: () => call<string>("clean_up_tasks"),
-  /** A notification from the operating system. */
-  notify: (title: string, body: string) => call<void>("notify", { title, body }),
+  /** A notification from the operating system, for when the window is in the background. */
+  notify: (title: string, body: string) => call<void>("notify_os", { title, body }),
+  /** Keep an image for a prompt; returns the path the prompt names it by.
+   * The bytes go as the request's raw body. */
+  attachImage: (data: Uint8Array) => call<string>("attach_image", data),
   /** A message into the turn the agent is on (#22). */
   steer: (id: string, text: string) => call<void>("steer", { id, text }),
   /** Change the running agent's permission mode. */
@@ -130,6 +245,12 @@ export const api = {
   runPatch: (id: string, index: number) => call<RunPatch>("run_patch", { id, index }),
   /** Take back the task's last run (⌘Z brings it back). */
   undoRun: (id: string, from: number | null = null) => call<string>("undo_run", { id, from }),
+
+  // Work
+  /** Your own branches with work on them (not agents'). */
+  workBranches: () => call<WorkBranch[]>("work_branches"),
+  /** A branch's changes since it left the base. */
+  branchPatch: (branch: string) => call<string>("branch_patch", { branch }),
 };
 
 export function errorText(e: unknown): string {

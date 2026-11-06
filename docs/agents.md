@@ -124,7 +124,9 @@ with the permission mode the user picked when starting the task.
 
 ### What you see
 
-- **Agents panel** in the sidebar (the rail's Agents section, after Pulls and Actions). One row
+- **Work** in the sidebar (the rail's last section, after Pulls and Actions;
+  it was the Agents panel until #81). Tasks are listed beside your own
+  branches and everyone's open pull requests. One row
   per task: its state, how long it's been running, files changed and +/−,
   and checks once they've run. *Needs you* rows go to the top, highlighted.
   The workspace's repository sidebar gets a count, the way it shows commits
@@ -159,6 +161,16 @@ with the permission mode the user picked when starting the task.
   resolver. It goes back to its agent as a follow-up: "rebasing onto main
   conflicted in these files; resolve them and continue." Agents are good at
   this, and it's the step people least want to do.
+- **Don't undo the base.** A merge that doesn't conflict can still take
+  work back out: an agent that rebases or merges the base in, then writes
+  files back from the copy it started with, reverts everything that came
+  in meanwhile (that's how landing #81 undid the Inbox and five other
+  changes). `Tasks::undoes` finds it: the lines the trial merge would drop
+  from the base, blamed on the base, that came from commits made after the
+  branch was created (its reflog's first entry), leaving out lines that
+  moved elsewhere. The task's card says "Would undo 109 lines that reached
+  main after it started, in App.tsx…", with *Ask agent to put them back*,
+  and landing or opening a pull request asks first.
 - **Land in order.** Pick the tasks that are ready and spor lands them one
   at a time: rebase, run the checks, merge, next. It stops at the first
   failure and says which. It's a small local merge queue.
@@ -204,7 +216,12 @@ Each phase is useful on its own.
 4. **Many at once** — *collision radar done*, with *Ask Agent to Rebase*
    for conflicts with the base. Still to do: Rebase All with conflicts handed back
    to the agent, and landing in order with checks.
-5. **Remote agents.** Agents running in the cloud already work on branches
+
+   **From issues** (#47): a task can start from a GitHub issue (the
+   issue is its prompt), opens its pull request with `Closes #n`, follows
+   that PR's state, sends its reviews back to the agent, and is cleaned up
+   when the PR merges (#24). Built in the Tauri app.
+5. **Remote agents** (#44). Agents running in the cloud already work on branches
    and open pull requests. A task can follow a remote branch or PR instead
    of a local worktree, so cloud and local agents share one panel.
 
@@ -215,8 +232,8 @@ Each phase is useful on its own.
   less detail. Codex and others could get adapters later.
 - **Headless or a terminal.** Phase 2 is headless (structured output and
   logs). Some people want to watch the agent's own terminal UI. That needs
-  a terminal emulator in GPUI (Zed embeds one built on
-  `alacritty_terminal`), which is a project of its own.
+  a terminal emulator in the app (xterm.js in the web view, over a pty in
+  the backend), which is a project of its own.
 - **Squash or merge by default** when landing. Squash keeps main readable
   and puts the trailer in one place. Merge keeps the agent's individual
   commits.

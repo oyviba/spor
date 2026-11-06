@@ -1,19 +1,21 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { RunInfo, TaskDetail } from "../../types";
 import { duration, runs as toRuns, stoppedLabel, summarize, type Block, type RunView, type Tool } from "./transcript";
-import { useNow } from "../../shared/hooks";
+import { useChanged, useNow } from "../../shared/hooks";
+import { Button } from "../../shared/Button";
 import { Markdown } from "../../shared/Markdown";
 import { Alert, Check, Chevron, Square, Terminal, ToolIcon, X } from "../../shared/Icons";
 import { verbOf } from "./Composer";
 
 interface Props {
   detail: TaskDetail;
-  onStop: () => void;
+  onStop: () => unknown;
   onRunChanges: (index: number) => void;
-  onUndoRun: (from: number | null) => void;
+  /** Undo the last run, or (`from`) that run and every run after it. */
+  onUndoRun: (from: number | null) => unknown;
   /** After a failed setup: run it again, or start without it. */
-  onRetrySetup: () => void;
-  onSkipSetup: () => void;
+  onRetrySetup: () => unknown;
+  onSkipSetup: () => unknown;
 }
 
 export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetrySetup, onSkipSetup }: Props) {
@@ -30,7 +32,7 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetryS
       else next.add(key);
       return next;
     });
-  useEffect(() => setOpen(new Set()), [detail.task.id]);
+  useChanged(() => setOpen(new Set()), [detail.task.id]);
 
   // Follow new output while you're at the bottom; stay put if you scrolled up.
   const scroller = useRef<HTMLDivElement>(null);
@@ -39,7 +41,7 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetryS
     const el = scroller.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   });
-  useEffect(() => {
+  useChanged(() => {
     pinned.current = true;
   }, [detail.task.id]);
 
@@ -107,9 +109,9 @@ function RunBlock({
   /** Runs after this one that "Undo from here" takes back too. */
   later: number;
   onRunChanges: () => void;
-  onUndoRun: () => void;
+  onUndoRun: () => unknown;
   /** Retry / skip for a failed setup, on the latest run only. */
-  setup: { onRetrySetup: () => void; onSkipSetup: () => void } | null;
+  setup: { onRetrySetup: () => unknown; onSkipSetup: () => unknown } | null;
 }) {
   const [confirm, setConfirm] = useState(false);
   const undone = !!info?.undone;
@@ -168,7 +170,7 @@ function RunBlock({
             Changes in this run
           </button>
           {canUndo && (
-            <button
+            <Button
               className={`link small-text${confirm ? " danger-link" : ""}`}
               onClick={() => (confirm ? onUndoRun() : setConfirm(true))}
               onBlur={() => setConfirm(false)}
@@ -185,7 +187,7 @@ function RunBlock({
                 : confirm
                   ? "Undo this run? Its changes go"
                   : "Undo this run"}
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -215,7 +217,7 @@ function BlockView({
   live: boolean;
   open: Set<string>;
   toggle: (key: string) => void;
-  setup?: { onRetrySetup: () => void; onSkipSetup: () => void } | null;
+  setup?: { onRetrySetup: () => unknown; onSkipSetup: () => unknown } | null;
 }) {
   if (block.kind === "setup") {
     // A failure shows its output; success folds it away.
@@ -238,12 +240,12 @@ function BlockView({
         )}
         {block.ok === false && setup && (
           <div className="run-actions">
-            <button className="link small-text" onClick={setup.onRetrySetup}>
+            <Button className="link small-text" onClick={setup.onRetrySetup}>
               Retry
-            </button>
-            <button className="link small-text" onClick={setup.onSkipSetup}>
+            </Button>
+            <Button className="link small-text" onClick={setup.onSkipSetup}>
               Start without setup
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -273,7 +275,15 @@ function BlockView({
           )}
         </span>
         <span className="ask-outcome">
-          {a ? (a.allow ? "Allowed" : a.message ? `Denied: ${a.message}` : "Denied") : "Waiting for you"}
+          {a
+            ? a.allow
+              ? a.always
+                ? "Allowed for this session"
+                : "Allowed"
+              : a.message
+                ? `Denied: ${a.message}`
+                : "Denied"
+            : "Waiting for you"}
         </span>
       </div>
     );
@@ -350,7 +360,7 @@ function ToolGroup({
   );
 }
 
-function LiveLine({ run, waiting, onStop }: { run: RunInfo; waiting: boolean; onStop: () => void }) {
+function LiveLine({ run, waiting, onStop }: { run: RunInfo; waiting: boolean; onStop: () => unknown }) {
   const now = useNow(1000);
   return (
     <div className={`live-line${waiting ? " waiting" : ""}`}>
@@ -358,9 +368,9 @@ function LiveLine({ run, waiting, onStop }: { run: RunInfo; waiting: boolean; on
       <span className="num">
         {waiting ? "Waiting for you" : `Working ${duration(now / 1000 - run.started)}`}
       </span>
-      <button className="ghost small" onClick={onStop}>
+      <Button className="ghost small" onClick={onStop}>
         <Square size={10} /> Stop
-      </button>
+      </Button>
     </div>
   );
 }

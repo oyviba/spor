@@ -1,11 +1,11 @@
 import { forwardRef } from "react";
 import type { Ask, LineComment, Mode, RepoInfo, TaskDetail } from "../../types";
-import { statusOf } from "./status";
+import { isOpen, statusOf } from "./status";
 import { useNow } from "../../shared/hooks";
 import { DiffView } from "../../shared/DiffView";
 import { Composer, type AgentSettings, type ComposerHandle } from "./Composer";
 import { Conversation } from "./Conversation";
-import { Inspector } from "./Inspector";
+import { Inspector, type GithubActions } from "./Inspector";
 import { MessageSquare, PanelRight } from "../../shared/Icons";
 import { StatusPill } from "../../shared/StatusPill";
 
@@ -29,13 +29,14 @@ interface Props {
   onFocus: (c: LineComment) => void;
   queued: string[];
   onUnqueue: (i: number) => void;
-  onStart: () => void;
-  onSend: (text: string) => void;
-  onStop: () => void;
-  onLand: (merge: boolean, commitUncommitted: boolean) => void;
-  onDiscard: () => void;
+  onStart: () => unknown;
+  onSend: (text: string) => unknown;
+  onStop: () => unknown;
+  onLand: (merge: boolean, commitUncommitted: boolean) => unknown;
+  onDiscard: () => unknown;
   onAskRebase: () => void;
-  onOpenFolder: () => void;
+  onAskRestore: () => void;
+  onOpenFolder: () => unknown;
   onCopy: (text: string, what: string) => void;
   onShowBranch: () => void;
   /** What Changes shows: everything, or run N's changes. */
@@ -45,13 +46,17 @@ interface Props {
   fromBase: string[];
   onRunChanges: (index: number) => void;
   /** Undo the last run, or (`from`) that run and every run after it. */
-  onUndoRun: (from: number | null) => void;
-  onRerunSetup: () => void;
-  onAnswer: (ask: Ask, allow: boolean, message?: string) => void;
+  onUndoRun: (from: number | null) => unknown;
+  /** Run the setup script again before the next agent. */
+  onRerunSetup: () => unknown;
+  onAnswer: (ask: Ask, allow: boolean, message?: string) => unknown;
+  /** Allow it, and don't ask again about this kind of action this session. */
+  onAllowForSession: (ask: Ask) => unknown;
   onLiveMode: (mode: Mode) => void;
-  onSteer: (text: string) => void;
-  onRetrySetup: () => void;
-  onSkipSetup: () => void;
+  onSteer: (text: string) => unknown;
+  onRetrySetup: () => unknown;
+  onSkipSetup: () => unknown;
+  github: GithubActions;
 }
 
 export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, composerRef) {
@@ -63,7 +68,7 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
       <header className="task-header">
         <div className="task-title">
           <h2 title={t.prompt}>{t.title}</h2>
-          <StatusPill status={statusOf(t, p.seenAt, now)} />
+          <StatusPill status={statusOf(t, p.seenAt, now, p.github.pull?.pull)} />
         </div>
         <nav className="tabs" role="tablist">
           <button role="tab" aria-selected={p.tab === "conversation"} onClick={() => p.onTab("conversation")}>
@@ -144,12 +149,14 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
             onLand={p.onLand}
             onDiscard={p.onDiscard}
             onAskRebase={p.onAskRebase}
+            onAskRestore={p.onAskRestore}
             onShowBranch={p.onShowBranch}
             onRerunSetup={p.onRerunSetup}
+            {...p.github}
           />
         )}
       </div>
-      {!t.landed && (
+      {isOpen(t) && (
         <Composer
           ref={composerRef}
           repo={p.repo}
@@ -163,6 +170,7 @@ export const TaskPage = forwardRef<ComposerHandle, Props>(function TaskPage(p, c
           onUnqueue={p.onUnqueue}
           asks={p.detail.asks}
           onAnswer={p.onAnswer}
+          onAllowForSession={p.onAllowForSession}
           liveMode={p.detail.listening ? (t.mode ?? null) : null}
           onLiveMode={p.onLiveMode}
           canSteer={p.detail.listening}

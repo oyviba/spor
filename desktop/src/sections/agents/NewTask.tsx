@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { RepoInfo } from "../../types";
-import { ModePicker, type AgentSettings } from "./Composer";
-import { ArrowUp, Branch } from "../../shared/Icons";
+import { ModelPicker, ModePicker, type AgentSettings } from "./Composer";
+import { ArrowUp } from "../../shared/Icons";
+import { BasePicker, defaultStart } from "../../shared/BasePicker";
+import { Button } from "../../shared/Button";
+import { useShell } from "../../shared/app";
+import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
 
 interface Props {
   repo: RepoInfo;
@@ -14,18 +18,20 @@ interface Props {
 /** A blank task: what to do, from which branch, with which agent. */
 export function NewTask({ repo, settings, onSettings, onCreate }: Props) {
   const [prompt, setPrompt] = useState("");
-  const [base, setBase] = useState(repo.branch ?? repo.default_base ?? repo.branches[0] ?? "main");
+  const [base, setBase] = useState(defaultStart(repo));
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   useEffect(() => input.current?.focus(), []);
+  const attachments = useAttachments(useShell().fail);
 
   const submit = async (background: boolean) => {
-    if (!prompt.trim() || busy) return;
+    if (!prompt.trim() || busy || attachments.saving) return;
     setBusy(true);
-    const ok = await onCreate(prompt, base, background);
+    const ok = await onCreate(withImages(prompt, attachments.images), base, background);
     setBusy(false);
     if (ok && background) {
       setPrompt("");
+      attachments.clear();
       input.current?.focus();
     }
   };
@@ -38,7 +44,8 @@ export function NewTask({ repo, settings, onSettings, onCreate }: Props) {
         <p className="lede">
           It gets its own branch and folder from <b>{base}</b>, so it never touches your checkout.
         </p>
-        <div className="composer big">
+        <div className={`composer big${attachments.dragging ? " dropping" : ""}`} {...attachments.handlers}>
+          <AttachmentStrip images={attachments.images} onRemove={attachments.remove} />
           <textarea
             ref={input}
             rows={4}
@@ -53,14 +60,7 @@ export function NewTask({ repo, settings, onSettings, onCreate }: Props) {
             }}
           />
           <div className="composer-footer">
-            <label className="chip-select-wrap" title="The branch it starts from and lands on">
-              <Branch size={12} />
-              <select className="chip-select bare" value={base} onChange={(e) => setBase(e.target.value)}>
-                {repo.branches.map((b) => (
-                  <option key={b}>{b}</option>
-                ))}
-              </select>
-            </label>
+            <BasePicker repo={repo} value={base} onChange={setBase} title="The branch it starts from and lands on" />
             <select
               className="chip-select"
               value={settings.agent}
@@ -73,13 +73,17 @@ export function NewTask({ repo, settings, onSettings, onCreate }: Props) {
               <option value="none">No agent — I'll run one</option>
             </select>
             {settings.agent === "claude" && (
-              <ModePicker mode={settings.mode} onChange={(mode) => onSettings({ ...settings, mode })} />
+              <>
+                <ModelPicker settings={settings} onSettings={onSettings} />
+                <ModePicker mode={settings.mode} onChange={(mode) => onSettings({ ...settings, mode })} />
+              </>
             )}
             <span className="flex-1" />
+            <AttachButton onFiles={attachments.add} />
             <span className="hint-keys">↩ {verb.toLowerCase()} · ⌘↩ {verb.toLowerCase()} &amp; next</span>
-            <button className="send" disabled={!prompt.trim() || busy} onClick={() => submit(false)} title={`${verb} (↩)`}>
+            <Button className="send" disabled={!prompt.trim() || attachments.saving} busy={busy} onClick={() => submit(false)} title={`${verb} (↩)`}>
               <ArrowUp size={14} />
-            </button>
+            </Button>
           </div>
         </div>
         {settings.agent === "command" && (

@@ -241,6 +241,28 @@ fn conflicting_branches(f: &Fixture) {
 }
 
 #[test]
+fn conflict_regions_from_a_real_merge() {
+    use spor::conflict::{self, Choice, Segment};
+    let f = fixture();
+    conflicting_branches(&f);
+    f.repo.merge("other").unwrap();
+    let segments = conflict::parse(&f.read("f.txt"));
+    assert_eq!(conflict::count(&segments), 1);
+    let Segment::Conflict(r) = &segments[0] else {
+        panic!("{segments:?}")
+    };
+    assert_eq!((r.ours.as_str(), r.theirs.as_str()), ("ours\n", "theirs\n"));
+    assert_eq!(r.theirs_label, "other");
+    f.write(
+        "f.txt",
+        &conflict::resolve(&segments, &[Choice::Both]).unwrap(),
+    );
+    f.repo.mark_resolved("f.txt").unwrap();
+    assert_eq!(f.repo.continue_operation().unwrap(), Outcome::Done);
+    assert_eq!(f.read("f.txt"), "ours\ntheirs\n");
+}
+
+#[test]
 fn merge_conflict_resolve_and_continue() {
     let f = fixture();
     conflicting_branches(&f);
@@ -351,6 +373,31 @@ fn interactive_rebase_rewrites_history() {
 }
 
 #[test]
+fn a_branch_since_it_left_its_base() {
+    let f = fixture();
+    f.commit_file("a.txt", "a\n", "a");
+    f.git(&["switch", "--quiet", "-c", "topic"]);
+    f.commit_file("b.txt", "b\nb\n", "add b");
+    f.commit_file("a.txt", "a\nmore\n", "grow a");
+    f.git(&["switch", "--quiet", "main"]);
+    // main moving on doesn't count as the branch's work.
+    f.commit_file("c.txt", "c\n", "c on main");
+
+    let subjects: Vec<String> = f
+        .repo
+        .branch_commits("main", "topic")
+        .unwrap()
+        .into_iter()
+        .map(|c| c.subject)
+        .collect();
+    assert_eq!(subjects, ["grow a", "add b"]);
+    assert_eq!(f.repo.branch_numstat("main", "topic"), (2, 3, 0));
+    let patch = f.repo.branch_patch("main", "topic").unwrap();
+    assert!(patch.contains("+more") && patch.contains("b/b.txt") && !patch.contains("c.txt"));
+    assert!(f.repo.branch_commits("main", "main").unwrap().is_empty());
+}
+
+#[test]
 fn branches_delete_restore_rename() {
     let f = fixture();
     f.commit_file("a.txt", "a\n", "a");
@@ -389,9 +436,9 @@ fn stashes_apply_drop_restore() {
     assert!(stashes[0].message.ends_with("my work"));
     f.repo.stash_apply_at(0).unwrap();
     assert_eq!(f.read("f.txt"), "b\n");
-    assert_eq!(f.repo.stash_count(), 1);
+    assert_eq!(f.repo.stashes().len(), 1);
     let dropped = f.repo.stash_drop_at(0).unwrap();
-    assert_eq!(f.repo.stash_count(), 0);
+    assert_eq!(f.repo.stashes().len(), 0);
     f.repo.restore_stash(&dropped).unwrap();
     assert_eq!(f.repo.stashes()[0].sha, dropped.sha);
 }
@@ -431,6 +478,17 @@ fn search_blame_and_file_history() {
     assert_eq!(blame[0].line, 1);
     let history = f.repo.file_log("f.txt", 10).unwrap();
     assert_eq!(history.len(), 2);
+
+    // As of the first commit there's one line; uncommitted lines show up
+    // in the working tree's blame with an all-zero hash.
+    let then = f.repo.blame_at("f.txt", Some(&history[1].hash)).unwrap();
+    assert_eq!(then.len(), 1);
+    assert_eq!(then[0].summary, "Add the parser");
+    f.write("f.txt", "one\ntwo\nthree\n");
+    let now = f.repo.blame_at("f.txt", None).unwrap();
+    assert_eq!(now.len(), 3);
+    assert!(now[2].hash.chars().all(|c| c == '0'));
+    assert_eq!(now[2].text, "three");
 }
 
 #[test]

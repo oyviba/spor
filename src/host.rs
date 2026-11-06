@@ -144,8 +144,9 @@ pub fn main(args: &[String]) -> i32 {
     }
 
     // Questions Claude is waiting on: request id → the tool's input, which
-    // an allow has to send back.
-    let pending: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+    // an allow has to send back, and the rules it suggests for allowing
+    // this kind of action for the session (#40).
+    let pending: Arc<Mutex<HashMap<String, Pending>>> = Arc::default();
 
     let _ = send(
         r#"{"type":"control_request","request_id":"spor-init","request":{"subtype":"initialize"}}"#,
@@ -206,10 +207,16 @@ pub fn main(args: &[String]) -> i32 {
                     if ev.get("request").get("subtype").str() == Some("can_use_tool") =>
                 {
                     if let Some(id) = ev.get("request_id").str() {
-                        pending
-                            .lock()
-                            .unwrap()
-                            .insert(id.to_string(), ev.get("request").get("input").to_json());
+                        let request = ev.get("request");
+                        let suggestions = request.get("permission_suggestions");
+                        pending.lock().unwrap().insert(
+                            id.to_string(),
+                            Pending {
+                                input: request.get("input").to_json(),
+                                suggestions: (!suggestions.array().is_empty())
+                                    .then(|| suggestions.to_json()),
+                            },
+                        );
                     }
                 }
                 _ => {}
@@ -231,16 +238,26 @@ pub fn main(_args: &[String]) -> i32 {
     2
 }
 
+/// A question Claude is waiting on.
+#[cfg(unix)]
+struct Pending {
+    /// The tool's input, which an allow sends back.
+    input: String,
+    /// The permission updates it suggests (a JSON array), if any.
+    suggestions: Option<String>,
+}
+
 /// One command from spor: `{"message": "…"}`, `{"interrupt": true}`,
 /// `{"mode": "acceptEdits"}`, or
-/// `{"answer": {"request_id": "…", "allow": true, "message": "…"}}`.
+/// `{"answer": {"request_id": "…", "allow": true, "message": "…"}}`, with
+/// `"always": true` to allow for the rest of the session.
 #[cfg(unix)]
 fn handle(
     line: &str,
     n: u64,
     send: &impl Fn(&str) -> Result<(), String>,
     append: &impl Fn(&str),
-    pending: &Mutex<HashMap<String, String>>,
+    pending: &Mutex<HashMap<String, Pending>>,
 ) -> Result<(), String> {
     let cmd = Json::parse(line.trim()).ok_or("Not JSON")?;
     if let Some(text) = cmd.get("message").str() {
@@ -264,14 +281,28 @@ fn handle(
         Some(cmd.get("answer")).filter(|a| a.get("request_id").str().is_some())
     {
         let id = answer.get("request_id").str().unwrap_or_default();
-        let input = pending
-            .lock()
-            .unwrap()
-            .remove(id)
-            .ok_or("That question was already answered")?;
         let allow = answer.get("allow").bool() == Some(true);
+        let always = allow && answer.get("always").bool() == Some(true);
         let message = answer.get("message").str().unwrap_or("");
-        let response = if allow {
+        let question = {
+            let mut pending = pending.lock().unwrap();
+            let q = pending
+                .get(id)
+                .ok_or("That question was already answered")?;
+            if always && q.suggestions.is_none() {
+                return Err("This can only be allowed once".into());
+            }
+            pending.remove(id).unwrap()
+        };
+        let input = question.input;
+        let response = if always {
+            // The suggested rules go back with it, and Claude Code stops
+            // asking about this kind of action for the session.
+            format!(
+                r#"{{"behavior":"allow","updatedInput":{input},"updatedPermissions":{}}}"#,
+                question.suggestions.unwrap_or_default()
+            )
+        } else if allow {
             // An allow sends the tool's input back, unchanged.
             format!(r#"{{"behavior":"allow","updatedInput":{input}}}"#)
         } else {
@@ -287,7 +318,7 @@ fn handle(
             quote(id)
         ))?;
         append(&format!(
-            r#"{{"type":"spor_answer","request_id":{},"allow":{allow},"message":{}}}"#,
+            r#"{{"type":"spor_answer","request_id":{},"allow":{allow},"always":{always},"message":{}}}"#,
             quote(id),
             quote(message)
         ));

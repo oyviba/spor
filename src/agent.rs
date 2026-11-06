@@ -85,6 +85,86 @@ impl Mode {
     }
 }
 
+/// How hard Claude Code thinks: its `--effort`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl Effort {
+    pub const ALL: [Effort; 5] = [
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::XHigh,
+        Effort::Max,
+    ];
+
+    pub fn flag(self) -> &'static str {
+        match self {
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::XHigh => "xhigh",
+            Effort::Max => "max",
+        }
+    }
+
+    pub fn from_flag(flag: &str) -> Option<Effort> {
+        Effort::ALL.into_iter().find(|e| e.flag() == flag)
+    }
+}
+
+/// Which model Claude Code runs, and how hard it thinks. `None` leaves it
+/// to Claude Code (its settings, or its own default).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Model {
+    /// An alias (`opus`, `sonnet`, …) or a model's full name.
+    pub name: Option<String>,
+    pub effort: Option<Effort>,
+}
+
+impl Model {
+    /// A model from what someone picked: an empty name is the default, and
+    /// a name has to look like one (it goes on Claude's command line).
+    pub fn new(name: Option<&str>, effort: Option<Effort>) -> Result<Model, String> {
+        let name = name.map(str::trim).filter(|n| !n.is_empty());
+        if let Some(n) = name {
+            let ok = !n.starts_with('-')
+                && n.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-._[]:@/".contains(c));
+            if !ok {
+                return Err(format!("{n} isn't a model name"));
+            }
+        }
+        Ok(Model {
+            name: name.map(String::from),
+            effort,
+        })
+    }
+
+    /// In words, for the run's label: "Opus · high effort".
+    pub fn describe(&self) -> Option<String> {
+        let name = self.name.as_deref().map(|n| {
+            let mut c = n.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        });
+        let effort = self.effort.map(|e| format!("{} effort", e.flag()));
+        match (name, effort) {
+            (None, None) => None,
+            (Some(n), None) => Some(n),
+            (None, Some(e)) => Some(e),
+            (Some(n), Some(e)) => Some(format!("{n} · {e}")),
+        }
+    }
+}
+
 /// How much the agent may do without asking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Permissions {
@@ -92,7 +172,7 @@ pub struct Permissions {
 }
 
 impl Permissions {
-    /// Edits only, or edits and commands: the GPUI app's checkbox.
+    /// Edits only, or edits and commands (a yes/no switch).
     pub fn commands(allowed: bool) -> Self {
         Self {
             mode: if allowed {
@@ -126,6 +206,8 @@ pub struct Run {
     pub ended: Option<i64>,
     /// The agent's session, for sending follow-ups (Claude Code).
     pub session: Option<String>,
+    /// The model it ran (Claude Code).
+    pub model: Model,
     pub cost_usd: Option<f64>,
     /// Undone: its changes were taken back, and follow-ups resume from
     /// before it.
@@ -169,12 +251,18 @@ pub enum Entry {
         id: String,
         tool: String,
         detail: String,
+        /// What "Allow for this session" would cover, from the rules Claude
+        /// Code suggests (#40): "`npm test` commands". None: it suggests
+        /// none, so only this once.
+        session: Option<String>,
     },
-    /// How a question was answered (`message`: what the user said instead).
+    /// How a question was answered (`message`: what the user said instead;
+    /// `always`: allowed for the rest of the session).
     Answer {
         id: String,
         allow: bool,
         message: String,
+        always: bool,
     },
     /// A message sent to the agent while it worked (steering, #22).
     Steer(String),
@@ -189,6 +277,8 @@ pub struct Ask {
     pub id: String,
     pub tool: String,
     pub detail: String,
+    /// What "Allow for this session" would cover, if it's offered.
+    pub session: Option<String>,
 }
 
 /// A task's setup script (#23), for its details card.
@@ -221,6 +311,8 @@ pub struct Runs {
     base: String,
     /// The main checkout, for setup scripts that copy from it.
     repo_root: PathBuf,
+    /// Images attached to prompts, which Claude may read.
+    attachments: PathBuf,
 }
 
 impl Runs {
@@ -229,8 +321,9 @@ impl Runs {
             dir: tasks.run_dir(&task.id),
             refs: checkpoint_prefix(&task.id),
             worktree: task.worktree.clone(),
-            base: task.base.clone(),
+            base: task.start().to_string(),
             repo_root: tasks.root().to_path_buf(),
+            attachments: tasks.attachments_dir(),
         }
     }
 
@@ -310,7 +403,8 @@ impl Runs {
     }
 
     /// Follow-ups waiting for the agent to finish (#22), oldest first.
-    /// Kept with the task, so every app and every window sees them.
+    /// Kept with the task, so every window sees them, and they outlive the
+    /// app.
     pub fn queued(&self) -> Vec<String> {
         std::fs::read_to_string(self.dir.join("queue"))
             .unwrap_or_default()
@@ -337,23 +431,12 @@ impl Runs {
         self.write_queue(&queued)
     }
 
-    /// Take the oldest queued follow-up off the queue.
-    pub fn take_queued(&self) -> Option<String> {
-        let mut queued = self.queued();
-        if queued.is_empty() {
-            return None;
-        }
-        let first = queued.remove(0);
-        self.write_queue(&queued).ok()?;
-        Some(first)
-    }
-
     /// Send the oldest queued follow-up, if the agent is idle: as
     /// [`Runs::follow_up`] does. It leaves the queue only once it's sent.
     pub fn send_queued(
         &self,
         task: &Task,
-        chosen: Option<&AgentKind>,
+        chosen: Option<(&AgentKind, &Model)>,
         permissions: Permissions,
     ) -> Result<bool, String> {
         if self.latest().is_some_and(|r| r.state == RunState::Running) {
@@ -381,7 +464,7 @@ impl Runs {
             return Ok(());
         }
         let text: String = queued.iter().map(|m| escape(m) + "\n").collect();
-        // Written whole, then moved into place: another app reading it
+        // Written whole, then moved into place: another window reading it
         // never sees half a queue.
         let tmp = self.dir.join("queue.tmp");
         std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
@@ -403,6 +486,19 @@ impl Runs {
         resume: Option<&str>,
         permissions: Permissions,
     ) -> Result<Run, String> {
+        self.start_with(task, kind, prompt, resume, permissions, &Model::default())
+    }
+
+    /// `start`, with Claude Code on `model`.
+    pub fn start_with(
+        &self,
+        task: &Task,
+        kind: &AgentKind,
+        prompt: &str,
+        resume: Option<&str>,
+        permissions: Permissions,
+        model: &Model,
+    ) -> Result<Run, String> {
         if self.latest().is_some_and(|r| r.state == RunState::Running) {
             return Err(format!("An agent is already working on {}", task.id));
         }
@@ -411,7 +507,10 @@ impl Runs {
         }
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         let index = self.count();
-        let (program, args) = command_for(kind, prompt, resume, permissions);
+        // Made up front, so an image attached while it works can be read.
+        let _ = std::fs::create_dir_all(&self.attachments);
+        let (program, args) =
+            command_for(kind, prompt, resume, permissions, model, &self.attachments);
         let log = self.file(index, "log");
         let exit = self.file(index, "exit");
         // What the folder was like before, for this run's diff and undo.
@@ -495,12 +594,18 @@ echo $code > "$SPOR_EXIT""#;
             ("kind", kind_name(kind)),
             ("hosted", hosted.to_string()),
             ("mode", permissions.mode.flag().to_string()),
+            ("model", model.name.clone().unwrap_or_default()),
+            (
+                "effort",
+                model.effort.map(Effort::flag).unwrap_or_default().into(),
+            ),
             ("prompt", prompt.to_string()),
             ("started", started.to_string()),
             ("pid", pid.to_string()),
         ];
         let text: String = meta
             .iter()
+            .filter(|(_, v)| !v.is_empty())
             .map(|(k, v)| format!("{k}\t{}\n", escape(v)))
             .collect();
         std::fs::write(self.file(index, "meta"), text).map_err(|e| e.to_string())?;
@@ -516,6 +621,7 @@ echo $code > "$SPOR_EXIT""#;
             started,
             ended: None,
             session: None,
+            model: model.clone(),
             cost_usd: None,
             undone: false,
         })
@@ -669,6 +775,16 @@ echo $code > "$SPOR_EXIT""#;
         ))
     }
 
+    /// Allow the tool, and don't ask again about this kind of action while
+    /// the session lasts: the rules Claude Code suggested go back with the
+    /// answer (`Ask::session` says what they cover).
+    pub fn allow_for_session(&self, id: &str) -> Result<(), String> {
+        self.command(&format!(
+            r#"{{"answer":{{"request_id":{},"allow":true,"always":true,"message":""}}}}"#,
+            host::quote(id)
+        ))
+    }
+
     /// Change the running agent's permission mode (Claude Code under the
     /// host). Takes effect for what it does next.
     pub fn set_mode(&self, mode: Mode) -> Result<(), String> {
@@ -713,10 +829,16 @@ echo $code > "$SPOR_EXIT""#;
         entries
             .iter()
             .filter_map(|e| match e {
-                Entry::Ask { id, tool, detail } if !answered.contains(id.as_str()) => Some(Ask {
+                Entry::Ask {
+                    id,
+                    tool,
+                    detail,
+                    session,
+                } if !answered.contains(id.as_str()) => Some(Ask {
                     id: id.clone(),
                     tool: tool.clone(),
                     detail: detail.clone(),
+                    session: session.clone(),
                 }),
                 _ => None,
             })
@@ -929,6 +1051,12 @@ echo $code > "$SPOR_EXIT""#;
             started,
             ended,
             session,
+            model: Model {
+                name: self.meta(index, "model"),
+                effort: self
+                    .meta(index, "effort")
+                    .and_then(|e| Effort::from_flag(&e)),
+            },
             cost_usd,
             undone: self.file(index, "undone").exists(),
         })
@@ -958,6 +1086,8 @@ fn command_for(
     prompt: &str,
     resume: Option<&str>,
     permissions: Permissions,
+    model: &Model,
+    attachments: &Path,
 ) -> (String, Vec<String>) {
     match kind {
         AgentKind::Claude => {
@@ -970,11 +1100,19 @@ fn command_for(
             ]
             .map(String::from)
             .to_vec();
+            if let Some(name) = &model.name {
+                args.extend(["--model".into(), name.clone()]);
+            }
+            if let Some(effort) = model.effort {
+                args.extend(["--effort".into(), effort.flag().into()]);
+            }
             if let Some(session) = resume {
                 // A new session id for each follow-up, so the one resumed
                 // stays as it was: undoing this run resumes from there.
                 args.extend(["--resume".into(), session.into(), "--fork-session".into()]);
             }
+            // Images attached to prompts are named by their path there.
+            args.extend(["--add-dir".into(), attachments.display().to_string()]);
             // Publishing is always a person's call, from spor.
             args.extend(["--disallowedTools".into(), "Bash(git push:*)".into()]);
             args.extend(["-p".into(), prompt.into()]);
@@ -1091,6 +1229,7 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                         .to_string(),
                     tool: request.get("tool_name").str().unwrap_or("Tool").to_string(),
                     detail: tool_detail(request.get("input")),
+                    session: covers(request.get("permission_suggestions")),
                 });
             }
             Some("spor_answer") => out.push(Entry::Answer {
@@ -1101,6 +1240,7 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                     .to_string(),
                 allow: event.get("allow").bool() == Some(true),
                 message: event.get("message").str().unwrap_or_default().to_string(),
+                always: event.get("always").bool() == Some(true),
             }),
             Some("spor_setup") => out.push(match event.get("state").str() {
                 Some("done") => {
@@ -1206,15 +1346,170 @@ fn alive(pid: Option<&str>) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// What Claude Code's `permission_suggestions` would allow, in words:
+/// "`npm test` commands", "file edits", "all commands". None when there
+/// are none, or none that allow anything.
+pub fn covers(suggestions: &Json) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for s in suggestions.array() {
+        match s.get("type").str() {
+            Some("addRules" | "replaceRules") if s.get("behavior").str() == Some("allow") => {
+                for rule in s.get("rules").array() {
+                    let tool = rule.get("toolName").str().unwrap_or("the tool");
+                    parts.push(rule_words(tool, rule.get("ruleContent").str()));
+                }
+            }
+            Some("setMode") => parts.push(match s.get("mode").str() {
+                Some("acceptEdits") => "file edits".into(),
+                Some("bypassPermissions") => "everything".into(),
+                Some(mode) => format!("{mode} mode"),
+                None => continue,
+            }),
+            Some("addDirectories") => {
+                let dirs: Vec<&str> = s
+                    .get("directories")
+                    .array()
+                    .iter()
+                    .filter_map(Json::str)
+                    .collect();
+                if !dirs.is_empty() {
+                    parts.push(format!("files in {}", dirs.join(", ")));
+                }
+            }
+            _ => {}
+        }
+    }
+    parts.dedup();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
+/// One permission rule, `Bash(npm test:*)`, as words.
+fn rule_words(tool: &str, content: Option<&str>) -> String {
+    let content = content.map(str::trim).filter(|c| !c.is_empty());
+    match (tool, content) {
+        ("Bash", None) => "all commands".into(),
+        ("Bash", Some(c)) => match c.strip_suffix(":*").or_else(|| c.strip_suffix(" *")) {
+            Some(prefix) => format!("`{prefix}` commands"),
+            None => format!("`{c}`"),
+        },
+        ("Edit" | "Write" | "MultiEdit" | "NotebookEdit", None) => "file edits".into(),
+        ("Edit" | "Write" | "MultiEdit" | "NotebookEdit", Some(c)) => format!("edits to {c}"),
+        ("Read", Some(c)) => format!("reading {c}"),
+        ("WebFetch", Some(c)) => match c.strip_prefix("domain:") {
+            Some(domain) => format!("fetching from {domain}"),
+            None => format!("fetching {c}"),
+        },
+        (tool, None) => format!("all {tool} uses"),
+        (tool, Some(c)) => format!("{tool}({c})"),
+    }
+}
+
+/// A pull request title and description for the task's work, written by
+/// Claude Code. It continues (a fork of) the task's session when there is
+/// one, so it knows why the work was done, not just what changed, and it
+/// can only read: look at the branch, not change it.
+pub fn describe_pull(tasks: &Tasks, task: &Task) -> Result<(String, String), String> {
+    let prompt = format!(
+        "Write the pull request for this branch's work: `{branch}` into `{base}`. \
+         Look at what it changes (`git log {start}..HEAD`, `git diff {start}...HEAD`) \
+         and, if this conversation has it, why.\n\n\
+         Reply with only the pull request: its title on the first line (under 72 \
+         characters, no prefix, no quotes), a blank line, then the description in \
+         GitHub markdown: what changed and why, and anything a reviewer should look \
+         at closely. Only say how it was tested if it was. Don't change any files.",
+        branch = task.branch,
+        base = task.base,
+        start = task.start(),
+    );
+    let mut args: Vec<String> = [
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "default",
+        "--allowedTools",
+        "Read,Grep,Glob,Bash(git log:*),Bash(git diff:*),Bash(git show:*)",
+        "--disallowedTools",
+        "Edit,Write,NotebookEdit,Bash(git push:*)",
+    ]
+    .map(String::from)
+    .to_vec();
+    if let Some(session) = Runs::of(tasks, task).session() {
+        args.extend(["--resume".into(), session, "--fork-session".into()]);
+    }
+    args.extend(["-p".into(), prompt]);
+    let mut child = Command::new("claude")
+        .args(&args)
+        .current_dir(&task.worktree)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Couldn't start claude: {e}"))?;
+    // Read stdout on a thread, so a long reply can't fill the pipe while
+    // we wait; give up after a few minutes rather than hang publishing.
+    let mut out = child.stdout.take().ok_or("claude has no output")?;
+    let reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = std::io::Read::read_to_string(&mut out, &mut s);
+        s
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(_) => break,
+            None if std::time::Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Claude took too long to describe the pull request".into());
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(200)),
+        }
+    }
+    let stdout = reader.join().unwrap_or_default();
+    let event = Json::parse(stdout.trim()).ok_or("Couldn't read Claude's reply")?;
+    if event.get("is_error").bool() == Some(true) {
+        return Err("Claude couldn't describe the pull request".into());
+    }
+    let result = event.get("result").str().unwrap_or("");
+    parse_pull_text(result).ok_or_else(|| "Claude's description had no title".into())
+}
+
+/// A reply of a title line, a blank line and a description, as (title,
+/// description). Tolerates a fence around it all, a `#` or `Title:` on
+/// the title, and quotes around it.
+fn parse_pull_text(reply: &str) -> Option<(String, String)> {
+    let mut text = reply.trim();
+    if let Some(inner) = text.strip_prefix("```") {
+        // Drop the fence's language tag, if any, and the closing fence.
+        let inner = inner.split_once('\n').map_or("", |(_, rest)| rest);
+        text = inner.trim_end().strip_suffix("```").unwrap_or(inner).trim();
+    }
+    let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
+    let mut title = first.trim().trim_start_matches('#').trim();
+    for prefix in ["Title:", "title:", "**Title:**"] {
+        title = title.strip_prefix(prefix).unwrap_or(title).trim();
+    }
+    let title = title
+        .trim_matches(|c| c == '"' || c == '`' || c == '*')
+        .trim();
+    if title.is_empty() {
+        return None;
+    }
+    let title = if title.chars().count() > 72 {
+        title.chars().take(71).chain(['…']).collect()
+    } else {
+        title.to_string()
+    };
+    Some((title, rest.trim().to_string()))
+}
+
 /// Is the agent there to run? Why not, if not.
 pub fn missing(kind: &AgentKind) -> Option<String> {
     match kind {
         AgentKind::Claude if !available("claude") => {
-            Some("Claude Code isn't installed, or isn't on the PATH — install it, or pick a custom command".into())
+            Some("Claude Code isn't installed, or isn't on the PATH".into())
         }
-        AgentKind::Command(c) if c.trim().is_empty() => {
-            Some("Set the custom agent command first".into())
-        }
+        AgentKind::Command(c) if c.trim().is_empty() => Some("The agent command is empty".into()),
         _ => None,
     }
 }
@@ -1223,6 +1518,7 @@ pub fn missing(kind: &AgentKind) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     pub kind: AgentKind,
+    pub model: Model,
     pub prompt: String,
     /// The session it continues, if any.
     pub resume: Option<String>,
@@ -1230,19 +1526,22 @@ pub struct Plan {
 
 impl Runs {
     /// What to run for a task: its own prompt (`message` None) with the
-    /// `chosen` agent, or a follow-up. A follow-up goes to the agent that
-    /// did the work, whatever is chosen now, and continues its session;
-    /// with no session to continue (a custom command, or Claude without
-    /// one), the whole task goes again with the feedback after it.
+    /// `chosen` agent and model, or a follow-up. A follow-up goes to the
+    /// agent that did the work, on the model it used, whatever is chosen
+    /// now, and continues its session; with no session to continue (a
+    /// custom command, or Claude without one), the whole task goes again
+    /// with the feedback after it.
     pub fn plan(
         &self,
         task: &Task,
         message: Option<&str>,
-        chosen: Option<&AgentKind>,
+        chosen: Option<(&AgentKind, &Model)>,
     ) -> Result<Plan, String> {
-        let previous = message.and_then(|_| self.latest()).map(|r| r.kind);
-        let kind = previous
-            .or_else(|| chosen.cloned())
+        let previous = message
+            .and_then(|_| self.latest())
+            .map(|r| (r.kind, r.model));
+        let (kind, model) = previous
+            .or_else(|| chosen.map(|(k, m)| (k.clone(), m.clone())))
             .ok_or("Pick an agent first")?;
         if let Some(e) = missing(&kind) {
             return Err(e);
@@ -1259,6 +1558,7 @@ impl Runs {
         };
         Ok(Plan {
             kind,
+            model,
             prompt,
             resume,
         })
@@ -1269,80 +1569,19 @@ impl Runs {
         &self,
         task: &Task,
         message: Option<&str>,
-        chosen: Option<&AgentKind>,
+        chosen: Option<(&AgentKind, &Model)>,
         permissions: Permissions,
     ) -> Result<Run, String> {
         let plan = self.plan(task, message, chosen)?;
-        self.start(
+        self.start_with(
             task,
             &plan.kind,
             &plan.prompt,
             plan.resume.as_deref(),
             permissions,
+            &plan.model,
         )
     }
-}
-
-/// A review comment on lines of a task's diff, sent with the next
-/// follow-up.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LineComment {
-    pub path: String,
-    /// The lines, first to last (the same for one line). Numbered in the
-    /// base for removed lines, in the task's version otherwise.
-    pub start: usize,
-    pub end: usize,
-    /// On removed lines: the old side of the diff.
-    pub removed: bool,
-    pub text: String,
-}
-
-impl LineComment {
-    /// Where it is: `src/a.rs:12`, `src/a.rs:12–14`, with "(removed
-    /// line)" for the old side.
-    pub fn place(&self) -> String {
-        let (start, end) = (self.start.min(self.end), self.start.max(self.end));
-        let lines = if start == end {
-            start.to_string()
-        } else {
-            format!("{start}–{end}")
-        };
-        let removed = match (self.removed, start == end) {
-            (false, _) => "",
-            (true, true) => " (removed line)",
-            (true, false) => " (removed lines)",
-        };
-        format!("{}:{lines}{removed}", self.path)
-    }
-}
-
-/// A message with line comments after it, as the agent gets them:
-/// "Comments on the changes:" and one `- file:line: comment` each.
-pub fn with_comments(message: &str, comments: &[LineComment]) -> String {
-    let message = message.trim();
-    if comments.is_empty() {
-        return message.to_string();
-    }
-    let notes: Vec<String> = comments
-        .iter()
-        .map(|c| format!("- {}: {}", c.place(), c.text.trim()))
-        .collect();
-    let gap = if message.is_empty() { "" } else { "\n\n" };
-    format!(
-        "{message}{gap}Comments on the changes:\n{}",
-        notes.join("\n")
-    )
-}
-
-/// "Ask agent to rebase": bring the branch up to date with `base` and
-/// sort out the conflicts in `files`.
-pub fn rebase_request(base: &str, files: &[String]) -> String {
-    format!(
-        "{base} has moved on and this branch now conflicts with it in {files}. \
-         Rebase onto {base} (git rebase {base}), resolve the conflicts keeping both \
-         sides' intent, make sure it still builds and the tests pass, and commit.",
-        files = files.join(", ")
-    )
 }
 
 /// Is `program` on the PATH?
@@ -1405,6 +1644,66 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pull_text_is_a_title_line_then_the_description() {
+        let (title, body) =
+            parse_pull_text("Fix login on Safari\n\nThe cookie was `SameSite=None`.\n").unwrap();
+        assert_eq!(title, "Fix login on Safari");
+        assert_eq!(body, "The cookie was `SameSite=None`.");
+
+        let (title, body) =
+            parse_pull_text("```markdown\n# Title: \"Fix it\"\n\nBecause.\n```").unwrap();
+        assert_eq!(title, "Fix it");
+        assert_eq!(body, "Because.");
+
+        let (title, body) = parse_pull_text("Just a title").unwrap();
+        assert_eq!(title, "Just a title");
+        assert_eq!(body, "");
+
+        assert_eq!(parse_pull_text("  \n"), None);
+        assert_eq!(
+            parse_pull_text(&"x".repeat(100)).unwrap().0.chars().count(),
+            72
+        );
+    }
+
+    #[test]
+    fn suggested_rules_in_words() {
+        let say = |json: &str| covers(&Json::parse(json).unwrap());
+        assert_eq!(say("[]"), None);
+        assert_eq!(
+            say(
+                r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test:*"}],"behavior":"allow","destination":"session"}]"#
+            ),
+            Some("`npm test` commands".into())
+        );
+        assert_eq!(
+            say(
+                r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"make"},{"toolName":"Bash"}],"behavior":"allow","destination":"session"}]"#
+            ),
+            Some("`make`, all commands".into())
+        );
+        assert_eq!(
+            say(
+                r#"[{"type":"setMode","mode":"acceptEdits","destination":"session"},{"type":"addDirectories","directories":["/tmp/x"],"destination":"session"}]"#
+            ),
+            Some("file edits, files in /tmp/x".into())
+        );
+        assert_eq!(
+            say(
+                r#"[{"type":"addRules","rules":[{"toolName":"WebFetch","ruleContent":"domain:docs.rs"}],"behavior":"allow","destination":"session"}]"#
+            ),
+            Some("fetching from docs.rs".into())
+        );
+        // Rules that deny or ask don't allow anything.
+        assert_eq!(
+            say(
+                r#"[{"type":"addRules","rules":[{"toolName":"Bash"}],"behavior":"deny","destination":"session"}]"#
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn claude_events_become_a_transcript() {
         let log = r#"{"type":"system","subtype":"init","session_id":"s-1"}
 {"type":"stream_event","event":{}}
@@ -1449,16 +1748,50 @@ not json at all
             "Fix it",
             Some("s-1"),
             Permissions::commands(false),
+            &Model::new(Some("opus"), Some(Effort::High)).unwrap(),
+            Path::new("/r/.git/spor/attachments"),
         );
         assert_eq!(program, "claude");
+        assert!(args.windows(2).any(|w| w == ["--model", "opus"]));
+        assert!(args.windows(2).any(|w| w == ["--effort", "high"]));
         assert!(args
             .windows(2)
             .any(|w| w == ["--permission-mode", "acceptEdits"]));
         assert!(args.windows(2).any(|w| w == ["--resume", "s-1"]));
         assert!(args
             .windows(2)
+            .any(|w| w == ["--add-dir", "/r/.git/spor/attachments"]));
+        assert!(args
+            .windows(2)
             .any(|w| w == ["--disallowedTools", "Bash(git push:*)"]));
         assert_eq!(&args[args.len() - 2..], ["-p", "Fix it"]);
+    }
+
+    #[test]
+    fn claude_defaults_leave_the_model_to_claude() {
+        let (_, args) = command_for(
+            &AgentKind::Claude,
+            "Fix it",
+            None,
+            Permissions::commands(false),
+            &Model::new(Some("  "), None).unwrap(),
+            Path::new("/r/.git/spor/attachments"),
+        );
+        assert!(!args.iter().any(|a| a == "--model" || a == "--effort"));
+    }
+
+    #[test]
+    fn model_names_stay_names() {
+        assert!(Model::new(Some("claude-opus-5-5"), None).is_ok());
+        assert!(Model::new(Some("opus[1m]"), None).is_ok());
+        assert!(Model::new(Some("--dangerously-skip-permissions"), None).is_err());
+        assert!(Model::new(Some("opus; rm"), None).is_err());
+        assert_eq!(
+            Model::new(Some("opus"), Some(Effort::XHigh))
+                .unwrap()
+                .describe(),
+            Some("Opus · xhigh effort".into())
+        );
     }
 
     #[test]
@@ -1468,6 +1801,8 @@ not json at all
             "Don't",
             None,
             Permissions::commands(true),
+            &Model::default(),
+            Path::new("/r/.git/spor/attachments"),
         );
         assert_eq!(program, "sh");
         assert_eq!(args, ["-c", r"codex exec 'Don'\''t'"]);

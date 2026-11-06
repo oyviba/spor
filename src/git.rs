@@ -387,6 +387,121 @@ impl Repo {
         }
     }
 
+    /// The tree merging `a` and `b` would give, without touching anything;
+    /// None when the merge would conflict.
+    pub fn merged_tree(&self, a: &str, b: &str) -> Option<String> {
+        let out = self
+            .run(&["merge-tree", "--write-tree", "--no-messages", a, b])
+            .ok()?;
+        if out.status.code() != Some(0) {
+            return None;
+        }
+        let tree = String::from_utf8_lossy(&out.stdout);
+        tree.lines().next().map(str::to_string)
+    }
+
+    /// The oldest commit `branch`'s reflog remembers: for a branch created
+    /// here, what it was created from. None without a reflog.
+    pub fn first_logged(&self, branch: &str) -> Option<String> {
+        let reference = format!("refs/heads/{branch}");
+        let out = self
+            .run_ok(&["log", "-g", "--format=%H", &reference, "--"])
+            .ok()?;
+        out.lines().last().map(str::to_string)
+    }
+
+    /// The commits `range` (e.g. `main..feature`) holds.
+    pub fn commits_in(&self, range: &str) -> Vec<String> {
+        self.run_ok(&["rev-list", range, "--"])
+            .map(|s| s.lines().map(str::to_string).collect())
+            .unwrap_or_default()
+    }
+
+    /// The files that differ between two revisions (or trees).
+    pub fn changed_paths(&self, from: &str, to: &str) -> Vec<String> {
+        self.run_ok(&[
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--no-ext-diff",
+            "--name-only",
+            from,
+            to,
+            "--",
+        ])
+        .map(|s| s.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+    }
+
+    /// Lines of `from` that are gone in `to`, per file in `paths`: each
+    /// file's removed runs as (first line, count), one-based in `from`.
+    pub fn removed_lines(
+        &self,
+        from: &str,
+        to: &str,
+        paths: &[String],
+    ) -> Vec<(String, Vec<(usize, usize)>)> {
+        if paths.is_empty() {
+            return Vec::new();
+        }
+        let mut args = vec![
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--no-ext-diff",
+            "--no-renames",
+            "--no-prefix",
+            "-U0",
+            from,
+            to,
+            "--",
+        ];
+        args.extend(paths.iter().map(String::as_str));
+        let Ok(out) = self.run_ok(&args) else {
+            return Vec::new();
+        };
+        parse_removed(&out)
+    }
+
+    /// Every line `to` has that `from` doesn't, anywhere, trimmed: to tell
+    /// code that moved from code that went.
+    pub fn added_lines(&self, from: &str, to: &str) -> std::collections::HashSet<String> {
+        let out = self
+            .run_ok(&[
+                "diff",
+                "--no-ext-diff",
+                "--no-renames",
+                "-U0",
+                from,
+                to,
+                "--",
+            ])
+            .unwrap_or_default();
+        out.lines()
+            .filter(|l| !l.starts_with("+++ "))
+            .filter_map(|l| l.strip_prefix('+'))
+            .map(|l| l.trim().to_string())
+            .collect()
+    }
+
+    /// Who wrote `path`'s lines in `runs` (first line, count) as of `rev`.
+    pub fn blame_runs(&self, rev: &str, path: &str, runs: &[(usize, usize)]) -> Vec<BlameLine> {
+        let ranges: Vec<String> = runs
+            .iter()
+            .filter(|(_, n)| *n > 0)
+            .map(|(start, n)| format!("-L{start},+{n}"))
+            .collect();
+        if ranges.is_empty() {
+            return Vec::new();
+        }
+        let mut args = vec!["blame", "--porcelain"];
+        args.extend(ranges.iter().map(String::as_str));
+        args.extend([rev, "--", path]);
+        self.run_ok(&args)
+            .map(|out| parse_blame(&out))
+            .unwrap_or_default()
+    }
+
     /// Merge `branch` with a merge commit even when it could fast-forward.
     pub fn merge_no_ff(&self, branch: &str, message: &str) -> Result<Outcome, String> {
         let out = self.run(&["merge", "--no-ff", "-m", message, branch])?;
@@ -456,7 +571,17 @@ impl Repo {
 
     /// Who last changed each line of `path`, as it is in the working tree.
     pub fn blame(&self, path: &str) -> Result<Vec<BlameLine>, String> {
-        let out = self.run_ok(&["blame", "--porcelain", "--", path])?;
+        self.blame_at(path, None)
+    }
+
+    /// Who last changed each line of `path` as of `rev` (the working tree,
+    /// uncommitted lines included, when `None`). Uncommitted lines have an
+    /// all-zero hash.
+    pub fn blame_at(&self, path: &str, rev: Option<&str>) -> Result<Vec<BlameLine>, String> {
+        let out = match rev {
+            Some(rev) => self.run_ok(&["blame", "--porcelain", rev, "--", path])?,
+            None => self.run_ok(&["blame", "--porcelain", "--", path])?,
+        };
         Ok(parse_blame(&out))
     }
 
@@ -530,6 +655,37 @@ impl Repo {
         Ok(parse_log(&out))
     }
 
+    /// Commits on `branch` that `base` doesn't have, newest first: a
+    /// branch's own work.
+    pub fn branch_commits(&self, base: &str, branch: &str) -> Result<Vec<Commit>, String> {
+        let range = format!("{base}..{branch}");
+        let pretty = format!("--pretty=format:{LOG_FORMAT}");
+        let out = self.run_ok(&["log", "-n200", &pretty, &range])?;
+        Ok(parse_log(&out))
+    }
+
+    /// Files, added and deleted lines on `branch` since it left `base`.
+    pub fn branch_numstat(&self, base: &str, branch: &str) -> (usize, usize, usize) {
+        let range = format!("{base}...{branch}");
+        let out = self
+            .run_ok(&["diff", "--no-ext-diff", "--numstat", &range, "--"])
+            .unwrap_or_default();
+        out.lines().fold((0, 0, 0), |(f, a, d), line| {
+            let mut it = line.split('\t');
+            let n = |s: Option<&str>| s.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            (f + 1, a + n(it.next()), d + n(it.next()))
+        })
+    }
+
+    /// `branch`'s changes since it left `base`, as one patch.
+    pub fn branch_patch(&self, base: &str, branch: &str) -> Result<String, String> {
+        let range = format!("{base}...{branch}");
+        let mut args = vec!["diff"];
+        args.extend(PATCH_FLAGS);
+        args.extend([range.as_str(), "--"]);
+        self.run_ok(&args)
+    }
+
     /// Diff for one working-tree entry. Untracked files have nothing in the
     /// index to compare against, so they're shown as entirely new content.
     pub fn diff_entry(&self, entry: &StatusEntry) -> Result<String, String> {
@@ -567,19 +723,6 @@ impl Repo {
             }
         }
         self.run_ok(&args)
-    }
-
-    /// Everything not yet committed, as one patch: staged and unstaged
-    /// changes to tracked files against HEAD, then each untracked file as new.
-    pub fn uncommitted_patch(&self, untracked: &[String]) -> Result<String, String> {
-        let mut args = vec!["diff"];
-        args.extend(PATCH_FLAGS);
-        // An unborn branch has no HEAD yet: then only the index has content.
-        args.push(if self.has_head() { "HEAD" } else { "--cached" });
-        args.push("--");
-        let mut patch = self.run_ok(&args)?;
-        patch.push_str(&self.untracked_patch(untracked));
-        Ok(patch)
     }
 
     /// One side of the uncommitted changes: index → working tree (with
@@ -633,10 +776,6 @@ impl Repo {
         self.succeeds(&["rev-parse", "--verify", "--quiet", "HEAD"])
     }
 
-    pub fn diff_commit(&self, hash: &str) -> Result<String, String> {
-        self.run_ok(&["show", "--stat", "--patch", hash])
-    }
-
     /// Find the repo's "main" branch name. Checks common names.
     pub fn main_branch(&self) -> Option<String> {
         ["main", "master", "trunk"]
@@ -666,6 +805,35 @@ impl Repo {
         self.main_branch()
     }
 
+    /// Where new work starts by default: origin's copy of the default
+    /// branch (`origin/main`), which a fetch keeps current, rather than a
+    /// local one that may be behind. The local branch if origin has none.
+    pub fn default_start(&self) -> Option<String> {
+        let base = self.default_base_branch()?;
+        let remote = format!("origin/{base}");
+        let exists = self.succeeds(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/{remote}"),
+        ]);
+        Some(if exists { remote } else { base })
+    }
+
+    /// For a remote-tracking branch (`origin/main`), its name on the remote
+    /// (`main`); None for anything else.
+    pub fn remote_branch(&self, name: &str) -> Option<String> {
+        let (remote, branch) = name.split_once('/')?;
+        let tracked = self.succeeds(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/{name}"),
+        ]);
+        (tracked && !branch.is_empty() && self.remotes().iter().any(|r| r == remote))
+            .then(|| branch.to_string())
+    }
+
     /// List all branches, local and remote-tracking, excluding `origin/HEAD` stubs.
     pub fn list_branches(&self) -> Result<Vec<Branch>, String> {
         let out = self.run_ok(&[
@@ -681,19 +849,6 @@ impl Repo {
     pub fn remotes(&self) -> Vec<String> {
         self.run_ok(&["remote"])
             .map(|out| out.lines().map(str::to_string).collect())
-            .unwrap_or_default()
-    }
-
-    /// Paths staged as brand-new files (git status reports these as plain
-    /// "staged", same as modifications).
-    pub fn staged_new_files(&self) -> std::collections::HashSet<String> {
-        self.run_ok(&["diff", "--cached", "--name-only", "--diff-filter=A", "-z"])
-            .map(|s| {
-                s.split('\0')
-                    .filter(|p| !p.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
             .unwrap_or_default()
     }
 
@@ -823,11 +978,6 @@ impl Repo {
         .map(|_| ())
     }
 
-    /// Undo the last commit, keeping its changes staged.
-    pub fn uncommit(&self) -> Result<(), String> {
-        self.run_ok(&["reset", "--soft", "HEAD~1"]).map(|_| ())
-    }
-
     pub fn reset(&self, sha: &str, mode: ResetMode) -> Result<(), String> {
         let flag = match mode {
             ResetMode::Soft => "--soft",
@@ -836,12 +986,6 @@ impl Repo {
             ResetMode::Keep => "--keep",
         };
         self.run_ok(&["reset", "--quiet", flag, sha]).map(|_| ())
-    }
-
-    /// Move the current branch back to `sha`, keeping uncommitted changes
-    /// (git refuses if they'd be overwritten).
-    pub fn reset_keep(&self, sha: &str) -> Result<(), String> {
-        self.reset(sha, ResetMode::Keep)
     }
 
     // ── Branches ─────────────────────────────────────────────────────────
@@ -985,15 +1129,6 @@ impl Repo {
         } else {
             None
         }
-    }
-
-    /// Is a merge stopped on conflicts?
-    pub fn merge_in_progress(&self) -> bool {
-        self.operation() == Some(Operation::Merge)
-    }
-
-    pub fn merge_abort(&self) -> Result<(), String> {
-        self.abort_operation()
     }
 
     /// Give up on the operation in progress, putting things back as they were.
@@ -1159,16 +1294,6 @@ impl Repo {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    /// Stash entries, newest first, as their messages ("WIP on main: …").
-    pub fn stash_list(&self) -> Vec<String> {
-        self.stashes().into_iter().map(|s| s.message).collect()
-    }
-
-    /// Number of stash entries.
-    pub fn stash_count(&self) -> usize {
-        self.stashes().len()
     }
 
     // ── Tags ─────────────────────────────────────────────────────────────
@@ -1398,6 +1523,37 @@ fn parse_worktrees(out: &str) -> Vec<Worktree> {
 /// `<sha> <orig-line> <final-line> [<group-size>]`, followed by the commit's
 /// fields the first time that commit appears, then the line itself after a
 /// tab.
+/// The removed runs in a `-U0 --no-prefix` diff, per file: from each
+/// `@@ -start,count +… @@` (count 1 when left out, 0 for pure additions).
+fn parse_removed(out: &str) -> Vec<(String, Vec<(usize, usize)>)> {
+    let mut files: Vec<(String, Vec<(usize, usize)>)> = Vec::new();
+    // Between `diff --git` and the first hunk; after that a `--- ` line is
+    // a removed line that started with `-- `.
+    let mut header = false;
+    for line in out.lines() {
+        if line.starts_with("diff --git ") {
+            header = true;
+        } else if let Some(path) = line.strip_prefix("--- ").filter(|_| header) {
+            // `/dev/null` for an added file, which removes nothing.
+            files.push((path.to_string(), Vec::new()));
+        } else if let Some(hunk) = line.strip_prefix("@@ -") {
+            header = false;
+            let old = hunk.split(' ').next().unwrap_or("");
+            let (start, count) = match old.split_once(',') {
+                Some((s, c)) => (s.parse().unwrap_or(0), c.parse().unwrap_or(0)),
+                None => (old.parse().unwrap_or(0), 1),
+            };
+            if let Some((_, runs)) = files.last_mut() {
+                if count > 0 && start > 0 {
+                    runs.push((start, count));
+                }
+            }
+        }
+    }
+    files.retain(|(path, runs)| path != "/dev/null" && !runs.is_empty());
+    files
+}
+
 fn parse_blame(out: &str) -> Vec<BlameLine> {
     #[derive(Default, Clone)]
     struct Info {
@@ -1451,7 +1607,8 @@ fn parse_refs(s: &str) -> (Vec<String>, Option<String>) {
     let refs = s
         .split(',')
         .map(|r| r.trim())
-        .filter(|r| !r.is_empty())
+        // `origin/HEAD` only says which branch is origin's default.
+        .filter(|r| !r.is_empty() && !r.ends_with("/HEAD"))
         .map(|r| {
             if let Some(rest) = r.strip_prefix("HEAD -> ") {
                 head_ref = Some(rest.to_string());
@@ -1643,7 +1800,7 @@ mod tests {
 
     #[test]
     fn parse_refs_head_and_tags() {
-        let (refs, head) = parse_refs("HEAD -> main, origin/main, tag: v1.0");
+        let (refs, head) = parse_refs("HEAD -> main, origin/main, origin/HEAD, tag: v1.0");
         assert_eq!(refs, vec!["main", "origin/main", "tag:v1.0"]);
         assert_eq!(head.as_deref(), Some("main"));
     }

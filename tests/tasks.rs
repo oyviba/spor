@@ -235,3 +235,271 @@ fn discard_and_land_can_be_undone() {
     assert_eq!(f.tasks.get(&task.id).unwrap().state, TaskState::Open);
     assert!(task.worktree.join("notes.txt").exists());
 }
+
+#[test]
+fn issue_tasks_are_named_after_the_issue_and_close_it_when_landed() {
+    let f = fixture();
+    let task = f
+        .tasks
+        .create_for_issue(
+            "Login fails on Safari (#7)\n\nThe whole issue",
+            "main",
+            7,
+            "Login fails on Safari",
+        )
+        .unwrap();
+    assert_eq!(task.id, "7-login-fails-safari");
+    assert_eq!(task.branch, "agent/7-login-fails-safari");
+    assert_eq!(task.issue, Some(7));
+    assert_eq!(f.tasks.get(&task.id).unwrap().issue, Some(7));
+    assert!(task.pull_request_body(None).starts_with("Closes #7"));
+
+    work(&task.worktree, "app.txt", "fixed\n", Some("Fix it"));
+    f.tasks.land(&task, LandMode::Squash, false).unwrap();
+    let message = git(f.repo.root(), &["log", "-1", "--format=%B"]);
+    assert_eq!(
+        message.trim(),
+        "Login fails on Safari (#7)\n\nCloses #7\n\nSpor-Task: 7-login-fails-safari"
+    );
+}
+
+#[test]
+fn publish_pushes_the_branch_before_opening_a_pull_request() {
+    let f = fixture();
+    let remote = f.dir.join("remote.git");
+    git(
+        &f.dir,
+        &["init", "--quiet", "--bare", remote.to_str().unwrap()],
+    );
+    git(
+        f.repo.root(),
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    let task = f.tasks.create("Add a thing", "main").unwrap();
+
+    let err = f
+        .tasks
+        .publish(&task, "origin", false, false, false)
+        .unwrap_err();
+    assert!(err.contains("no commits"), "{err}");
+
+    work(&task.worktree, "new.txt", "new\n", None);
+    let err = f
+        .tasks
+        .publish(&task, "origin", false, false, false)
+        .unwrap_err();
+    assert!(err.contains("uncommitted"), "{err}");
+
+    // The push works; opening the PR can't (the remote isn't GitHub), and
+    // then the task has no PR.
+    let err = f
+        .tasks
+        .publish(&task, "origin", true, true, false)
+        .unwrap_err();
+    assert!(err.contains("GitHub"), "{err}");
+    git(
+        &remote,
+        &["rev-parse", "--verify", "refs/heads/agent/add-thing"],
+    );
+    assert_eq!(f.tasks.get(&task.id).unwrap().pull, None);
+
+    // Follow-up commits are counted until they're pushed.
+    assert_eq!(f.tasks.stats(&task).unpushed, 0);
+    work(&task.worktree, "new.txt", "newer\n", Some("Address review"));
+    assert_eq!(f.tasks.stats(&task).unpushed, 1);
+    f.tasks.push(&task, "origin", false).unwrap();
+    assert_eq!(f.tasks.stats(&task).unpushed, 0);
+
+    // Work the agent left uncommitted goes too, when asked.
+    work(&task.worktree, "new.txt", "newest\n", None);
+    f.tasks.push(&task, "origin", true).unwrap();
+    let stats = f.tasks.stats(&task);
+    assert_eq!((stats.uncommitted, stats.unpushed), (0, 0));
+    assert_eq!(
+        subjects(&task.worktree)[0],
+        "Uncommitted work from add-thing"
+    );
+}
+
+#[test]
+fn settle_cleans_up_after_a_merged_pull_request_and_can_be_undone() {
+    let f = fixture();
+    let task = f.tasks.create("Merged elsewhere", "main").unwrap();
+    work(&task.worktree, "app.txt", "done\n", Some("Do it"));
+    f.tasks.link_pull(&task, 12).unwrap();
+    let task = f.tasks.get(&task.id).unwrap();
+    assert_eq!(task.pull, Some(12));
+
+    work(&task.worktree, "stray.txt", "stray\n", None);
+    let err = f.tasks.settle(&task, "abc123").unwrap_err();
+    assert!(err.contains("uncommitted"), "{err}");
+    std::fs::remove_file(task.worktree.join("stray.txt")).unwrap();
+
+    let undo = f.tasks.settle(&task, "abc123").unwrap();
+    assert!(!task.worktree.exists());
+    assert!(f.repo.resolve("refs/heads/agent/merged-elsewhere").is_err());
+    let settled = f.tasks.get(&task.id).unwrap();
+    assert_eq!(settled.state, TaskState::Landed("abc123".into()));
+    assert_eq!(settled.pull, Some(12));
+
+    f.tasks.restore(&undo).unwrap();
+    let back = f.tasks.get(&task.id).unwrap();
+    assert_eq!(back.state, TaskState::Open);
+    assert_eq!(back.pull, Some(12));
+    assert!(task.worktree.join("app.txt").exists());
+}
+
+#[test]
+fn close_cleans_up_after_a_closed_pull_request_and_can_be_undone() {
+    let f = fixture();
+    let task = f.tasks.create("Closed elsewhere", "main").unwrap();
+    work(&task.worktree, "app.txt", "done\n", Some("Do it"));
+    f.tasks.link_pull(&task, 13).unwrap();
+    let task = f.tasks.get(&task.id).unwrap();
+
+    let undo = f.tasks.close(&task).unwrap();
+    assert!(!task.worktree.exists());
+    assert!(f.repo.resolve("refs/heads/agent/closed-elsewhere").is_err());
+    let closed = f.tasks.get(&task.id).unwrap();
+    assert_eq!(closed.state, TaskState::Closed);
+    assert_eq!(closed.pull, Some(13));
+    let err = f.tasks.close(&closed).unwrap_err();
+    assert!(err.contains("already settled"), "{err}");
+
+    // Closed tasks sort after open ones.
+    let open = f.tasks.create("Still going", "main").unwrap();
+    let ids: Vec<String> = f.tasks.list().into_iter().map(|t| t.id).collect();
+    assert_eq!(ids, [open.id.clone(), task.id.clone()]);
+
+    f.tasks.restore(&undo).unwrap();
+    let back = f.tasks.get(&task.id).unwrap();
+    assert_eq!(back.state, TaskState::Open);
+    assert!(task.worktree.join("app.txt").exists());
+}
+
+#[test]
+fn undoes_reports_base_work_the_task_would_revert() {
+    let f = fixture();
+    let task = f.tasks.create("Rename things", "main").unwrap();
+    work(&task.worktree, "task.txt", "mine\n", Some("task work"));
+    // main gains lines after the task started, one of them like a diff header.
+    work(
+        f.repo.root(),
+        "app.txt",
+        "one\ntwo\nthree\nfour\n-- five\n",
+        Some("more on main"),
+    );
+    assert!(
+        f.tasks.undoes(&task).is_empty(),
+        "work beside main's undoes nothing"
+    );
+    // The agent merges main in, then writes back the copy it started from.
+    git(&task.worktree, &["merge", "--quiet", "--no-edit", "main"]);
+    work(
+        &task.worktree,
+        "app.txt",
+        "one\ntwo\nthree\n",
+        Some("rename"),
+    );
+    assert_eq!(f.tasks.undoes(&task), vec![("app.txt".to_string(), 2)]);
+}
+
+#[test]
+fn undoes_ignores_lines_that_were_there_when_the_task_started() {
+    let f = fixture();
+    let task = f.tasks.create("Drop two", "main").unwrap();
+    work(&task.worktree, "app.txt", "one\nthree\n", Some("drop two"));
+    work(
+        f.repo.root(),
+        "other.txt",
+        "new\n",
+        Some("unrelated on main"),
+    );
+    assert!(f.tasks.undoes(&task).is_empty());
+}
+
+#[test]
+fn undoes_ignores_base_work_the_task_moved() {
+    let f = fixture();
+    let task = f.tasks.create("Move app", "main").unwrap();
+    work(
+        f.repo.root(),
+        "app.txt",
+        "one\ntwo\nthree\nfour\n",
+        Some("more on main"),
+    );
+    git(&task.worktree, &["merge", "--quiet", "--no-edit", "main"]);
+    git(&task.worktree, &["mv", "app.txt", "moved.txt"]);
+    git(&task.worktree, &["commit", "--quiet", "-m", "move"]);
+    assert!(f.tasks.undoes(&task).is_empty());
+}
+
+#[test]
+fn tasks_start_from_origin_and_land_once_the_base_is_pulled() {
+    let f = fixture();
+    let root = f.repo.root().to_path_buf();
+    let remote = f.dir.join("remote.git");
+    git(
+        &f.dir,
+        &[
+            "init",
+            "--quiet",
+            "--bare",
+            "--initial-branch=main",
+            remote.to_str().unwrap(),
+        ],
+    );
+    git(
+        &root,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&root, &["push", "--quiet", "-u", "origin", "main"]);
+    // Someone else pushes to main; this checkout has fetched but not pulled.
+    let other = f.dir.join("other");
+    git(
+        &f.dir,
+        &[
+            "clone",
+            "--quiet",
+            remote.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    git(&other, &["config", "user.name", "Other"]);
+    git(&other, &["config", "user.email", "other@example.com"]);
+    work(&other, "theirs.txt", "theirs\n", Some("Their change"));
+    git(&other, &["push", "--quiet", "origin", "main"]);
+    git(&root, &["fetch", "--quiet", "origin"]);
+    assert_eq!(f.repo.default_start().as_deref(), Some("origin/main"));
+
+    let task = f.tasks.create("Add a thing", "origin/main").unwrap();
+    assert_eq!(task.base, "main");
+    assert_eq!(task.from.as_deref(), Some("origin/main"));
+    assert_eq!(
+        f.tasks.get(&task.id).unwrap().from.as_deref(),
+        Some("origin/main")
+    );
+    assert!(
+        task.worktree.join("theirs.txt").exists(),
+        "starts from origin's main"
+    );
+    // Its work is only its own commits, not origin's.
+    work(&task.worktree, "mine.txt", "mine\n", Some("My change"));
+    let stats = f.tasks.stats(&task);
+    assert_eq!((stats.commits, stats.base_moved), (1, false));
+
+    // Landing on a main that's behind would carry origin's commit too.
+    let err = f.tasks.land(&task, LandMode::Squash, false).unwrap_err();
+    assert!(err.contains("pull main first"), "{err}");
+    git(&root, &["merge", "--quiet", "--ff-only", "origin/main"]);
+    f.tasks.land(&task, LandMode::Squash, false).unwrap();
+    assert_eq!(subjects(&root), ["Add a thing", "Their change", "start"]);
+}
+
+#[test]
+fn a_local_base_is_taken_as_is() {
+    let f = fixture();
+    assert_eq!(f.repo.default_start().as_deref(), Some("main"), "no origin");
+    let task = f.tasks.create("Add a thing", "main").unwrap();
+    assert_eq!((task.base.as_str(), task.from), ("main", None));
+}

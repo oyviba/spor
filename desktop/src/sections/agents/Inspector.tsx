@@ -1,19 +1,61 @@
-import { useEffect, useState } from "react";
-import type { SetupInfo, TaskDetail } from "../../types";
+import { useState } from "react";
+import { useChanged } from "../../shared/hooks";
+import type { SetupInfo, TaskDetail, TaskPull } from "../../types";
 import { duration } from "./transcript";
-import { AgentIcon, Alert, Branch, ChevronDown, Copy, Folder, Merge, Refresh, Terminal, Trash } from "../../shared/Icons";
+import { pullStatus } from "../pulls/PullsSection";
+import { StatusPill } from "../../shared/StatusPill";
+import { Button } from "../../shared/Button";
+import {
+  AgentIcon,
+  Alert,
+  ArrowUp,
+  Branch,
+  ChevronDown,
+  Copy,
+  Folder,
+  IssueIcon,
+  Merge,
+  MessageSquare,
+  PullRequest,
+  Refresh,
+  Terminal,
+  Trash,
+} from "../../shared/Icons";
 
-interface Props {
+/** What the card does with the task's issue and pull request. */
+export interface GithubActions {
+  /** Its pull request, once it has one (#24, #47). */
+  pull?: TaskPull;
+  onShowIssue: (n: number) => void;
+  onShowPull: (n: number) => void;
+  onPublish: (draft: boolean, commitUncommitted: boolean) => unknown;
+  /** Push to its PR; with `commitUncommitted`, uncommitted work goes too. */
+  onPush: (commitUncommitted: boolean) => unknown;
+  onSendReview: () => unknown;
+  /** Send its PR's failed Actions jobs to the agent. */
+  onSendFailure: () => unknown;
+  onSettle: (commit: string) => unknown;
+  /** Squash and merge its PR on GitHub, then clean up as `onSettle` does. */
+  onMerge: () => unknown;
+  /** Mark its draft PR ready for review. */
+  onReady: () => unknown;
+  /** Its PR was closed unmerged: close it and remove its folder and branch. */
+  onClose: () => unknown;
+}
+
+interface Props extends GithubActions {
   detail: TaskDetail;
   baseCheckedOut: boolean;
-  onOpenFolder: () => void;
+  onOpenFolder: () => unknown;
   onCopy: (text: string, what: string) => void;
   onShowChanges: () => void;
-  onLand: (merge: boolean, commitUncommitted: boolean) => void;
-  onDiscard: () => void;
+  onLand: (merge: boolean, commitUncommitted: boolean) => unknown;
+  onDiscard: () => unknown;
   onAskRebase: () => void;
+  /** Ask the agent to put back what it would undo on the base. */
+  onAskRestore: () => void;
   onShowBranch: () => void;
-  onRerunSetup: () => void;
+  onRerunSetup: () => unknown;
 }
 
 /** The task's details and landing actions, in a small floating card. */
@@ -23,11 +65,29 @@ export function Inspector({ detail, ...p }: Props) {
   const running = t.run?.state === "running";
   const [includeUncommitted, setIncludeUncommitted] = useState(true);
   const [landMenu, setLandMenu] = useState(false);
+  const [prMenu, setPrMenu] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  useEffect(() => {
+  // What it's doing (publishing, landing…): that button spins, the others
+  // that would change the task wait.
+  const [working, setWorking] = useState<"publish" | "land" | "discard" | "merge" | null>(null);
+  const [confirmMerge, setConfirmMerge] = useState(false);
+  const work = (what: NonNullable<typeof working>, run: () => unknown) => {
+    if (working) return;
+    setWorking(what);
+    return Promise.resolve(run()).finally(() => setWorking(null));
+  };
+  useChanged(() => {
     setConfirmDiscard(false);
+    setConfirmMerge(false);
     setLandMenu(false);
+    setPrMenu(false);
   }, [t.id]);
+  const pr = p.pull?.pull;
+  const prOpen = pr && (pr.state === "open" || pr.state === "draft");
+  const merged = pr?.state === "merged";
+  const closed = pr?.state === "closed";
+  // Merged or closed on GitHub: what's left is to clean up.
+  const done = merged || closed;
 
   const hasWork = s.commits > 0 || s.uncommitted > 0;
   const landBlocked = running
@@ -39,18 +99,98 @@ export function Inspector({ detail, ...p }: Props) {
         : s.uncommitted > 0 && !includeUncommitted
           ? "It has uncommitted changes"
           : null;
+  const undoneLines = detail.undoes.reduce((n, u) => n + u.lines, 0);
   const lastRun = detail.runs.at(-1);
   const spent = detail.runs.reduce((n, r) => n + (r.cost_usd ?? 0), 0);
 
-  if (t.landed) {
+  // What merging its PR from here waits for. GitHub has the final say
+  // (required reviews and checks); this is what would lose work.
+  const mergeBlocked = !prOpen
+    ? null
+    : running
+      ? "The agent is still working"
+      : pr.state === "draft"
+        ? "It's a draft — mark it ready for review first"
+        : s.unpushed > 0 || s.uncommitted > 0
+          ? `Push what isn't on #${pr.number} yet first`
+          : detail.conflicts.length > 0
+              ? `Resolve the conflicts with ${t.base} first`
+              : null;
+
+  const publishBlocked = running
+    ? "The agent is still working"
+    : !hasWork
+      ? "Nothing to publish yet"
+      : s.uncommitted > 0 && !includeUncommitted
+        ? "It has uncommitted changes"
+        : null;
+
+  // Where it came from and where it went, on GitHub.
+  const github = (t.issue != null || t.pull != null || pr) && (
+    <div className="inspector-section">
+      {t.issue != null && (
+        <button className="inspector-row action" onClick={() => p.onShowIssue(t.issue!)} title="Show the issue">
+          <IssueIcon size={13} />
+          <span>
+            Issue <span className="num">#{t.issue}</span>
+          </span>
+        </button>
+      )}
+      {!pr && t.pull != null && (
+        <button className="inspector-row action" onClick={() => p.onShowPull(t.pull!)}>
+          <PullRequest size={13} />
+          <span>
+            Pull request <span className="num">#{t.pull}</span>
+          </span>
+        </button>
+      )}
+      {pr && (
+        <button className="inspector-row action" onClick={() => p.onShowPull(pr.number)} title={pr.title}>
+          <PullRequest size={13} />
+          <span className="num">#{pr.number}</span>
+          <span className="flex-1" />
+          <StatusPill status={pullStatus(pr)} />
+        </button>
+      )}
+      {prOpen && (s.unpushed > 0 || s.uncommitted > 0) && (
+        <div className="inspector-row warn">
+          <ArrowUp size={13} />
+          <span>
+            {[
+              s.unpushed > 0 && `${s.unpushed} ${s.unpushed === 1 ? "commit" : "commits"}`,
+              s.uncommitted > 0 && `${s.uncommitted} uncommitted ${s.uncommitted === 1 ? "file" : "files"}`,
+            ]
+              .filter(Boolean)
+              .join(" and ")}{" "}
+            not on #{pr.number} yet
+            <Button
+              className="link"
+              onClick={() => p.onPush(s.uncommitted > 0)}
+              disabled={running}
+              title={s.uncommitted > 0 ? "Commit what it left uncommitted, and push" : undefined}
+            >
+              {s.uncommitted > 0 ? "Commit and push" : "Push"}
+            </Button>
+          </span>
+        </div>
+      )}
+    </div>
+  );
+
+  if (t.landed || t.closed) {
     return (
       <aside className="inspector">
         <div className="inspector-row">
           <Merge size={13} />
-          <span>
-            Landed on <b>{t.base}</b> as <code>{t.landed.slice(0, 7)}</code>
-          </span>
+          {t.landed ? (
+            <span>
+              Landed on <b>{t.base}</b> as <code>{t.landed.slice(0, 7)}</code>
+            </span>
+          ) : (
+            <span>Closed — its pull request wasn't merged</span>
+          )}
         </div>
+        {github}
       </aside>
     );
   }
@@ -72,22 +212,38 @@ export function Inspector({ detail, ...p }: Props) {
         <button className="inspector-row action" onClick={p.onShowBranch} title="Show it in History">
           <Branch size={13} />
           <span className="truncate">
-            <code>{t.branch}</code> <span className="muted">from {t.base}</span>
+            <code>{t.branch}</code> <span className="muted">from {t.from ?? t.base}</span>
           </span>
         </button>
-        {s.base_moved && (
+        {s.base_moved && !done && (
           <div className="inspector-row warn">
             <Alert size={13} />
-            <span>{t.base} has moved on — landing rebases first</span>
+            <span>{t.from ?? t.base} has moved on — landing rebases first</span>
           </div>
         )}
-        {detail.conflicts.length > 0 && (
+        {detail.conflicts.length > 0 && !done && (
           <div className="inspector-row bad">
             <Alert size={13} />
             <span>
               Conflicts with {t.base} in {detail.conflicts.join(", ")}
               <button className="link" onClick={p.onAskRebase} disabled={running}>
-                Ask agent to rebase
+                {t.pull != null ? `Ask agent to merge ${t.base} in` : "Ask agent to rebase"}
+              </button>
+            </span>
+          </div>
+        )}
+        {detail.undoes.length > 0 && !done && (
+          <div className="inspector-row bad" title={detail.undoes.map((u) => `${u.path}: ${u.lines}`).join("\n")}>
+            <Alert size={13} />
+            <span>
+              Would undo {undoneLines} {undoneLines === 1 ? "line" : "lines"} that reached {t.base} after it started, in{" "}
+              {detail.undoes
+                .slice(0, 2)
+                .map((u) => u.path.split("/").pop())
+                .join(", ")}
+              {detail.undoes.length > 2 && ` and ${detail.undoes.length - 2} more`}
+              <button className="link" onClick={p.onAskRestore} disabled={running}>
+                Ask agent to put them back
               </button>
             </span>
           </div>
@@ -106,6 +262,7 @@ export function Inspector({ detail, ...p }: Props) {
           </span>
         </button>
       </div>
+      {github}
       {lastRun && (
         <div className="inspector-section">
           <div className="inspector-row">
@@ -118,29 +275,133 @@ export function Inspector({ detail, ...p }: Props) {
           </div>
         </div>
       )}
+      {merged && (
+        <div className="inspector-actions">
+          <div className="inspector-note">Its pull request was merged. Its folder and branch can go.</div>
+          <Button
+            className="primary"
+            disabled={running}
+            title="Mark it landed and remove its folder and branch (⌘Z undoes)"
+            onClick={() => p.onSettle(p.pull!.merge_commit ?? `#${pr!.number}`)}
+          >
+            <Merge size={12} /> Clean up
+          </Button>
+        </div>
+      )}
+      {closed && (
+        <div className="inspector-actions">
+          <div className="inspector-note">Its pull request was closed without merging.</div>
+          <Button
+            className="ghost"
+            disabled={running}
+            title="Mark it closed and remove its folder and branch (⌘Z undoes)"
+            onClick={p.onClose}
+          >
+            <Trash size={12} /> Close task
+          </Button>
+        </div>
+      )}
+      {prOpen && (
+        <div className="inspector-actions">
+          {pr.state === "draft" && (
+            <Button className="ghost" disabled={running} onClick={p.onReady}>
+              Ready for review
+            </Button>
+          )}
+          <Button
+            className={confirmMerge ? "danger" : "primary"}
+            disabled={mergeBlocked != null || (working != null && working !== "merge")}
+            busy={working === "merge"}
+            title={
+              mergeBlocked ??
+              (pr.checks === "failing"
+                ? "Its checks are failing — squash and merge on GitHub anyway, then clean up"
+                : pr.checks === "pending"
+                  ? "Its checks are still running — squash and merge on GitHub anyway, then clean up"
+                  : "Squash and merge on GitHub, then remove its folder and branch (⌘Z brings them back)")
+            }
+            onClick={() => (confirmMerge ? work("merge", p.onMerge) : setConfirmMerge(true))}
+            onBlur={() => setConfirmMerge(false)}
+          >
+            <Merge size={12} /> {confirmMerge ? `Squash and merge #${pr.number}?` : "Squash and merge"}
+          </Button>
+          {pr?.checks === "failing" && (
+            <Button
+              className="ghost"
+              onClick={p.onSendFailure}
+              title="Send the failed jobs' failing steps and the end of their logs"
+            >
+              <Alert size={12} /> Send failing checks to agent
+            </Button>
+          )}
+          <Button
+            className="ghost"
+            onClick={p.onSendReview}
+            title="Send reviews and line comments since the agent last ran"
+          >
+            <MessageSquare size={12} /> Send review to agent
+          </Button>
+        </div>
+      )}
+      {!done && (
       <div className="inspector-actions">
-        {s.uncommitted > 0 && !running && (
+        {s.uncommitted > 0 && !running && !prOpen && (
           <label className="check">
             <input
               type="checkbox"
               checked={includeUncommitted}
               onChange={(e) => setIncludeUncommitted(e.target.checked)}
             />
-            Commit its uncommitted changes when landing
+            Commit its uncommitted changes when landing or publishing
           </label>
         )}
+        {!pr && (
+          <div className="split">
+            <Button
+              className="ghost"
+              disabled={publishBlocked != null || (working != null && working !== "publish")}
+              busy={working === "publish"}
+              title={publishBlocked ?? `Push ${t.branch} and open a pull request into ${t.base}`}
+              onClick={() => work("publish", () => p.onPublish(false, includeUncommitted))}
+            >
+              <PullRequest size={12} /> Open pull request
+            </Button>
+            <button
+              className="ghost split-more"
+              disabled={publishBlocked != null || working != null}
+              aria-label="More ways to open a pull request"
+              onClick={() => setPrMenu((v) => !v)}
+            >
+              <ChevronDown size={12} />
+            </button>
+            {prMenu && (
+              <div className="menu" onMouseLeave={() => setPrMenu(false)}>
+                <button
+                  onClick={() => {
+                    setPrMenu(false);
+                    work("publish", () => p.onPublish(true, includeUncommitted));
+                  }}
+                >
+                  Open as a draft
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {!prOpen && (
         <div className="split">
-          <button
+          <Button
             className="primary"
-            disabled={landBlocked != null}
+            disabled={landBlocked != null || (working != null && working !== "land")}
+            busy={working === "land"}
             title={landBlocked ?? "One commit with the task as its message (⌘Z undoes)"}
-            onClick={() => p.onLand(false, includeUncommitted)}
+            onClick={() => work("land", () => p.onLand(false, includeUncommitted))}
           >
             Land on {t.base}
-          </button>
+          </Button>
           <button
             className="primary split-more"
-            disabled={landBlocked != null}
+            disabled={landBlocked != null || working != null}
             aria-label="More ways to land"
             onClick={() => setLandMenu((v) => !v)}
           >
@@ -151,7 +412,7 @@ export function Inspector({ detail, ...p }: Props) {
               <button
                 onClick={() => {
                   setLandMenu(false);
-                  p.onLand(true, includeUncommitted);
+                  work("land", () => p.onLand(true, includeUncommitted));
                 }}
               >
                 Land with a merge commit
@@ -159,23 +420,27 @@ export function Inspector({ detail, ...p }: Props) {
             </div>
           )}
         </div>
-        <button
+        )}
+        <Button
           className={confirmDiscard ? "danger" : "ghost"}
-          disabled={running}
+          disabled={running || (working != null && working !== "discard")}
+          busy={working === "discard"}
           title={running ? "Stop the agent first" : "Remove its folder and branch (⌘Z undoes)"}
-          onClick={() => (confirmDiscard ? p.onDiscard() : setConfirmDiscard(true))}
+          onClick={() => (confirmDiscard ? work("discard", p.onDiscard) : setConfirmDiscard(true))}
           onBlur={() => setConfirmDiscard(false)}
         >
           <Trash size={12} /> {confirmDiscard ? "Discard?" : "Discard"}
-        </button>
+        </Button>
       </div>
-      {landBlocked && hasWork && !running && <div className="inspector-note">{landBlocked}</div>}
+      )}
+      {!done && !prOpen && landBlocked && hasWork && !running && <div className="inspector-note">{landBlocked}</div>}
+      {mergeBlocked && !running && <div className="inspector-note">{mergeBlocked}</div>}
     </aside>
   );
 }
 
 /** The folder's setup script (#23): which, how it went, and Re-run. */
-function SetupRow({ setup, running, onRerun }: { setup: SetupInfo; running: boolean; onRerun: () => void }) {
+function SetupRow({ setup, running, onRerun }: { setup: SetupInfo; running: boolean; onRerun: () => unknown }) {
   const [label, tone] = ((): [string, string] => {
     switch (setup.state) {
       case "running":

@@ -6,6 +6,9 @@ export interface RepoInfo {
   branch: string | null;
   branches: string[];
   default_base: string | null;
+  /** Where new tasks start unless another branch is picked: `origin/main`
+   * when origin has the default branch, else the local one. */
+  default_start: string | null;
   claude: boolean;
 }
 
@@ -18,6 +21,8 @@ export interface Stats {
   base_moved: boolean;
   last_commit: number;
   missing: boolean;
+  /** Commits its published branch doesn't have yet. */
+  unpushed: number;
 }
 
 export type RunStateName = "running" | "finished" | "failed" | "stopped";
@@ -41,11 +46,16 @@ export interface TaskSummary {
   id: string;
   title: string;
   prompt: string;
+  /** The branch it lands on and its pull request goes into. */
   base: string;
+  /** Where it started when that isn't `base`: `origin/main`. */
+  from: string | null;
   branch: string;
   worktree: string;
   created: number;
   landed: string | null;
+  /** Its pull request was closed without merging, and it was cleaned up. */
+  closed: boolean;
   stats: Stats;
   run: RunInfo | null;
   runs: number;
@@ -53,6 +63,10 @@ export interface TaskSummary {
   /** Questions the agent is waiting on. */
   asks: number;
   mode: Mode | null;
+  /** The GitHub issue it was started from. */
+  issue: number | null;
+  /** The pull request it was published as. */
+  pull: number | null;
   /** Follow-ups waiting for the agent to finish, kept with the task. */
   queued: string[];
 }
@@ -60,10 +74,15 @@ export interface TaskSummary {
 /** How much an agent may do without asking (#21). */
 export type Mode = "supervised" | "acceptEdits" | "auto" | "full";
 
+/** Claude Code's `--effort`. */
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface Ask {
   id: string;
   tool: string;
   detail: string;
+  /** What "Allow for this session" covers ("`npm test` commands"); null: only once. */
+  session: string | null;
 }
 
 export type Item =
@@ -80,8 +99,8 @@ export type Item =
       seconds: number | null;
     }
   | { kind: "output"; text: string }
-  | { kind: "ask"; id: string; tool: string; detail: string }
-  | { kind: "answer"; id: string; allow: boolean; message: string }
+  | { kind: "ask"; id: string; tool: string; detail: string; session: string | null }
+  | { kind: "answer"; id: string; allow: boolean; message: string; always: boolean }
   | { kind: "steer"; text: string }
   | { kind: "setup"; ok: boolean | null; code: number | null };
 
@@ -90,6 +109,9 @@ export interface TaskDetail {
   transcript: Item[];
   runs: RunInfo[];
   conflicts: string[];
+  /** Work that reached the base after the task started and landing it
+   * would take back out: lines per file, most first. */
+  undoes: { path: string; lines: number }[];
   /** The run "Undo this run" would take back. */
   undoable: number | null;
   /** The runs "Undo from here" can start at. */
@@ -116,7 +138,7 @@ export interface RunPatch {
 }
 
 export type AgentChoice =
-  | { kind: "claude" }
+  | { kind: "claude"; model?: string; effort?: Effort | "" }
   | { kind: "command"; template: string }
   | { kind: "none" };
 
@@ -211,6 +233,50 @@ export interface StashInfo {
   message: string;
 }
 
+export interface TagInfo {
+  name: string;
+  /** The commit it's on. */
+  hash: string;
+}
+
+export interface WorktreeInfo {
+  path: string;
+  branch: string | null;
+  head: string;
+  main: boolean;
+  current: boolean;
+  prunable: boolean;
+  agent: boolean;
+}
+
+/** A commit an interactive rebase would rewrite, oldest first. */
+export interface PlanCommit {
+  hash: string;
+  short: string;
+  subject: string;
+  message: string;
+  author: string;
+  time: number;
+}
+
+export type PlanAction = "pick" | "reword" | "squash" | "fixup" | "drop";
+
+export interface PrBadge {
+  branch: string;
+  number: number;
+  draft: boolean;
+  review: "none" | "approved" | "changesrequested";
+  checks: "none" | "pending" | "passing" | "failing";
+}
+
+/** A passphrase, password or yes/no question from git or ssh. */
+export interface Credential {
+  id: number;
+  prompt: string;
+  secret: boolean;
+  confirm: boolean;
+}
+
 // ---- GitHub ----
 
 export interface Pull {
@@ -291,4 +357,102 @@ export interface RunDetail {
 export interface LogLine {
   kind: "plain" | "group" | "command" | "error" | "warning" | "notice";
   text: string;
+}
+
+/** An open task's pull request (#24, #47). */
+export interface TaskPull {
+  task: string;
+  pull: Pull;
+  /** The commit it was merged as, once merged. */
+  merge_commit: string | null;
+}
+
+export interface Issue {
+  number: number;
+  title: string;
+  author: string;
+  open: boolean;
+  labels: string[];
+  assignees: string[];
+  comments: number;
+  updated: number;
+  url: string;
+}
+
+export interface IssueDetail {
+  issue: Issue;
+  body: string;
+  comments: PullComment[];
+  /** The prompt an agent task on it starts from. */
+  prompt: string;
+}
+
+/** An open task in any known repository, for the Inbox (#42). */
+export interface InboxTask {
+  /** The repository's root. */
+  repo: string;
+  id: string;
+  title: string;
+  asks: number;
+  run: "running" | "finished" | "failed" | "stopped" | null;
+  started: number | null;
+  ended: number | null;
+  created: number;
+}
+
+/** What GitHub has waiting for you, across the known repositories. */
+export interface InboxGithub {
+  reviews: { repo: string; number: number; title: string; author: string; updated: number; url: string }[];
+  runs: (Run & { repo: string })[];
+  /** What couldn't be asked, one line each. */
+  errors: string[];
+}
+
+/** One line of `git blame`. `hash` is empty for an uncommitted line. */
+export interface BlameRow {
+  hash: string;
+  author: string;
+  time: number;
+  summary: string;
+  line: number;
+  text: string;
+}
+
+/** A conflicted file, split into text and conflict regions. */
+export type ConflictPart =
+  | { kind: "text"; text: string }
+  | { kind: "conflict"; ours: string; ours_label: string; theirs: string; theirs_label: string; base: string | null };
+
+/** A repository in the workspace's list. */
+export interface RepoHead {
+  path: string;
+  exists: boolean;
+  branch: string | null;
+  ahead: number;
+  behind: number;
+  changes: number;
+}
+
+// ---- Work ----
+
+export interface BranchCommit {
+  hash: string;
+  short: string;
+  subject: string;
+  author: string;
+  time: number;
+}
+
+/** One of your own branches with work on it (#81): commits its base
+ * doesn't have, or checked out. */
+export interface WorkBranch {
+  name: string;
+  base: string;
+  current: boolean;
+  /** Newest first. */
+  commits: BranchCommit[];
+  files: number;
+  additions: number;
+  deletions: number;
+  updated: number;
 }

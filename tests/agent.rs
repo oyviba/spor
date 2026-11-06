@@ -1,6 +1,6 @@
 //! Agents running in task folders: real processes, a fake `claude`.
 
-use spor::agent::{AgentKind, Entry, Permissions, RunState, Runs};
+use spor::agent::{AgentKind, Entry, Model, Permissions, RunState, Runs};
 use spor::checkpoint;
 use spor::git::Repo;
 use spor::tasks::Tasks;
@@ -617,10 +617,10 @@ fn listed_ignored_files_are_copied_into_a_new_folder() {
     );
 }
 
-// ---- The rules both apps follow (#39) ----------------------------------
+// ---- Which agent runs, and what it's sent (#39) -------------------------
 
 #[test]
-fn a_follow_up_goes_to_the_agent_that_did_the_work() {
+fn a_follow_up_goes_to_the_agent_and_model_that_did_the_work() {
     fake_claude();
     let f = fixture();
     let task = f.tasks.create("Leave a mark", "main").unwrap();
@@ -630,20 +630,33 @@ fn a_follow_up_goes_to_the_agent_that_did_the_work() {
         runs.plan(&task, None, None).unwrap_err(),
         "Pick an agent first"
     );
-    let first = runs.plan(&task, None, Some(&AgentKind::Claude)).unwrap();
+    let sonnet = Model::new(Some("sonnet"), None).unwrap();
+    let first = runs
+        .plan(&task, None, Some((&AgentKind::Claude, &sonnet)))
+        .unwrap();
     assert_eq!(first.kind, AgentKind::Claude);
     assert_eq!(first.prompt, "Leave a mark");
     assert_eq!(first.resume, None);
-    runs.follow_up(&task, None, Some(&AgentKind::Claude), NO_COMMANDS)
-        .unwrap();
+    runs.follow_up(
+        &task,
+        None,
+        Some((&AgentKind::Claude, &sonnet)),
+        NO_COMMANDS,
+    )
+    .unwrap();
     assert_eq!(wait_until_done(&runs), RunState::Finished);
 
-    // Whatever is picked now, feedback goes to Claude, into its session.
+    // Whatever is picked now, feedback goes to Claude on Sonnet, into its
+    // session.
     let other = AgentKind::Command("true".into());
     let plan = runs
-        .plan(&task, Some("  Now say hello  "), Some(&other))
+        .plan(
+            &task,
+            Some("  Now say hello  "),
+            Some((&other, &Model::default())),
+        )
         .unwrap();
-    assert_eq!(plan.kind, AgentKind::Claude);
+    assert_eq!((plan.kind, plan.model), (AgentKind::Claude, sonnet));
     assert_eq!(plan.prompt, "Now say hello");
     assert_eq!(plan.resume.as_deref(), Some("sess-42"));
 }
@@ -654,7 +667,8 @@ fn feedback_without_a_session_sends_the_whole_task_again() {
     let task = f.tasks.create("Write a note", "main").unwrap();
     let runs = Runs::of(&f.tasks, &task);
     let kind = AgentKind::Command("echo \"$SPOR_PROMPT\" > note.txt".into());
-    runs.follow_up(&task, None, Some(&kind), NO_COMMANDS)
+    let default = Model::default();
+    runs.follow_up(&task, None, Some((&kind, &default)), NO_COMMANDS)
         .unwrap();
     assert_eq!(wait_until_done(&runs), RunState::Finished);
     let plan = runs.plan(&task, Some("Shorter, please"), None).unwrap();
@@ -668,8 +682,8 @@ fn feedback_without_a_session_sends_the_whole_task_again() {
         .unwrap();
     assert_eq!(wait_until_done(&runs), RunState::Finished);
     assert_eq!(
-        std::fs::read_to_string(task.worktree.join("note.txt")).unwrap(),
-        "Write a note\n\nFeedback on the work so far:\nShorter, please\n"
+        read(&task.worktree, "note.txt").as_deref(),
+        Some("Write a note\n\nFeedback on the work so far:\nShorter, please\n")
     );
 }
 
@@ -680,76 +694,14 @@ fn an_agent_that_isnt_there_is_refused() {
     let runs = Runs::of(&f.tasks, &task);
     let empty = AgentKind::Command("  ".into());
     assert!(spor::agent::missing(&empty).is_some());
-    assert!(runs.plan(&task, None, Some(&empty)).is_err());
+    assert!(runs
+        .plan(&task, None, Some((&empty, &Model::default())))
+        .is_err());
     assert!(runs.latest().is_none());
     assert_eq!(
         spor::agent::missing(&AgentKind::Command("codex exec {prompt}".into())),
         None
     );
-}
-
-#[test]
-fn line_comments_read_file_line_comment() {
-    use spor::agent::{with_comments, LineComment};
-    let one = LineComment {
-        path: "src/auth.rs".into(),
-        start: 42,
-        end: 42,
-        removed: false,
-        text: "use the existing helper ".into(),
-    };
-    let gone = LineComment {
-        path: "src/old.rs".into(),
-        start: 9,
-        end: 7,
-        removed: true,
-        text: "keep these".into(),
-    };
-    assert_eq!(one.place(), "src/auth.rs:42");
-    assert_eq!(gone.place(), "src/old.rs:7–9 (removed lines)");
-    assert_eq!(
-        LineComment {
-            end: 9,
-            start: 9,
-            ..gone.clone()
-        }
-        .place(),
-        "src/old.rs:9 (removed line)"
-    );
-    assert_eq!(
-        with_comments(" Looks close. ", &[one.clone(), gone]),
-        "Looks close.\n\nComments on the changes:\n\
-         - src/auth.rs:42: use the existing helper\n\
-         - src/old.rs:7–9 (removed lines): keep these"
-    );
-    assert_eq!(
-        with_comments("", &[one]),
-        "Comments on the changes:\n- src/auth.rs:42: use the existing helper"
-    );
-    assert_eq!(with_comments(" just text ", &[]), "just text");
-}
-
-#[test]
-fn the_rebase_request_names_the_base_and_the_files() {
-    let m = spor::agent::rebase_request("main", &["a.rs".into(), "b.rs".into()]);
-    assert!(m.starts_with("main has moved on and this branch now conflicts with it in a.rs, b.rs."));
-    assert!(m.contains("git rebase main"));
-}
-
-#[test]
-fn land_and_discard_say_what_they_did() {
-    let f = fixture();
-    let task = f.tasks.create("Throw away", "main").unwrap();
-    let undo = f.tasks.discard(&task).unwrap();
-    assert_eq!(undo.label(), format!("Discarded {}", task.id));
-    f.tasks.restore(&undo).unwrap();
-    std::fs::write(task.worktree.join("x.txt"), "x\n").unwrap();
-    let task = f.tasks.get(&task.id).unwrap();
-    let undo = f
-        .tasks
-        .land(&task, spor::tasks::LandMode::Squash, true)
-        .unwrap();
-    assert_eq!(undo.label(), format!("Landed {} on main", task.id));
 }
 
 // ---- Follow-ups from #19–#23 (#41) ---------------------------------------
@@ -763,15 +715,40 @@ fn queued_follow_ups_are_kept_with_the_task() {
     runs.queue("first\nwith two lines").unwrap();
     runs.queue("second").unwrap();
     runs.queue("third").unwrap();
-    // Another app (another Runs) sees the same queue.
+    // Another window (another Runs) sees the same queue.
     let other = Runs::of(&f.tasks, &task);
     assert_eq!(other.queued(), ["first\nwith two lines", "second", "third"]);
     other.unqueue(1).unwrap();
     assert!(other.unqueue(5).is_err());
-    assert_eq!(runs.take_queued().as_deref(), Some("first\nwith two lines"));
-    assert_eq!(runs.take_queued().as_deref(), Some("third"));
-    assert_eq!(runs.take_queued(), None);
+    assert_eq!(runs.queued(), ["first\nwith two lines", "third"]);
+    runs.unqueue(0).unwrap();
+    runs.unqueue(0).unwrap();
+    assert!(runs.queued().is_empty());
     assert!(!f.tasks.run_dir(&task.id).join("queue").exists());
+}
+
+#[test]
+fn a_queued_follow_up_goes_once_the_agent_is_idle() {
+    let f = fixture();
+    let task = f.tasks.create("Write a note", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let kind = AgentKind::Command("sleep 0.3; echo \"$SPOR_PROMPT\" > note.txt".into());
+    let default = Model::default();
+    runs.follow_up(&task, None, Some((&kind, &default)), NO_COMMANDS)
+        .unwrap();
+    runs.queue("Shorter").unwrap();
+    // Still working: it waits.
+    assert!(!runs.send_queued(&task, None, NO_COMMANDS).unwrap());
+    assert_eq!(runs.queued(), ["Shorter"]);
+    wait_until_done(&runs);
+    assert!(runs.send_queued(&task, None, NO_COMMANDS).unwrap());
+    assert!(runs.queued().is_empty());
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    assert_eq!(
+        read(&task.worktree, "note.txt").as_deref(),
+        Some("Write a note\n\nFeedback on the work so far:\nShorter\n")
+    );
+    assert!(!runs.send_queued(&task, None, NO_COMMANDS).unwrap());
 }
 
 #[test]
@@ -785,8 +762,8 @@ fn undo_from_an_earlier_run_takes_back_everything_after_it() {
     run_command(&task, &runs, "echo 3 > three.txt");
     assert_eq!(runs.undoable_from(), [0, 1, 2]);
 
-    // The last on its own, then from the second: the second batch is runs
-    // 1 (and 2, already undone).
+    // The last on its own, then from the second: that batch is run 1 (2
+    // was already undone).
     runs.undo_last().unwrap();
     assert_eq!(runs.undo_from(1).unwrap(), [1]);
     assert!(read(wt, "one.txt").is_some());
@@ -861,27 +838,4 @@ fn the_setup_script_reports_how_it_went() {
     assert_eq!(runs.setup(&task).state, Some(SetupState::Worked));
     runs.skip_setup().unwrap();
     assert_eq!(runs.setup(&task).state, Some(SetupState::Skipped));
-}
-
-#[test]
-fn a_queued_follow_up_goes_once_the_agent_is_idle() {
-    let f = fixture();
-    let task = f.tasks.create("Write a note", "main").unwrap();
-    let runs = Runs::of(&f.tasks, &task);
-    let kind = AgentKind::Command("sleep 0.3; echo \"$SPOR_PROMPT\" > note.txt".into());
-    runs.follow_up(&task, None, Some(&kind), NO_COMMANDS)
-        .unwrap();
-    runs.queue("Shorter").unwrap();
-    // Still working: it waits.
-    assert!(!runs.send_queued(&task, None, NO_COMMANDS).unwrap());
-    assert_eq!(runs.queued(), ["Shorter"]);
-    wait_until_done(&runs);
-    assert!(runs.send_queued(&task, None, NO_COMMANDS).unwrap());
-    assert!(runs.queued().is_empty());
-    assert_eq!(wait_until_done(&runs), RunState::Finished);
-    assert_eq!(
-        read(&task.worktree, "note.txt").as_deref(),
-        Some("Write a note\n\nFeedback on the work so far:\nShorter\n")
-    );
-    assert!(!runs.send_queued(&task, None, NO_COMMANDS).unwrap());
 }

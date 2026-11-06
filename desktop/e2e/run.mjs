@@ -1,5 +1,5 @@
 // End-to-end check of agent tasks in the real app (Tauri + spor's core),
-// through WebDriver.
+// through WebDriver, in Work: every work item in the repository (#81).
 //
 //   tauri-driver &            # needs WebKitWebDriver (Linux: webkit2gtk-driver)
 //   SPOR_REPO=/path/to/a/scratch/repo node e2e/run.mjs path/to/spor-desktop out-dir
@@ -21,23 +21,38 @@ const git = gitIn(repo);
 const w = await open(app, out);
 
 try {
+  // Stored from before Work replaced Agents: it should open Work.
   await w.js("localStorage.clear(); localStorage.setItem('spor.section', JSON.stringify('agents'))");
   await w.refresh();
+  console.log("Work");
+  await w.waitFor(`.rail-item[aria-label="Work"][aria-current="page"]`);
+  check(true, "a stored Agents section opens Work");
+  await w.until(`return [...$$(".task-row[data-kind=branch]")].some(r => r.innerText.includes("Document how to call greet()"))`, "your branch");
+  check((await w.text(".task-list")).includes("In progress"), "your own branch with commits ahead of main is listed, in progress");
+  await w.clickText(".segmented button", "Agents");
+  check(!(await w.count(".task-row[data-kind=branch]")), "the Agents filter leaves it out");
+  await w.clickText(".segmented button", "All");
+
   console.log("New task");
+  await w.click(".new-work");
+  await w.waitFor(".menu.floating");
+  await w.clickText(".menu.floating button", "Agent task");
   await w.waitFor(".new-task textarea");
   const before = git("rev-parse", "main");
   await w.fill(".new-task textarea", "Let greet() take an optional title");
   await w.enter(".new-task textarea");
   await w.waitFor(".task-page .live-line");
   check(git("branch", "--list", "agent/*").includes("agent/let-greet-take-optional"), "task branch created");
+  await w.until(`return $(".task-row.selected[data-kind=task]")?.innerText.includes("Let greet() take an optional title")`, "the task's row");
+  check(true, "the task is listed next to your branch, and selected");
 
   console.log("Steering it while it works (#22)");
   check((await w.text(".composer-footer .chip-toggle")).includes("queues"), "while it works, ↩ queues by default");
   await w.fill(".composer-dock textarea", "Keep the docstring short");
   check((await w.text(".hint-keys")).includes("⌘↩ steer"), "…and ⌘↩ steers");
   await w.key(".composer-dock textarea", "Enter", { ctrlKey: true });
-  await w.until(`return [...document.querySelectorAll(".bubble.steer")].some(b => b.innerText.includes("Keep the docstring short"))`, "the steer bubble");
-  await w.until(`return document.querySelector(".conversation").innerText.includes("Noted: Keep the docstring short")`, "the agent taking it", 15000);
+  await w.until(`return [...$$(".bubble.steer")].some(b => b.innerText.includes("Keep the docstring short"))`, "the steer bubble");
+  await w.until(`return $(".conversation").innerText.includes("Noted: Keep the docstring short")`, "the agent taking it", 15000);
   check(true, "a steered message goes into the running turn, and the agent takes it");
   check(!(await w.count(".queued-item")), "…without queueing it");
   await sleep(4500);
@@ -46,11 +61,21 @@ try {
   console.log("It asks before running the tests (#21)");
   await w.waitFor(".composer .ask-card", 30000);
   check((await w.text(".ask-card")).includes("python -m pytest -q"), "the question shows in the composer, with the command");
-  check((await w.text(".task-row .pill")).includes("Needs you"), "the task says it needs you");
+  // The task list reloads apart from the page; give it a beat to catch up.
+  await w.until(`return $(".task-row .pill")?.innerText.includes("Needs you")`, "the Needs you pill", 5000);
+  check(true, "the task says it needs you");
   check((await w.text(".list-label.needs-you")) === "Needs you", "…and moves to the top of the list");
-  await w.until(`return document.querySelector(".rail-badge.asking")?.textContent === "1"`, "the rail's count", 6000);
-  check(true, "the rail counts it in amber");
+  await w.until(`return $('.rail-item[aria-label="Inbox"] .rail-badge.asking')?.textContent === "1"`, "the rail's count", 6000);
+  check(true, "the Inbox counts it in amber");
   await w.shot("2a-asking");
+
+  console.log("The Inbox has it (#42)");
+  await w.js(`$('.rail-item[aria-label="Inbox"]').click()`);
+  await w.waitFor(".list-label.needs-you");
+  check((await w.text(".task-list")).includes("Let greet() take an optional title"), "the Inbox lists the question");
+  await w.clickText(".task-row", "Let greet()");
+  await w.waitFor(".composer .ask-card");
+  check(true, "clicking it opens the task, with its question");
   await w.clickText(".ask-card button", "Allow");
 
   console.log("Agent finishes");
@@ -59,14 +84,14 @@ try {
   const transcript = await w.text(".conversation");
   check(transcript.includes("The tests pass."), "Allow lets it run the tests");
   await w.click(".run .fold");
-  await w.until(`return document.querySelector(".ask-line.allowed")?.innerText.includes("Allowed")`, "the answered question");
+  await w.until(`return $(".ask-line.allowed")?.innerText.includes("Allowed")`, "the answered question");
   check(true, "the transcript shows the question, allowed");
   check(!(await w.count(".ask-card")), "the question is gone from the composer");
 
   console.log("Review");
   await w.clickText(".tabs button", "Changes");
   await w.waitFor(".diff tr.add");
-  await w.js(`document.querySelectorAll(".diff tr.add .add-comment button")[1].click()`);
+  await w.js(`$$(".diff tr.add .add-comment button")[1].click()`);
   await w.fill(".comment-editor textarea", "Also add a farewell() like this one");
   await w.enter(".comment-editor textarea");
   await w.waitFor(".composer .chip");
@@ -88,8 +113,8 @@ try {
   const read = (f) => readFileSync(`${worktree}/${f}`, "utf8");
   await w.clickText(".run:nth-of-type(2) .run-actions .link", "Changes in this run");
   await w.waitFor(".source-bar select");
-  await w.until(`return document.querySelector(".source-bar select").value === "1" && document.querySelectorAll(".diff tr.add").length > 0`, "run 2's diff");
-  const added = await w.js(`return [...document.querySelectorAll(".diff tr.add")].map(r => r.innerText).join(" | ")`);
+  await w.until(`return $(".source-bar select").value === "1" && $$(".diff tr.add").length > 0`, "run 2's diff");
+  const added = await w.js(`return [...$$(".diff tr.add")].map(r => r.innerText).join(" | ")`);
   check(added.includes("def farewell") && !added.includes("title=None"), "Changes can show just one run's diff");
   await w.clickText(".tabs button", "Conversation");
   await w.waitFor(".run:nth-of-type(2) .run-actions");
@@ -101,7 +126,7 @@ try {
   check(existsSync(`${metaDir}/run-1.undone`), "the run is marked undone");
   await w.shot("4b-run-undone");
   await w.clickText(".toast .link", "Undo");
-  await w.until(`return !document.querySelector(".run.undone")`, "the redo");
+  await w.until(`return !$(".run.undone")`, "the redo");
   check(read("greet.py").includes("farewell") && !existsSync(`${metaDir}/run-1.undone`), "Undo on the toast brings the run back");
 
   console.log("Land");
@@ -111,6 +136,8 @@ try {
   check(git("log", "-1", "--format=%s", "main") === "Let greet() take an optional title", "landed as one commit on main");
   check(git("log", "-1", "--format=%B", "main").includes("Spor-Task:"), "landing commit has the Spor-Task trailer");
   check(!git("branch", "--list", "agent/*"), "task branch removed after landing");
+  await w.until(`return [...$$(".shelf-header")].some(h => h.innerText.includes("Settled"))`, "the Settled shelf");
+  check(true, "the landed task moves to Settled");
   await w.shot("5-landed");
 
   console.log("Undo");

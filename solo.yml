@@ -3,8 +3,8 @@ name: spor
 icon: null
 processes:
   Run:
-    command: cargo run
-    working_dir: null
+    command: pnpm tauri dev
+    working_dir: desktop
     auto_start: false
     auto_restart: true
     restart_when_changed: []

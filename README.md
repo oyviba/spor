@@ -1,373 +1,150 @@
 # spor
 
-A minimal git client inspired by GitKraken's timeline — as a terminal UI and as
-a native Mac app, both built on the same core. The terminal build has a single
-dependency (`crossterm`); the app is opt-in behind the `gui` feature.
+A git client for working alongside coding agents: a GitKraken-style
+timeline, staging down to single lines, GitHub pull requests and Actions,
+and agent tasks that each get their own branch and folder — in one desktop
+app (Tauri) over a dependency-free Rust core.
 
 "Spor" means *track* or *trace* in Norwegian — what you follow to see where a branch has been.
 
-## Features
+## Run it
 
-- Timeline graph with `main` / `master` / `trunk` pinned to the leftmost lane
-- Color by branch prefix: all `feat/*` branches share a hue, all `bug/*` share another
-- Stage / unstage files, commit, push, pull
-- In the Mac app: stage single lines, amend, cherry-pick, revert, rebase and
-  rewrite history, resolve conflicts, and search commits
-- Live diff pane for the selected commit or file
-- Branch switching (checkout by selection, picker, create from commit)
-- Ahead/behind tracking vs upstream
-- Auto-stash on switch when the working tree blocks
-- Open a PR / MR from the current branch (uses `gh` or `glab` if available, falls back to printing the compare URL)
-- PR badges on branch tips — `(feat/login #42✓)` shows the open PR's number, review state, and CI status (GitHub repos with `gh` installed)
-- In the Mac app, a GitHub client: browse pull requests (checks, files, conversation), merge, approve, comment and check them out; follow GitHub Actions runs down to each job's log, and re-run or cancel them
-
-## PR badges
-
-When the repo's `origin` is GitHub and `gh` is installed and authenticated, spor
-fetches the open PRs in the background (never blocking the UI) and decorates
-branch-tip labels in the graph:
-
-- `#42` — the PR number, colored by review state: green = approved,
-  red = changes requested, dim = draft, blue = no decision yet
-- `✓` (green) — all checks passing
-- `✗` (red) — at least one check failing
-- `●` (yellow) — checks still running
-- no glyph — the PR has no checks
-
-Badges refresh on startup, on `r`, and after opening a PR with `R`. On other
-hosts, or without `gh`, the graph simply renders without badges.
-
-## Run
+You need Rust, Node 20+ and pnpm, plus the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS
+(on Linux, `libwebkit2gtk-4.1-dev` and friends). Pull requests, Actions and
+issues need the GitHub CLI (`gh auth login`).
 
 ```sh
-cd your-repo
-cargo run --manifest-path /path/to/spor/Cargo.toml --release
+cd desktop
+pnpm install
+SPOR_REPO=/path/to/a/repo pnpm tauri dev   # or pass the path, or start it inside a repo
 ```
 
-Or install it:
-
-```sh
-cargo install --path /path/to/spor
-cd your-repo
-spor
-```
-
-## Mac app
-
-The same timeline, working tree and diff in a native window, built on
-[GPUI](https://gpui.rs) (Zed's UI framework) via GPUI Kit. Build the
-app bundle on a Mac with the Xcode command line tools installed:
-
-```sh
-scripts/bundle-macos.sh              # this Mac's architecture
-scripts/bundle-macos.sh --universal  # Apple Silicon + Intel
-open target/macos/Spor.app
-```
-
-CI also builds a universal `Spor.app` on every push — grab the `Spor-macos`
-artifact from the workflow run. It's ad-hoc signed, not notarized, so the first
-launch of a downloaded copy needs right-click → Open (or
+A Mac app: `pnpm tauri build --bundles app` in `desktop/`. CI builds a
+universal `Spor.app` on every push — grab the `Spor-macos` artifact from the
+workflow run. It isn't signed or notarized, so the first launch of a
+downloaded copy needs right-click → Open (or
 `xattr -dr com.apple.quarantine Spor.app`).
 
-To run it without bundling (works on Linux and Windows too):
+`desktop/README.md` covers the UI-only mode (`pnpm dev`, with a mock
+backend), the end-to-end tests and the app's layout.
 
-```sh
-cargo run --release --features gui --bin spor-app -- /path/to/repo
-```
+## What it does
 
-Its headless UI tests (the real window on a scratch repository, driven by
-actions and pointer events) run on any OS; on Linux they need the same
-`libxkbcommon` / Wayland / X11 dev packages as the app build:
+You come to spor with a few questions, and the rail is ordered by them:
+what needs me, what's in flight, what's in my checkout, what happened. Each
+is a list in the sidebar, a page, and a details card:
 
-```sh
-cargo test --features ui-tests
-```
+- **Inbox** (⌘1) — what needs you, across every repository of every
+  workspace: an agent waiting on an answer, a finished run you haven't
+  looked at, a failed CI run on your branch, a pull request waiting for
+  your review. Each row opens where you deal with it, and goes once you
+  have. Its count is the rail's only badge
+- **Work** (⌘2) — every piece of work in flight, in one list: agents'
+  tasks, your own branches with commits ahead of the base, and open pull
+  requests from anyone, in shelves (needs you, in progress, in review,
+  settled). *New…* (⌘N) starts a branch, an agent task, or work on an
+  issue. An agent task gives a coding agent its own branch and folder so several can work at once
+  without touching your checkout. A task is a prompt: spor creates
+  `agent/<name>` from a base, checks it out in `<repo>.spor/<name>` beside
+  the repository, and starts Claude Code (or any command) there. Paste,
+  drop or attach images (screenshots, mockups) into any prompt — a new
+  task, an issue's, or a follow-up; they're kept in `.git/spor/attachments/`
+  and the agent is told where to find them. Watch the conversation, answer its questions, steer it while it works, review its
+  changes with line comments, send feedback, undo a run, then **Land** it
+  (one squashed commit, or a merge commit), open a pull request for it, or
+  discard it. A work item's issue, pull request and CI runs all open here,
+  wherever you click them from. [docs/agents.md](docs/agents.md) has the
+  design
+- **Changes** (⌘3) — staged and unstaged files; click lines in a diff (shift-click
+  to extend) to stage, unstage or discard just those. Commit with ⌘↩, or
+  amend. Fetch, Pull (rebasing) and Push or Publish, the branch's pull
+  request on GitHub, and stashes: stash (right-click for a message), pop,
+  apply and keep, drop
+- **History** (⌘4) — the commit graph with `main` / `master` / `trunk` pinned to
+  the leftmost lane and branches colored by prefix (all `feat/*` share a
+  hue). Search by message, author or hash, or `path:src/main.rs` for the
+  commits that touched a file. The sidebar has local, agent and remote
+  branches, tags and linked worktrees. Right-click a branch to check it out,
+  merge it, rebase onto it, rename or delete it, or delete it from the
+  remote, or drag it onto another branch to merge it there or open a pull
+  request between the two. Right-click a commit to branch or tag it, check
+  it out detached, cherry-pick, revert, rebase onto it, reset to it (soft,
+  mixed, or hard after asking), or **Rewrite after here** — an interactive
+  rebase on screen: reorder, reword, squash, fix up or drop, then Rewrite
+  history. **Blame** any file, at a commit or in the working tree. The ⚙
+  picks the graph's columns, row height and lane width
 
-The layout follows Zed's:
+Below a divider, three browsers for GitHub, for what doesn't belong to a
+piece of work yet (an issue nobody has started, a run on `main`):
 
-- **Navigation rail** — one strip down the left edge. On top, like Slack,
-  your workspaces such as *Work* and *Side projects* (⌘1–⌘9; right-click
-  to rename, delete or add one). Each workspace has its own repositories
-  and reopens the one you last had open in it. Opening a repository adds it
-  to the current workspace, or jumps to the workspace it already belongs
-  to; the repository menu in the title bar switches between a workspace's
-  repositories, moves one to another workspace or removes it. Below them,
-  one labeled button per section — **Changes** (with a count of changed
-  files), **History**, **Pulls**, **Actions** and **Agents**. A section
-  opens its list in the sidebar and its view in the center together;
-  clicking the open one again hides the sidebar (⌘B). At the foot of the
-  rail, the repository list and **Settings**: appearance and theme, unified
-  or side-by-side diffs, which side the sidebar sits on, the command
-  palette and keyboard shortcuts
-- **Repositories** — the workspace's repositories in a list beside the
-  rail (the folder button at the foot of the rail or ⌘⇧E shows it, drag its
-  edge to resize); each shows its current branch, and a blue `↓3`
-  when it has commits to pull (the open one also its change count). Hover
-  for where it lives; click to switch, right-click to reveal or remove one
-- **Title bar** — repository and branch pickers, the branch's PR, and one
-  **Sync** button that fetches, then pulls or pushes as needed (or
-  publishes a new branch). It reads *Pull 3*, *Push 1* or *Fetch*, and
-  turns blue when there's something to pull or push (⌘⇧S)
-- **Changes** — the sidebar holds the **git panel** (⌘⇧G): changed files
-  split into Staged and Unstaged — click a file to move it across (and see
-  its diff), so a commit takes exactly the files you pick — and a commit
-  message editor (⌘↩ commits). The center shows every changed file in one
-  scrolling, syntax-highlighted diff (⌘⇧C)
-- **History** — the sidebar holds the **branch list** (⌘⇧B) with local and
-  remote branches, tags and stashes — click to show a branch in History,
-  double-click to check it out. The search field on top (⌘⇧F) narrows it
-  as you type. Right-click a tag to delete it (⌘Z brings it back) or delete
-  it from a remote too. The center (⌘⇧H) is the commit graph
-  over the selected commit's message and diff (`j`/`k` or arrows move,
-  `Return` checks out). Branches and tags get their own column: a laptop
-  marks a local branch, a cloud a branch on the remote (one label when it's
-  both), and the default branch is filled in, with a bold lane. The ⚙ menu
-  in the header picks columns, labels, row height and lane width; drag a
-  column's edge in the header to resize it (double-click resets). **Drag a
-  branch** onto another branch's row to merge it there (⌘Z undoes) or open
-  a pull request between the two
-- **Pulls and Actions** — (⌘⇧P, ⌘⇧A) **Pull Requests** lists the
-  repository's PRs with their CI and review state; the menu on top picks
-  *Open*, *Yours*, *Review Requested* or *Closed*. **Actions** lists recent
-  workflow runs, on every branch or the checked-out one, and of every
-  workflow or just one (*CI*, *Release*, … from the menu beside it). Picking one opens
-  it in the center, under a bar that closes it with its ×; coming back to
-  the section reopens the last one:
-  - a **pull request** is one page: its checks (failing ones listed,
-    passing ones folded away; an Actions check opens its run), a row that
-    opens the diff, then the description, reviews and comments as Markdown
-    with a box to add one. Merge it (squash, merge commit or rebase),
-    approve it, mark a draft ready, close or reopen it, or check its branch
-    out — forks included. The title bar's PR button and ⌘P open PRs here too
-  - a **run** shows what it ran for, its jobs and the selected job's steps,
-    and the job's log with errors and warnings colored — a failed job opens
-    at its first error. Re-run failed jobs or all jobs, cancel a running
-    one, or open it on GitHub; reached from a PR, ← goes back to it.
+- **Issues**, **Pull requests**, **Actions** (⌘5–⌘7) — through `gh`: an
+  issue and its comments (and *Start agent task* from it); a PR's
+  conversation, files and checks, with comments, line comments, approve,
+  merge, check out; a run's jobs and its log folded by step, re-run and
+  cancel. Branch labels in the graph carry their open PR's number, review
+  state and CI (`#42✓`)
 
-  What's on screen refreshes every few seconds while something on it is
-  running; GitHub serves a job's log once the job finishes
-- **Undo instead of confirmations** — discarding changes, staging and
-  committing happen immediately and can be taken back with ⌘Z or the Undo
-  button in the notification (a commit stops being undoable once pushed).
-  So do amending, cherry-picks, reverts, rebases, resets and rewrites, and
-  deleting a branch, stash or tag; a hard reset, which throws work away,
-  asks first
+Across the app:
 
-**More than staging and committing:**
-
-- **Lines, not just files** — the Changes view shows *All* changes, or only
-  the *Unstaged* or *Staged* ones. Drag over line numbers there and Stage,
-  Unstage or Discard just those lines
-- **Amend** — tick Amend under the commit message to replace the last
-  commit; the message starts as the old one
-- **History's right-click menu** — cherry-pick a commit onto the branch,
-  revert it, rebase onto it, reset the branch to it (soft, mixed or hard),
-  check it out, or tag it. *Rewrite … After Here* plans an interactive
-  rebase in a view of its own: reorder commits, reword, squash, fix up or
-  drop them, then Rewrite History
-- **Conflicts** — when a merge, rebase, cherry-pick or revert stops on
-  conflicts, a bar over the center says so with Continue, Skip and Abort,
-  and the git panel lists the conflicted files. Click one to pick the
-  current or incoming side of each conflict (or both), then Save and Mark
-  Resolved — or take one side for the whole file from its menu
-- **Branches** — right-click to merge into or rebase the checked-out
-  branch, rename, delete (undoable), or delete from the remote. Stashes
-  can be applied and kept, or deleted; *Stash Changes…* takes a message.
-  Linked worktrees get their own section
-- **Search** — ⌘F searches History by message, author or SHA; `path:file`
-  shows the commits that touched a file (also *Show File History* on a
-  file in the git panel). Matching rows stand out; ↩ and ⇧↩ step through
-- **Diverged branches** — when Sync finds local and remote commits, it
-  offers *Pull with Rebase*
-
-Open a repository with ⌘O, from the welcome page, by dropping a folder on
-the window, or by passing a path. Light and dark themes (based on One Light
-and One Dark) follow the system or can be set from the repository menu.
-
-The **theme editor** (⌘, or repository menu → Appearance → Edit Theme…)
-opens beside the window, which previews every change as you make it. Pick
-Dark or Light, start from a preset (Nord, Dracula, Midnight; Solarized,
-Paper) and adjust surfaces, text, accent, list, border and diff colors,
-corner radius and font size. Edits are saved as overrides on top of the
-Spor themes; Reset goes back to them, and Copy as JSON gives a theme file.
-
-**⌘P** opens a palette that searches the repository's pull requests — by
-number, title, branch or author; with an empty query it lists the open
-ones, typing also finds merged and closed ones — and opens the one you pick
-on GitHub (needs `gh`). The same palette runs any command and shows its
-shortcut. **⌘/** lists every keyboard shortcut; both are also in the
-repository menu.
-
-**Shortcuts are yours to change.** In the ⌘/ list, click a command and press
-the keys you want (Esc cancels, ⌫ removes the shortcut); right-click for
-Remove or Reset to Default, and Reset All puts everything back. Commands
-without a default — Fetch, Pull, Push, Stash — can get one too. A key
-already in use moves to the new command, and the list says which one lost
-it. Outside History a shortcut needs ⌘, ⌃ or ⌥ so it can't swallow typing;
-⌘1–⌘9 stay reserved for workspaces. Changes apply at once and are saved
-in `keymap` in the config directory.
-
-**Agent tasks** (⌘⇧T, or the Agents panel, ⌘⇧I) — give a coding agent
-its own branch and folder so several can work at once without touching your
-checkout. A task is a prompt: spor creates `agent/<name>` from the
-checked-out branch, checks it out in `<repo>.spor/<name>` beside the
-repository, and starts an agent there:
-
-- **Claude Code** runs headless. It may edit files; shell commands are
-  refused unless you tick *Let it run shell commands*, and `git push`
-  never is. Its **Transcript** shows what it said, each command and file
-  it touched, refusals, and when it's done with time, turns and cost
-- **A custom command** (Agents panel menu → *Custom Agent Command…*) runs
-  any agent, with `{prompt}` for the task; its output is the transcript
-- **None** — run an agent in the folder yourself (*Copy Agent Command*)
-
-Agents keep running if spor quits, and spor picks them up again. A
-notification says when one is ready for review, failed or stopped. Its
-commits appear in History as they're made (a robot marks agent branches),
-and **Changes** shows everything it changed against its base, uncommitted
-work included. Select lines there and *Comment on Lines…* to queue review
-comments; **Send to Agent** sends them with your feedback, continuing the
-agent's conversation. The panel warns when a task's work would conflict
-with its base or with another task's (spor trial-merges them in the
-background), and *Ask Agent to Rebase* hands a conflict with the base back
-to the agent. Then:
-
-- **Land** squashes it onto the base as one commit with the prompt as its
-  message and a `Spor-Task:` trailer (or *Land with a Merge Commit*). If
-  the base moved, the task is rebased first; if that conflicts, nothing
-  changes and spor says where. Its folder and branch are cleaned up
-- **Open Pull Request** publishes the branch and opens the host's page
-- **Discard** removes the folder and branch
-
-Landing and discarding can be undone with ⌘Z. Tasks and their
-transcripts are kept in `.git/spor/tasks/`, shared by every worktree and
-never committed. What
-comes next is in [docs/agents.md](docs/agents.md).
-
-**Knowing when to pull** — the open repository is fetched quietly in the
-background every few minutes. When its upstream has new commits, a
-notification says so (with a Pull button), and the title bar's Sync button
-turns into a blue *Pull 3* and the repository list lights up until you
-pull.
-
-Sync runs in the background. The app has no terminal, so credentials must
-come from a helper (macOS keychain, ssh-agent); a sync that would need a
-password fails with the reason instead of hanging.
-
-PR badges work the same as in the terminal (the app finds Homebrew's `gh` even
-when launched from Finder). Pull Requests and Actions also go through `gh`, so
-they use the account `gh auth login` signed in, GitHub Enterprise included,
-and always talk to the repository behind `origin`.
-
-## Keys
-
-**Global:**
-- `?` — show all keyboard shortcuts
-- `q` or `Ctrl-C` — quit
-- `Tab` — switch focus between graph and file list
-- `r` — refresh
-- `b` — branch picker
-- `R` — open pull/merge request for the current branch
-- `P` — pull (fast-forward only)
-- `p` — push (asks for confirmation when behind upstream)
-
-**Graph pane:**
-- `j` / `k` or arrows — move selection
-- `J` / `K` — scroll diff
-- `Enter` or `o` — checkout branch at selected commit
-- `n` — create new branch from selected commit
-
-**File pane:**
-- `j` / `k` — move selection
-- `Space` — stage / unstage
-- `c` — commit (opens message prompt)
-
-**Branch picker:**
-- Type to filter
-- `↑` / `↓` — move selection
-- `Enter` — checkout
-- `Esc` — cancel
-
-**Stash-and-switch prompt** (appears when switch is blocked by dirty tree):
-- `s` — stash changes and switch
-- `c` or `Esc` — cancel
-
-## Layout
-
-```
-┌─ graph ─────────────┬─ Working tree ──────────┐
-│ ●  main  fix bug    │  +  src/auth.rs         │
-│ ●─┐ (feat/login)    │  ~  README.md           │
-│ │ ●  wip            │                         │
-│ ●─┘ merge           │  Diff                   │
-│ ●                   │  @@ -1,3 +1,3 @@        │
-│                     │  - old                  │
-│                     │  + new                  │
-└─────────────────────┴─────────────────────────┘
- ⎇ main ↑2 ↓1  │  ready  │  [j/k] move  [enter]/[o] checkout ...
-```
-
-## What's next
-
-[docs/agents.md](docs/agents.md) is the plan for running several coding
-agents side by side in spor: each in its own branch and worktree, watched
-live in History, reviewed like a pull request, and landed in order.
+- **Undo instead of confirmations.** Staging, discarding, committing,
+  amending, pulling, switching, merging, cherry-picks, reverts, rebases,
+  resets, rewrites, renames, deleting a branch, tag or stash, and landing or
+  discarding a task all happen at once and can be taken back with ⌘Z or the
+  toast's Undo. Pushing makes commits final: their undos go. Only what git
+  can't take back asks first (a hard reset, deleting on the remote)
+- **One conflict banner.** A merge, rebase, cherry-pick or revert that stops
+  shows on every section, with *Resolve in Changes* — pick a side (or both)
+  for each conflict in a file, take one side for all of it, or edit it and
+  mark it resolved — *Continue*, *Skip commit* and *Abort*
+- **Stash and switch.** A switch that uncommitted changes would block says
+  so and offers to stash them
+- **Knowing when to pull.** The repository is fetched quietly every five
+  minutes; when the upstream gains commits, a notification says so with a
+  Pull button
+- **Credentials.** The app has no terminal, so a passphrase, password or
+  new-host question from git or ssh opens a dialog (an askpass bridge)
+- **Workspaces** — named, colored groups of repositories on the rail, like
+  Slack's (⌘⌥1–9), each reopening the repository last open in it. Beside
+  the rail, a column lists the workspace's repositories with the open one
+  marked, their branch, changed files and what there is to pull (⌘⇧E hides
+  it). The old native
+  app's workspaces are imported on the first run
+- **⌘K** — a palette for every command, section, work item, branch and repository
+- **Settings** (⌘,) — System, Light or Dark, themes (Spor, Nord, Dracula,
+  Midnight; Solarized, Paper) and a live theme editor; unified or
+  side-by-side diffs; the graph's options; and your own keyboard shortcuts
+  (⌘/ lists them)
 
 ## Design notes
 
-The core is a library (`src/lib.rs`) that knows nothing about how it's drawn:
+The core is a library (`src/lib.rs`) that knows nothing about how it's
+drawn, and has no dependencies — it runs `git` and `gh` and parses their
+output:
 
 - `src/git.rs` — a `Repo` handle that runs `git` in that repository's
   directory (never the process's), and parses its output
-- `src/agent.rs` — running agents in task folders (Claude Code or any
-  command), stopping them, and reading their transcripts
-- `src/json.rs` — a small JSON reader for agents' event streams
-- `src/tasks.rs` — agent tasks: a prompt with its own branch and
-  worktree; creating, measuring, landing, discarding and restoring them
-- `src/patch.rs` — cuts a patch down to selected lines, for staging,
-  unstaging or discarding part of a file
 - `src/graph.rs` — lane assignment, with main pinned to lane 0
 - `src/color.rs` — HSL color families by branch prefix
+- `src/patch.rs` — cuts a patch down to selected lines, for staging,
+  unstaging or discarding part of a file
 - `src/remote.rs` — remote host detection, compare URLs, PR badges via `gh`
-- `src/github.rs` — pull requests, checks, reviews, Actions runs, jobs and
-  logs via `gh`, and the actions on them (merge, approve, re-run, …)
+- `src/github.rs` — pull requests, checks, reviews, issues, Actions runs,
+  jobs and logs via `gh`, and the actions on them
+- `src/askpass.rs` — credential prompts from git and ssh, handed to the app
+  over a private socket, and running network git commands
+- `src/tasks.rs` — agent tasks: a prompt with its own branch and worktree;
+  creating, measuring, landing, discarding and restoring them
+- `src/agent.rs`, `src/host.rs`, `src/checkpoint.rs` — running agents in
+  task folders, the host that lets the app talk to a running Claude Code,
+  and per-run checkpoints
+- `src/work.rs` — work items: a pure join of tasks, branches, pull
+  requests, runs and issues into one item per branch, with its stage and
+  who it's waiting on
+- `src/json.rs` — a small JSON reader for agents' event streams
 
-Terminal UI (`spor`):
-
-- `src/ui.rs` — ANSI rendering (no ratatui)
-- `src/main.rs` — event loop, state, modal key handling
-
-Mac app (`spor-app`, `--features gui`):
-
-- `src/gui/app.rs` — the `Spor` view: state, git actions, undo, sync
-- `src/gui/workspaces.rs` — workspaces and their repositories, persisted
-- `src/gui/render.rs` — window frame: title bar, sidebar + center
-- `src/gui/rail.rs` — the navigation rail: workspaces, sections, settings
-- `src/gui/repos_panel.rs` — the repository sidebar
-- `src/gui/git_panel.rs`, `branches.rs` — the git and branch sidebar panels
-- `src/gui/changes_view.rs`, `history.rs` — the Changes and History views
-- `src/gui/agents.rs` — the Agents panel, the New Agent Task dialog and a
-  task's page
-- `src/gui/actions.rs` — cherry-pick, revert, rebase, reset, conflicts,
-  line staging, branch and stash management, tags, search, and the
-  interactive rebase view
-- `src/gui/pulls.rs`, `runs.rs` — the Pull Requests and Actions sidebar panels
-  and the PR and run pages they open
-- `src/gui/hub.rs` — what those have loaded and open, and the background
-  `gh` calls behind them
-- `src/gui/history_options.rs` — the History graph's saved options
-- `src/gui/palette.rs` — the ⌘P palette (PR search, commands) and the
-  table of commands with their default shortcuts
-- `src/gui/keymap.rs` — the user's shortcut changes, and the ⌘/ list
-  where they're made
-- `src/gui/graph.rs` — paints the commit graph
-- `src/gui/welcome.rs` — the page shown when no repository is open
-- `src/gui/repo.rs` — snapshot of a repository for the views
-- `src/gui/theme.rs`, `assets/themes/spor.json` — Spor Light / Spor Dark,
-  and the user's overrides
-- `src/gui/theme_editor.rs` — the theme editor
-- `src/gui/ui_tests.rs` — headless UI tests of the app in a GPUI test window
-- `scripts/bundle-macos.sh` — wraps the binary into `Spor.app`
+The app is `desktop/`: `src-tauri/` turns the core into commands (one
+module per section, plus the undo stack), and `src/` is the React UI.
 
 ## License
 
