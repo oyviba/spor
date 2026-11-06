@@ -2,14 +2,17 @@
 //! knows, not only the open one. Nothing is stored; it reads what the
 //! sections already read. Agent tasks come from each repository's
 //! `.git/spor/tasks` (no network); review requests are one `gh search` per
-//! host, and failed runs one `gh run list` per GitHub repository.
+//! host, and failed runs one `gh run list` per GitHub repository, both from
+//! the cache the open repository's sections read too (`cache`).
 
+use crate::App;
 use serde::Serialize;
 use spor::agent::{RunState, Runs};
 use spor::git::Repo;
 use spor::github as gh;
 use spor::tasks::{TaskState, Tasks};
 use std::path::PathBuf;
+use tauri::State;
 
 fn discover(root: &str) -> Option<Repo> {
     Repo::discover(&PathBuf::from(root)).ok()
@@ -95,7 +98,8 @@ pub(crate) struct InboxGithub {
 /// Review requests and failing runs on your branches (local ones, agent
 /// branches included) in every GitHub repository among `roots`.
 #[tauri::command(async)]
-pub(crate) fn inbox_github(roots: Vec<String>) -> InboxGithub {
+pub(crate) fn inbox_github(app: State<App>, roots: Vec<String>) -> InboxGithub {
+    let cache = &app.github;
     let repos: Vec<(String, Repo, gh::Repo)> = roots
         .into_iter()
         .filter_map(|root| {
@@ -111,7 +115,7 @@ pub(crate) fn inbox_github(roots: Vec<String>) -> InboxGithub {
     std::thread::scope(|s| {
         let searches: Vec<_> = hosts
             .iter()
-            .map(|host| (host, s.spawn(move || gh::review_requests(host))))
+            .map(|host| (host, s.spawn(move || cache.review_requests(host))))
             .collect();
         let lists: Vec<_> = repos
             .iter()
@@ -126,7 +130,8 @@ pub(crate) fn inbox_github(roots: Vec<String>) -> InboxGithub {
                             .filter(|b| !b.is_remote)
                             .map(|b| b.name)
                             .collect();
-                        gh::list_runs(repo.root(), None, None)
+                        cache
+                            .runs(repo.root())
                             .map(|runs| gh::failing_runs(runs, &branches))
                     }),
                 )

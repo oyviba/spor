@@ -305,6 +305,10 @@ fn branch_item(
 
     let stage = if matches!(task.map(|t| &t.task.state), Some(TaskState::Landed(_))) {
         Stage::Landed
+    } else if matches!(task.map(|t| &t.task.state), Some(TaskState::Closed)) {
+        // Closed with its pull request; the request may not be listed any
+        // more, but the task remembers.
+        Stage::Closed
     } else if let Some(p) = pull {
         match p.state {
             PrState::Merged => Stage::Landed,

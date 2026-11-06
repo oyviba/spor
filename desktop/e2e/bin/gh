@@ -6,7 +6,9 @@ logs) from `e2e/fixtures/gh.json`, and runs each `--jq` expression through
 the real `jq`, so its output is exactly what `gh … --jq` prints. What's
 done (comments, merges, approvals, re-runs, cancels) is recorded in the
 JSON file $FAKE_GH_STATE, which the suites read to check it happened,
-and which later calls read back: a merged PR reads as merged.
+and which later calls read back: a merged PR reads as merged. With
+$FAKE_GH_LOG set, each call's arguments are appended to that file, one
+call per line, so a test can count how often spor asked.
 """
 
 import copy
@@ -18,6 +20,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, "..", "fixtures", "gh.json")
 STATE = os.environ.get("FAKE_GH_STATE")
+LOG = os.environ.get("FAKE_GH_LOG")
 EMPTY = {"comments": {}, "merged": [], "approved": [], "closed": [], "reruns": [], "cancelled": []}
 
 
@@ -122,6 +125,9 @@ def main():
     with open(FIXTURES) as f:
         fixtures = json.load(f)
     state = load_state()
+    if LOG:
+        with open(LOG, "a") as f:
+            f.write(" ".join(sys.argv[1:]) + "\n")
     pos, opts = options(sys.argv[1:])
     if not pos:
         fail("usage: gh <command>")
@@ -174,6 +180,15 @@ def main():
             owner, name = p["url"].split("/")[3:5]
             p["repository"] = {"name": name, "nameWithOwner": f"{owner}/{name}"}
         out(items, opts)
+    elif cmd == ["issue", "list"]:
+        items = [i for i in fixtures.get("issues", []) if i.get("state", "OPEN") == opts.get("state", "open").upper()]
+        if opts.get("assignee") == "@me":
+            items = [i for i in items if fixtures["me"] in [a["login"] for a in i.get("assignees", [])]]
+        if opts.get("author") == "@me":
+            items = [i for i in items if i["author"]["login"] == fixtures["me"]]
+        out(items, opts)
+    elif cmd == ["api", "user"]:
+        out({"login": fixtures["me"]}, opts)
     elif cmd == ["run", "list"]:
         items = runs(fixtures, state)
         if "branch" in opts:

@@ -316,6 +316,23 @@ fn closed_when_its_pull_was_closed() {
     assert_eq!(it.waiting_on, None);
 }
 
+#[test]
+fn closed_for_a_closed_task_whose_pull_isnt_listed() {
+    let mut w = World::default();
+    w.tasks.push(TaskWork {
+        task: Task {
+            state: TaskState::Closed,
+            pull: Some(4),
+            ..task("gone")
+        },
+        agent: agent(RunState::Finished, 200, None),
+    });
+    let it = w.only();
+    assert_eq!(it.stage, Stage::Closed);
+    assert_eq!(it.waiting_on, None);
+    assert_eq!(it.worktree, None);
+}
+
 // ── Waiting on ───────────────────────────────────────────────────────────────
 
 fn waiting_on_task(a: Option<AgentState>) -> Option<Waiting> {
