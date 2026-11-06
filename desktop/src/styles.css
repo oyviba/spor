@@ -1062,13 +1062,6 @@ button.busy::after {
   font-size: 11px;
   color: var(--faint);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* The key hint gives way well before the pickers do. */
-.composer-footer > .hint-keys {
-  flex-shrink: 1000;
-  min-width: 0;
 }
 .send {
   display: inline-grid;
