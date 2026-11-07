@@ -895,6 +895,68 @@ impl Runs {
         ]
     }
 
+    /// Whether this task's runs check the repository before finishing
+    /// (#103). On unless turned off for the task.
+    pub fn checks_enabled(&self) -> bool {
+        !self.dir.join("no-checks").exists()
+    }
+
+    /// Turn the Stop hook on or off for the task's later runs.
+    pub fn set_checks(&self, on: bool) -> Result<(), String> {
+        let flag = self.dir.join("no-checks");
+        if on {
+            match std::fs::remove_file(&flag) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+                _ => Ok(()),
+            }
+        } else {
+            std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
+            std::fs::write(flag, "").map_err(|e| e.to_string())
+        }
+    }
+
+    /// Format edited files with `.spor/format` (opt-in per task, #103).
+    pub fn format_enabled(&self) -> bool {
+        self.dir.join("format-on").exists()
+    }
+
+    pub fn set_format(&self, on: bool) -> Result<(), String> {
+        let flag = self.dir.join("format-on");
+        if on {
+            std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
+            std::fs::write(flag, "").map_err(|e| e.to_string())
+        } else {
+            match std::fs::remove_file(&flag) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+                _ => Ok(()),
+            }
+        }
+    }
+
+    /// The arguments that pass spor's hooks to Claude Code (#103): a
+    /// settings file in the run directory, so nothing lands in the
+    /// repository or the user's own settings.
+    fn hook_args(&self, program: &Path, task: &Task, index: usize, log: &Path) -> Vec<String> {
+        let checks = self.checks_enabled() && task.worktree.join(".spor").join("checks").is_file();
+        let format = self.format_enabled() && task.worktree.join(".spor").join("format").is_file();
+        let Some(json) = crate::hooks::settings(
+            program,
+            &task.worktree,
+            log,
+            &self.file(index, "tries"),
+            checks,
+            format,
+            crate::hooks::DEFAULT_TRIES,
+        ) else {
+            return Vec::new();
+        };
+        let file = self.file(index, "settings.json");
+        if std::fs::write(&file, json).is_err() {
+            return Vec::new();
+        }
+        vec!["--settings".into(), file.display().to_string()]
+    }
+
     /// What the running agent last reported with `report_progress` (#106):
     /// the step, how many there are, and its note.
     pub fn reported(&self) -> Option<(usize, usize, String)> {
@@ -977,6 +1039,7 @@ echo $code > "$SPOR_EXIT""#;
             .chain(
                 self.mcp_args(host_program, task, index, &log)
                     .into_iter()
+                    .chain(self.hook_args(host_program, task, index, &log))
                     .map(Into::into),
             )
             .collect(),

@@ -12,6 +12,7 @@ pub mod env;
 pub mod git;
 pub mod github;
 pub mod graph;
+pub mod hooks;
 pub mod host;
 pub mod json;
 pub mod mcp;
