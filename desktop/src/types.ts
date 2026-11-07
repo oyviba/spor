@@ -585,3 +585,9 @@ export interface WorkBranch {
   deletions: number;
   updated: number;
 }
+
+/** A line worth adding to CLAUDE.md, from corrections given in several tasks (#107). */
+export interface RuleSuggestion {
+  rule: string;
+  tasks: string[];
+}

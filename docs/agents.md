@@ -282,3 +282,7 @@ Events that carry a `parent_tool_use_id` are kept as `Entry::Nested` under the `
 ## Starting fresh when the context is full (#98)
 
 When the latest Claude run's context is 80% full or more, the composer offers *Start fresh with a summary*. The follow-up then starts a new session (no `--resume`) whose prompt is the task's prompt, the latest run's debrief as a hand-over (what changed, what was checked, risks, open questions, work not done) and the message. Without a debrief it says to look at the folder's changes first. The agent and model are the last run's.
+
+## Rules worth writing down (#107)
+
+*Look for rules to write down* (at the foot of the Work sidebar) collects what people told the agents across the repository's tasks: follow-up messages (line comments go in them), steering, and the reason given for a denial. Claude Code, read-only at low effort, groups them into candidate lines for the repository's rules file. Only rules that at least two different tasks asked for are shown, each with an editable line, *Add* and *Not this one*. *Add* appends a bullet to `CLAUDE.md` (or `AGENTS.md` if that is what the repository has) in the main checkout, as an uncommitted change; added and declined rules are remembered in `.git/spor/rules.known` and not suggested again. Permission patterns (a command allowed in several tasks) aren't suggested yet.

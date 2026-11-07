@@ -3967,3 +3967,31 @@ body.resizing * {
   white-space: nowrap;
   cursor: pointer;
 }
+
+/* ---- Rules worth writing down (#107) ------------------------------------- */
+.rules-panel {
+  padding: 8px 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.rule-suggestion {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rule-suggestion p {
+  margin: 0;
+}
+.rule-suggestion textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  font-size: 12px;
+}
+.rule-actions {
+  display: flex;
+  gap: 6px;
+}
