@@ -353,6 +353,107 @@ pub enum Entry {
     /// The agent's plan as it now stands (`TodoWrite`, #96). Each one
     /// replaces the last.
     Todos(Vec<Todo>),
+    /// What a command printed (#97), paired with its call by `name` and
+    /// `detail`. `ok` is false when the tool reported an error (a command
+    /// that exited non-zero). `output` keeps the end of it; `truncated`
+    /// says the log holds more.
+    Result {
+        name: String,
+        detail: String,
+        ok: bool,
+        output: String,
+        truncated: bool,
+    },
+}
+
+/// The most of a command's output kept in the transcript: its end, where
+/// a failure usually is. The full text stays in the run's log.
+const MAX_RESULT_CHARS: usize = 8000;
+
+/// What kind of check a command is, if it is one (#97).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckKind {
+    Tests,
+    Build,
+}
+
+/// Whether a shell command runs a project's tests or builds it. Looks at
+/// each command in a `&&`/`;`/`|` chain, so `cd app && pnpm test` counts.
+pub fn check_kind(command: &str) -> Option<CheckKind> {
+    const TESTS: [&str; 14] = [
+        "cargo test",
+        "cargo nextest",
+        "pnpm test",
+        "pnpm run test",
+        "npm test",
+        "npm run test",
+        "yarn test",
+        "bun test",
+        "pytest",
+        "python -m pytest",
+        "go test",
+        "mvn test",
+        "gradle test",
+        "dotnet test",
+    ];
+    const BUILDS: [&str; 11] = [
+        "cargo build",
+        "cargo check",
+        "pnpm build",
+        "pnpm run build",
+        "npm run build",
+        "yarn build",
+        "tsc",
+        "go build",
+        "make",
+        "mvn package",
+        "gradle build",
+    ];
+    for part in command.split(['&', ';', '|', '\n']) {
+        let part = part.trim();
+        let starts = |list: &[&str]| {
+            list.iter().any(|c| {
+                part.strip_prefix(c)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t']))
+            })
+        };
+        if starts(&TESTS) {
+            return Some(CheckKind::Tests);
+        }
+        if starts(&BUILDS) {
+            return Some(CheckKind::Build);
+        }
+    }
+    None
+}
+
+/// How the last test run and the last build in a transcript went: `Some(ok)`
+/// for the last one that ran, `None` if none did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Checks {
+    pub tests: Option<bool>,
+    pub build: Option<bool>,
+}
+
+/// The outcome of the last test run and build in `entries` (#97).
+pub fn checks_of(entries: &[Entry]) -> Checks {
+    let mut checks = Checks::default();
+    for entry in entries {
+        if let Entry::Result {
+            name, detail, ok, ..
+        } = entry
+        {
+            if name != "Bash" {
+                continue;
+            }
+            match check_kind(detail) {
+                Some(CheckKind::Tests) => checks.tests = Some(*ok),
+                Some(CheckKind::Build) => checks.build = Some(*ok),
+                None => {}
+            }
+        }
+    }
+    checks
 }
 
 /// One step of the agent's plan.
@@ -1711,6 +1812,8 @@ fn kind_name(kind: &AgentKind) -> String {
 /// Read Claude Code's `stream-json` output into transcript entries.
 pub fn parse_claude(log: &str) -> Vec<Entry> {
     let mut out = Vec::new();
+    // Each command's gist by its call id, to pair its result (#97).
+    let mut commands: std::collections::HashMap<String, String> = Default::default();
     for line in log.lines().filter(|l| !l.trim().is_empty()) {
         let Some(event) = Json::parse(line) else {
             out.push(Entry::Output(line.to_string()));
@@ -1728,9 +1831,15 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                         }
                         Some("tool_use") => {
                             let name = part.get("name").str().unwrap_or("Tool");
+                            let detail = tool_detail(part.get("input"));
+                            if name == "Bash" {
+                                if let Some(id) = part.get("id").str() {
+                                    commands.insert(id.to_string(), detail.clone());
+                                }
+                            }
                             out.push(Entry::Tool {
                                 name: name.to_string(),
-                                detail: tool_detail(part.get("input")),
+                                detail,
                             });
                             if name == "TodoWrite" {
                                 out.push(Entry::Todos(todos(part.get("input"))));
@@ -1742,20 +1851,42 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
             }
             Some("user") => {
                 for part in event.get("message").get("content").array() {
-                    if part.get("type").str() == Some("tool_result")
-                        && part.get("is_error").bool() == Some(true)
-                    {
-                        let content = match part.get("content") {
-                            Json::String(s) => s.clone(),
-                            other => other
-                                .array()
-                                .iter()
-                                .filter_map(|c| c.get("text").str())
-                                .collect::<Vec<_>>()
-                                .join(" "),
-                        };
+                    if part.get("type").str() != Some("tool_result") {
+                        continue;
+                    }
+                    let failed = part.get("is_error").bool() == Some(true);
+                    let content = match part.get("content") {
+                        Json::String(s) => s.clone(),
+                        other => other
+                            .array()
+                            .iter()
+                            .filter_map(|c| c.get("text").str())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    };
+                    if failed {
                         let first = content.trim().lines().next().unwrap_or("").to_string();
                         out.push(Entry::ToolError(first));
+                    }
+                    // A command's output, paired with its call (#97).
+                    let call = part
+                        .get("tool_use_id")
+                        .str()
+                        .and_then(|id| commands.get(id));
+                    if let Some(detail) = call {
+                        let text = content.trim_end();
+                        let count = text.chars().count();
+                        let output: String = text
+                            .chars()
+                            .skip(count.saturating_sub(MAX_RESULT_CHARS))
+                            .collect();
+                        out.push(Entry::Result {
+                            name: "Bash".into(),
+                            detail: detail.clone(),
+                            ok: !failed,
+                            output,
+                            truncated: count > MAX_RESULT_CHARS,
+                        });
                     }
                 }
             }
@@ -2285,6 +2416,69 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_commands_output_is_kept_with_its_call() {
+        let log = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"cargo test"}},{"type":"tool_use","id":"b","name":"Read","input":{"file_path":"/w/x"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b","content":"file text"},{"type":"tool_result","tool_use_id":"a","content":[{"type":"text","text":"test result: ok. 3 passed"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c","name":"Bash","input":{"command":"cd app && pnpm build"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c","is_error":true,"content":"Exit code 2\nerror TS1"}]}}"#;
+        let entries = parse_claude(log);
+        let results: Vec<_> = entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Result {
+                    detail, ok, output, ..
+                } => Some((detail.as_str(), *ok, output.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            results,
+            vec![
+                ("cargo test", true, "test result: ok. 3 passed"),
+                ("cd app && pnpm build", false, "Exit code 2\nerror TS1"),
+            ],
+            "only commands, matched by id"
+        );
+        assert!(entries.contains(&Entry::ToolError("Exit code 2".into())));
+        assert_eq!(
+            checks_of(&entries),
+            Checks {
+                tests: Some(true),
+                build: Some(false)
+            }
+        );
+    }
+
+    #[test]
+    fn long_output_keeps_its_end() {
+        let long = "x".repeat(MAX_RESULT_CHARS) + "THE END";
+        let log = format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"a","name":"Bash","input":{{"command":"make"}}}}]}}}}
+{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"a","content":"{long}"}}]}}}}"#
+        );
+        let entries = parse_claude(&log);
+        let Some(Entry::Result {
+            output, truncated, ..
+        }) = entries.last()
+        else {
+            panic!("{entries:?}")
+        };
+        assert!(*truncated && output.ends_with("THE END"));
+        assert_eq!(output.chars().count(), MAX_RESULT_CHARS);
+    }
+
+    #[test]
+    fn test_and_build_commands_are_recognised() {
+        assert_eq!(check_kind("cargo test --all"), Some(CheckKind::Tests));
+        assert_eq!(check_kind("cd a && npm test"), Some(CheckKind::Tests));
+        assert_eq!(check_kind("tsc --noEmit"), Some(CheckKind::Build));
+        assert_eq!(check_kind("cargo testify"), None);
+        assert_eq!(check_kind("echo cargo test"), None);
+        assert_eq!(check_kind("ls"), None);
+        assert_eq!(checks_of(&[]), Checks::default());
+    }
 
     #[test]
     fn a_plan_is_read_from_todo_write() {

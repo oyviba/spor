@@ -5,7 +5,15 @@
 import type { AskKind, Item, Todo } from "../../types";
 
 type Done = Extract<Item, { kind: "done" }>;
-export type Tool = Extract<Item, { kind: "tool" | "tool_error" }>;
+type Result = Extract<Item, { kind: "result" }>;
+/** A tool call, with what a command printed (#97) once it's in. */
+export type Tool = (Extract<Item, { kind: "tool" }> & { result?: Result }) | Extract<Item, { kind: "tool_error" }>;
+
+/** How the last test run and build went: null, it didn't run. */
+export interface Checks {
+  tests: boolean | null;
+  build: boolean | null;
+}
 
 /** What a run shows between its prompt and its end. */
 export type Block =
@@ -38,6 +46,10 @@ export interface RunView {
   live: boolean;
   /** Its plan as it last stood (TodoWrite, #96), if it kept one. */
   plan: Todo[] | null;
+  /** How its last test run and build went (#97). */
+  checks: Checks;
+  /** It changed files, so "tests not run" is worth saying. */
+  edited: boolean;
   /**
    * For a run that finished well: everything but its final message folds
    * away, and that message stays in view. Null when the run doesn't fold.
@@ -52,7 +64,7 @@ export function runs(items: Item[], running: boolean): RunView[] {
   let setup: Extract<Block, { kind: "setup" }> | null = null;
   const push = (block: Block) => {
     if (!current) {
-      current = { index: out.length, prompt: "", blocks: [], done: null, live: false, plan: null, fold: null };
+      current = { index: out.length, prompt: "", blocks: [], done: null, live: false, plan: null, checks: { tests: null, build: null }, edited: false, fold: null };
       out.push(current);
     }
     const last = current.blocks.at(-1);
@@ -63,16 +75,35 @@ export function runs(items: Item[], running: boolean): RunView[] {
   for (const item of items) {
     switch (item.kind) {
       case "prompt":
-        current = { index: out.length, prompt: item.text, blocks: [], done: null, live: false, plan: null, fold: null };
+        current = { index: out.length, prompt: item.text, blocks: [], done: null, live: false, plan: null, checks: { tests: null, build: null }, edited: false, fold: null };
         out.push(current);
         break;
       case "text":
         push({ kind: "text", text: item.text });
         break;
       case "tool":
+        if (actionOf(item.name) === "edit" && current) (current as RunView).edited = true;
+        push({ kind: "tools", tools: [{ ...item }] });
+        break;
       case "tool_error":
         push({ kind: "tools", tools: [item] });
         break;
+      case "result": {
+        if (!current) break;
+        const run = current as RunView;
+        // The call it answers: the latest one of that command without output yet.
+        for (const b of run.blocks.toReversed()) {
+          if (b.kind !== "tools") continue;
+          const call = b.tools.findLast((t) => t.kind === "tool" && t.name === item.name && t.detail === item.detail && !t.result);
+          if (call?.kind === "tool") {
+            call.result = item;
+            break;
+          }
+        }
+        if (item.check === "tests") run.checks.tests = item.ok;
+        if (item.check === "build") run.checks.build = item.ok;
+        break;
+      }
       case "output":
         if (setup) setup.lines.push(item.text);
         else push({ kind: "output", lines: [item.text] });
@@ -150,13 +181,38 @@ function foldOf(run: RunView): RunView["fold"] {
   if (hidden.length === 0) return null;
   const seconds = run.done.seconds;
   const worked = seconds != null ? `Worked for ${duration(seconds)}` : "Worked";
+  const checks = checksLabel(run.checks, run.edited);
   return {
     label:
       (run.plan?.length ? `${worked} · ${planEnd(run.plan)}` : worked) +
+      (checks ? ` · ${checks}` : "") +
       (run.blocks.some((b) => b.kind === "compacted") ? ", compacted" : ""),
     hidden,
     final,
   };
+}
+
+/**
+ * "Tests ✓ · Build ✓", "Tests ✗ (last run)", "Tests not run". Tests not
+ * running is only said of a run that changed files: that's where review
+ * should start. A build is only mentioned if it ran.
+ */
+export function checksLabel(c: Checks, edited: boolean): string | null {
+  const parts: string[] = [];
+  if (c.tests != null) parts.push(c.tests ? "Tests ✓" : "Tests ✗ (last run)");
+  else if (edited) parts.push("Tests not run");
+  if (c.build != null) parts.push(c.build ? "Build ✓" : "Build ✗ (last run)");
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** The newest outcome of each check across several runs (the details card). */
+export function latestChecks(runs: RunView[]): Checks {
+  const out: Checks = { tests: null, build: null };
+  for (const r of runs) {
+    if (r.checks.tests != null) out.tests = r.checks.tests;
+    if (r.checks.build != null) out.build = r.checks.build;
+  }
+  return out;
 }
 
 /** How far a finished run got through its plan: "7 of 7 done", "stopped at 5 of 7". */

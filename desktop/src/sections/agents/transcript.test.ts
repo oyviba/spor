@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { duration, runs, summarize, tokens, type Tool } from "./transcript.ts";
+import { checksLabel, duration, runs, runs as toRuns, summarize, tokens, type Tool } from "./transcript.ts";
 import type { Item } from "../../types.ts";
 
 const tool = (name: string, detail = ""): Tool => ({ kind: "tool", name, detail });
@@ -227,7 +227,30 @@ test("a finished run's fold says how far through its plan it got", () => {
       ],
       false,
     )[0];
-  assert.equal(ran(3).fold?.label, "Worked for 14m 00s · 3 of 3 done");
-  assert.equal(ran(2).fold?.label, "Worked for 14m 00s · stopped at 2 of 3");
+  assert.equal(ran(3).fold?.label, "Worked for 14m 00s · 3 of 3 done · Tests not run");
+  assert.equal(ran(2).fold?.label, "Worked for 14m 00s · stopped at 2 of 3 · Tests not run");
   assert.equal(ran(2).plan?.length, 3, "the run keeps its last plan");
+});
+
+test("a command's output joins its call, and the run says how the checks went (#97)", () => {
+  const items: Item[] = [
+    { kind: "prompt", text: "Fix it" },
+    { kind: "tool", name: "Edit", detail: "src/a.rs" },
+    { kind: "tool", name: "Bash", detail: "cargo test" },
+    { kind: "result", name: "Bash", detail: "cargo test", ok: false, output: "1 failed", truncated: false, check: "tests" },
+    { kind: "tool", name: "Bash", detail: "cargo test" },
+    { kind: "result", name: "Bash", detail: "cargo test", ok: true, output: "ok", truncated: false, check: "tests" },
+    { kind: "done", ok: true, summary: "", cost_usd: null, turns: null, seconds: 60 },
+  ];
+  const [run] = toRuns(items, false);
+  const tools = run.blocks[0].kind === "tools" ? run.blocks[0].tools : [];
+  assert.deepEqual(
+    tools.map((t) => (t.kind === "tool" ? t.result?.output : undefined)),
+    [undefined, "1 failed", "ok"],
+  );
+  assert.deepEqual(run.checks, { tests: true, build: null });
+  assert.equal(checksLabel(run.checks, run.edited), "Tests ✓");
+  assert.equal(checksLabel({ tests: null, build: null }, true), "Tests not run");
+  assert.equal(checksLabel({ tests: null, build: null }, false), null);
+  assert.equal(checksLabel({ tests: false, build: true }, true), "Tests ✗ (last run) · Build ✓");
 });
