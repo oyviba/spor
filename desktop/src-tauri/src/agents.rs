@@ -268,6 +268,22 @@ pub(crate) enum Item {
         /// "tests", "build", or none.
         check: Option<&'static str>,
     },
+    /// The agent thinking (#99).
+    Thinking {
+        text: String,
+    },
+    /// A subagent started by the call `id`.
+    Subagent {
+        id: String,
+        agent: String,
+        description: String,
+        prompt: String,
+    },
+    /// Something a subagent did, under the call `parent` that started it.
+    Nested {
+        parent: String,
+        item: Box<Item>,
+    },
 }
 
 #[derive(Serialize)]
@@ -360,6 +376,22 @@ impl Item {
                 model: init.model,
             },
             Entry::Compacted => Item::Compacted,
+            Entry::Thinking(text) => Item::Thinking { text },
+            Entry::Subagent {
+                id,
+                agent,
+                description,
+                prompt,
+            } => Item::Subagent {
+                id,
+                agent,
+                description,
+                prompt,
+            },
+            Entry::Nested { parent, entry } => Item::Nested {
+                parent,
+                item: Box::new(Item::from(*entry, folder)),
+            },
             Entry::Result {
                 name,
                 detail,
@@ -367,7 +399,7 @@ impl Item {
                 output,
                 truncated,
             } => Item::Result {
-                check: match spor::agent::check_kind(&detail) {
+                check: match spor::agent::check_kind(&detail).filter(|_| name == "Bash") {
                     Some(spor::agent::CheckKind::Tests) => Some("tests"),
                     Some(spor::agent::CheckKind::Build) => Some("build"),
                     None => None,

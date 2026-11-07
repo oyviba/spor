@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checksLabel, duration, runs, runs as toRuns, summarize, tokens, type Tool } from "./transcript.ts";
+import { checksLabel, duration, runs, runs as toRuns, subagentsWorking, summarize, tokens, type Tool } from "./transcript.ts";
 import type { Item } from "../../types.ts";
 
 const tool = (name: string, detail = ""): Tool => ({ kind: "tool", name, detail });
@@ -253,4 +253,35 @@ test("a command's output joins its call, and the run says how the checks went (#
   assert.equal(checksLabel({ tests: null, build: null }, true), "Tests not run");
   assert.equal(checksLabel({ tests: null, build: null }, false), null);
   assert.equal(checksLabel({ tests: false, build: true }, true), "Tests ✗ (last run) · Build ✓");
+});
+
+test("a subagent's events nest under its call, and thinking is its own folded block (#99)", () => {
+  const items: Item[] = [
+    { kind: "prompt", text: "Map the routes" },
+    { kind: "thinking", text: "Split it up." },
+    { kind: "tool", name: "Task", detail: "Find the routes" },
+    { kind: "subagent", id: "t1", agent: "Explore", description: "Find the routes", prompt: "List every route." },
+    { kind: "nested", parent: "t1", item: { kind: "tool", name: "Grep", detail: "route" } },
+    { kind: "nested", parent: "t1", item: { kind: "text", text: "Found three." } },
+  ];
+  const [live] = toRuns(items, true);
+  assert.equal(live.blocks[0].kind, "thinking");
+  const sub = live.blocks.find((b) => b.kind === "subagent");
+  assert.ok(sub?.kind === "subagent");
+  assert.deepEqual(sub.blocks.map((b) => b.kind), ["tools", "text"], "its own stretch");
+  assert.equal(subagentsWorking(live), 1);
+  // Its main-agent summary counts it as one action.
+  const tools = live.blocks.find((b) => b.kind === "tools");
+  assert.equal(tools?.kind === "tools" && summarize(tools.tools).text, "Started a subagent");
+
+  const [done] = toRuns(
+    [
+      ...items,
+      { kind: "result", name: "Task", detail: "Find the routes", ok: true, output: "Three routes.", truncated: false, check: null },
+    ],
+    true,
+  );
+  const answered = done.blocks.find((b) => b.kind === "subagent");
+  assert.equal(answered?.kind === "subagent" && answered.report, "Three routes.");
+  assert.equal(subagentsWorking(done), 0);
 });
