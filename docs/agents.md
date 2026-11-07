@@ -274,3 +274,7 @@ Each run gets a short generated block: its folder, branch and base, that spor pu
 ## Reading what commands printed (#97)
 
 `parse_claude` pairs each `Bash` call with its result by `tool_use_id` and keeps the end of the output (8,000 characters; the whole text stays in `run-N.log`) and whether the tool reported an error. In the Agent tab, an unfolded command opens to its output. Test and build commands (`cargo test`, `pnpm test`, `pytest`, `go test`, `tsc`, `cargo build` and the like) are recognised, and the last outcome of each shows on the run's fold and the task's details card: "Tests ✓ · Build ✓", "Tests ✗ (last run)", or "Tests not run" for a run that changed files.
+
+## Subagents and thinking (#99)
+
+Events that carry a `parent_tool_use_id` are kept as `Entry::Nested` under the `Task`/`Agent` call that started them, and that call also gives an `Entry::Subagent` (its kind, description and prompt). The subagent's final report is the call's result. In the Agent tab a subagent is a card that opens into its own stretch of work; the main agent's summary still counts it as one action, and the live line says "3 subagents working". A subagent's plan and tool calls no longer replace the main agent's. `thinking` blocks become `Entry::Thinking`, shown folded as "Thought for a moment" where they happened, and never in summaries.

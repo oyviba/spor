@@ -3926,3 +3926,31 @@ body.resizing * {
 .todo.in_progress > .dot {
   color: var(--sky);
 }
+
+.thinking-text,
+.subagent-prompt,
+.subagent-report {
+  margin: 2px 0 6px 6px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+}
+.thinking-text {
+  font-style: italic;
+}
+.subagent-body {
+  margin: 2px 0 6px 6px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.subagent-body .subagent-prompt,
+.subagent-body .subagent-report {
+  margin: 0;
+  padding-left: 0;
+  border-left: 0;
+}

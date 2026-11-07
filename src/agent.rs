@@ -364,6 +364,18 @@ pub enum Entry {
         output: String,
         truncated: bool,
     },
+    /// The agent thinking, before the text or call it led to (#99).
+    Thinking(String),
+    /// A subagent started by the `Task`/`Agent` call `id` (#99).
+    Subagent {
+        id: String,
+        /// Its kind ("Explore"), if the call named one.
+        agent: String,
+        description: String,
+        prompt: String,
+    },
+    /// What a subagent did: an entry of the call `parent` started.
+    Nested { parent: String, entry: Box<Entry> },
 }
 
 /// The most of a command's output kept in the transcript: its end, where
@@ -439,6 +451,10 @@ pub struct Checks {
 pub fn checks_of(entries: &[Entry]) -> Checks {
     let mut checks = Checks::default();
     for entry in entries {
+        let mut entry = entry;
+        while let Entry::Nested { entry: inner, .. } = entry {
+            entry = inner;
+        }
         if let Entry::Result {
             name, detail, ok, ..
         } = entry
@@ -1813,16 +1829,23 @@ fn kind_name(kind: &AgentKind) -> String {
 pub fn parse_claude(log: &str) -> Vec<Entry> {
     let mut out = Vec::new();
     // Each command's gist by its call id, to pair its result (#97).
-    let mut commands: std::collections::HashMap<String, String> = Default::default();
+    let mut commands: std::collections::HashMap<String, (String, String)> = Default::default();
     for line in log.lines().filter(|l| !l.trim().is_empty()) {
         let Some(event) = Json::parse(line) else {
             out.push(Entry::Output(line.to_string()));
             continue;
         };
+        let start = out.len();
         match event.get("type").str() {
             Some("assistant") => {
                 for part in event.get("message").get("content").array() {
                     match part.get("type").str() {
+                        Some("thinking") => {
+                            let text = part.get("thinking").str().unwrap_or("").trim();
+                            if !text.is_empty() {
+                                out.push(Entry::Thinking(text.to_string()));
+                            }
+                        }
                         Some("text") => {
                             let text = part.get("text").str().unwrap_or("").trim();
                             if !text.is_empty() {
@@ -1832,10 +1855,9 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                         Some("tool_use") => {
                             let name = part.get("name").str().unwrap_or("Tool");
                             let detail = tool_detail(part.get("input"));
-                            if name == "Bash" {
-                                if let Some(id) = part.get("id").str() {
-                                    commands.insert(id.to_string(), detail.clone());
-                                }
+                            let id = part.get("id").str().unwrap_or_default();
+                            if matches!(name, "Bash" | "Task" | "Agent") && !id.is_empty() {
+                                commands.insert(id.to_string(), (name.to_string(), detail.clone()));
                             }
                             out.push(Entry::Tool {
                                 name: name.to_string(),
@@ -1843,6 +1865,18 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                             });
                             if name == "TodoWrite" {
                                 out.push(Entry::Todos(todos(part.get("input"))));
+                            }
+                            if matches!(name, "Task" | "Agent") && !id.is_empty() {
+                                let input = part.get("input");
+                                let text = |key: &str| {
+                                    input.get(key).str().unwrap_or_default().trim().to_string()
+                                };
+                                out.push(Entry::Subagent {
+                                    id: id.to_string(),
+                                    agent: text("subagent_type"),
+                                    description: text("description"),
+                                    prompt: text("prompt"),
+                                });
                             }
                         }
                         _ => {}
@@ -1873,7 +1907,7 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                         .get("tool_use_id")
                         .str()
                         .and_then(|id| commands.get(id));
-                    if let Some(detail) = call {
+                    if let Some((name, detail)) = call {
                         let text = content.trim_end();
                         let count = text.chars().count();
                         let output: String = text
@@ -1881,7 +1915,7 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                             .skip(count.saturating_sub(MAX_RESULT_CHARS))
                             .collect();
                         out.push(Entry::Result {
-                            name: "Bash".into(),
+                            name: name.clone(),
                             detail: detail.clone(),
                             ok: !failed,
                             output,
@@ -1973,6 +2007,15 @@ pub fn parse_claude(log: &str) -> Vec<Entry> {
                 seconds: event.get("duration_ms").num().map(|ms| ms / 1000.0),
             }),
             _ => {}
+        }
+        // What a subagent did hangs under the call that started it (#99).
+        if let Some(parent) = event.get("parent_tool_use_id").str() {
+            for entry in out.split_off(start) {
+                out.push(Entry::Nested {
+                    parent: parent.to_string(),
+                    entry: Box::new(entry),
+                });
+            }
         }
     }
     out
@@ -2448,6 +2491,42 @@ mod tests {
                 tests: Some(true),
                 build: Some(false)
             }
+        );
+    }
+
+    #[test]
+    fn a_subagents_events_hang_under_its_call() {
+        let log = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Split it up."},{"type":"tool_use","id":"t1","name":"Task","input":{"description":"Find the routes","subagent_type":"Explore","prompt":"List every route."}}]}}
+{"type":"assistant","parent_tool_use_id":"t1","message":{"content":[{"type":"tool_use","id":"g1","name":"Grep","input":{"pattern":"route"}},{"type":"text","text":"Found three."}]}}
+{"type":"user","parent_tool_use_id":"t1","message":{"content":[{"type":"tool_result","tool_use_id":"g1","content":"a.rs:1"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Three routes: a, b, c."}]}}"#;
+        let entries = parse_claude(log);
+        assert_eq!(entries[0], Entry::Thinking("Split it up.".into()));
+        assert!(matches!(&entries[1], Entry::Tool { name, .. } if name == "Task"));
+        assert_eq!(
+            entries[2],
+            Entry::Subagent {
+                id: "t1".into(),
+                agent: "Explore".into(),
+                description: "Find the routes".into(),
+                prompt: "List every route.".into()
+            }
+        );
+        let nested: Vec<_> = entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Nested { parent, entry } => Some((parent.as_str(), &**entry)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(nested.len(), 2);
+        assert!(nested.iter().all(|(p, _)| *p == "t1"));
+        assert!(matches!(nested[0].1, Entry::Tool { name, .. } if name == "Grep"));
+        assert_eq!(nested[1].1, &Entry::Text("Found three.".into()));
+        assert!(
+            matches!(entries.last(), Some(Entry::Result { name, output, .. })
+                if name == "Task" && output == "Three routes: a, b, c."),
+            "the subagent's report is the call's result, at the top: {entries:?}"
         );
     }
 
