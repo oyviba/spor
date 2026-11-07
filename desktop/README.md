@@ -46,7 +46,7 @@ What one app makes possible:
 - **One conflict banner.** A merge or rebase that stops shows on every
   section, with *Resolve in Changes*, *Continue* and *Abort*.
 - **From issue to landed PR** (#47, #24). *Start with agent* on an issue
-  gives the agent the issue and its comments, on `agent/<number>-<slug>`.
+  gives the agent the issue and its comments, on `agent/<number>-<three-random-words>`.
   *Publish* (or *Publish as a draft*) on the task pushes its branch and opens
   a PR whose title and description Claude Code writes from the branch and
   the agent's session (read-only; the prompt's if it can't), and which says

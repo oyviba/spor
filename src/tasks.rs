@@ -228,22 +228,37 @@ impl Tasks {
     /// `base` may be a remote-tracking branch (`origin/main`): the task
     /// starts there and lands on the local branch of that name.
     pub fn create(&self, prompt: &str, base: &str) -> Result<Task, String> {
-        self.create_with(prompt, base, &slug(prompt), None)
+        self.create_with(prompt, base, &self.fresh_name(""), None)
     }
 
     /// Start a task on a GitHub issue: its id (and branch) begin with the
     /// issue's number, and it remembers the issue so its pull request and
-    /// landing commit close it.
+    /// landing commit close it. The rest of the name is random, like any
+    /// task's, so it doesn't depend on the issue's text.
     pub fn create_for_issue(
         &self,
         prompt: &str,
         base: &str,
         issue: u64,
-        title: &str,
+        _title: &str,
     ) -> Result<Task, String> {
-        let id = format!("{issue}-{}", slug(title));
-        let id = id.trim_end_matches("-task");
-        self.create_with(prompt, base, id, Some(issue))
+        let id = self.fresh_name(&format!("{issue}-"));
+        self.create_with(prompt, base, &id, Some(issue))
+    }
+
+    /// A name no task, branch or folder has: `prefix` and three random
+    /// words (`brave-otter-jumps`), tried again if it collides; only if
+    /// many in a row do, a number is added.
+    fn fresh_name(&self, prefix: &str) -> String {
+        let taken = |id: &str| self.unique_id(id) != id;
+        let mut name = format!("{prefix}{}", random_name());
+        for _ in 0..20 {
+            if !taken(&name) {
+                return name;
+            }
+            name = format!("{prefix}{}", random_name());
+        }
+        self.unique_id(&name)
     }
 
     fn create_with(
@@ -1042,6 +1057,105 @@ fn bytecount_lines(bytes: &[u8]) -> usize {
     newlines + usize::from(bytes.last().is_some_and(|&b| b != b'\n'))
 }
 
+const ADJECTIVES: &[&str] = &[
+    "brave", "calm", "clever", "cosmic", "crisp", "curious", "daring", "eager", "fancy", "fierce",
+    "gentle", "giddy", "golden", "happy", "humble", "jolly", "keen", "kind", "lively", "lucky",
+    "mellow", "merry", "mighty", "nimble", "noble", "odd", "patient", "plucky", "polite", "proud",
+    "quick", "quiet", "rapid", "rosy", "shiny", "silent", "sleepy", "smooth", "snappy", "sneaky",
+    "solid", "speedy", "spry", "steady", "stout", "sunny", "swift", "tidy", "tiny", "vivid",
+    "warm", "wild", "wise", "witty", "zany", "zesty", "amber", "bold", "bright", "dusty", "fuzzy",
+    "grand", "lone", "red",
+];
+const NOUNS: &[&str] = &[
+    "otter", "badger", "falcon", "heron", "lynx", "marmot", "newt", "owl", "panda", "quail",
+    "raven", "seal", "stoat", "swan", "tiger", "walrus", "weasel", "wombat", "yak", "zebra",
+    "acorn", "anchor", "beacon", "birch", "bridge", "canyon", "cedar", "comet", "coral", "creek",
+    "delta", "ember", "fjord", "forest", "glacier", "harbor", "island", "juniper", "kettle",
+    "lagoon", "lantern", "maple", "meadow", "meteor", "orchid", "pebble", "planet", "prairie",
+    "river", "summit", "thicket", "tundra", "valley", "willow", "badge", "bell", "compass", "drum",
+    "flute", "garden", "kite", "mitten", "quilt", "ribbon",
+];
+const VERBS: &[&str] = &[
+    "jumps",
+    "hums",
+    "waves",
+    "dances",
+    "drifts",
+    "glides",
+    "grins",
+    "hops",
+    "juggles",
+    "laughs",
+    "leaps",
+    "lingers",
+    "naps",
+    "paddles",
+    "pounces",
+    "races",
+    "rambles",
+    "roams",
+    "sails",
+    "sings",
+    "skips",
+    "slides",
+    "soars",
+    "spins",
+    "sprints",
+    "stretches",
+    "strolls",
+    "swims",
+    "swings",
+    "tumbles",
+    "twirls",
+    "wanders",
+    "whistles",
+    "wiggles",
+    "yawns",
+    "zooms",
+    "bakes",
+    "blooms",
+    "builds",
+    "climbs",
+    "cooks",
+    "dives",
+    "dreams",
+    "explores",
+    "fishes",
+    "floats",
+    "flies",
+    "gathers",
+    "grows",
+    "hikes",
+    "listens",
+    "paints",
+    "plays",
+    "plants",
+    "reads",
+    "rests",
+    "rides",
+    "ripples",
+    "shines",
+    "sparkles",
+    "stirs",
+    "travels",
+    "watches",
+];
+
+/// Three random words that read as a sentence: `brave-otter-jumps`. They
+/// have nothing to do with the task's prompt, so a branch name never leaks
+/// it, and a prompt in any language gets a name that is valid.
+pub fn random_name() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    // The standard library seeds each `RandomState` from the system.
+    let pick = |words: &[&'static str]| {
+        let n = std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish();
+        words[(n % words.len() as u64) as usize]
+    };
+    format!("{}-{}-{}", pick(ADJECTIVES), pick(NOUNS), pick(VERBS))
+}
+
 /// "Fix the login redirect on Safari!" → `fix-login-redirect-safari`: the
 /// first few meaningful words, lowercase, ASCII letters and digits only.
 pub fn slug(prompt: &str) -> String {
@@ -1183,6 +1297,20 @@ mod tests {
         assert_eq!(image_kind(b"GIF89a.."), Some("gif"));
         assert_eq!(image_kind(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
         assert_eq!(image_kind(b"<svg>"), None);
+    }
+
+    #[test]
+    fn names_are_three_valid_words_and_vary() {
+        let names: std::collections::HashSet<String> = (0..50).map(|_| random_name()).collect();
+        assert!(names.len() > 40, "{names:?}");
+        for n in &names {
+            assert_eq!(n.split('-').count(), 3, "{n}");
+            assert!(n.chars().all(|c| c.is_ascii_lowercase() || c == '-'), "{n}");
+        }
+        for list in [ADJECTIVES, NOUNS, VERBS] {
+            let unique: std::collections::HashSet<_> = list.iter().collect();
+            assert_eq!(unique.len(), list.len(), "a word is listed twice");
+        }
     }
 
     #[test]

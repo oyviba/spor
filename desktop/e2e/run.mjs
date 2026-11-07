@@ -42,7 +42,10 @@ try {
   await w.fill(".new-task textarea", "Let greet() take an optional title");
   await w.enter(".new-task textarea");
   await w.waitFor(".task-page .live-line");
-  check(git("branch", "--list", "agent/*").includes("agent/let-greet-take-optional"), "task branch created");
+  // The branch is three random words (#111), so read it back.
+  const taskBranch = git("branch", "--list", "agent/*").replace(/^[*+]\s*/, "").trim();
+  const taskId = taskBranch.replace("agent/", "");
+  check(/^agent\/[a-z]+-[a-z]+-[a-z]+$/.test(taskBranch), "task branch created, named with three random words");
   await w.until(`return $(".task-row.selected[data-kind=task]")?.innerText.includes("Let greet() take an optional title")`, "the task's row");
   check(true, "the task is listed next to your branch, and selected");
 
@@ -109,7 +112,7 @@ try {
   await w.shot("4-second-run");
 
   console.log("Each run's changes, and undoing a run (#19)");
-  const worktree = git("worktree", "list", "--porcelain").split("\n").find((l) => l.includes("let-greet-take-optional"))?.replace("worktree ", "");
+  const worktree = git("worktree", "list", "--porcelain").split("\n").find((l) => l.includes(taskId))?.replace("worktree ", "");
   const read = (f) => readFileSync(`${worktree}/${f}`, "utf8");
   await w.clickText(".run:nth-of-type(2) .run-actions .link", "Changes in this run");
   await w.waitFor(".source-bar select");
@@ -122,7 +125,7 @@ try {
   await w.clickText(".run:nth-of-type(2) .run-actions .link", "Undo this run?");
   await w.waitFor(".run.undone");
   check(!read("greet.py").includes("farewell") && read("greet.py").includes("title=None"), "Undo this run puts the folder back as the first run left it");
-  const metaDir = `${repo}/.git/spor/tasks/let-greet-take-optional.d`;
+  const metaDir = `${repo}/.git/spor/tasks/${taskId}.d`;
   check(existsSync(`${metaDir}/run-1.undone`), "the run is marked undone");
   await w.shot("4b-run-undone");
   await w.clickText(".toast .link", "Undo");
@@ -144,7 +147,7 @@ try {
   await w.clickText(".toast .link", "Undo");
   await sleep(1500);
   check(git("rev-parse", "main") === before, "undo put main back");
-  check(git("branch", "--list", "agent/*").includes("agent/let-greet-take-optional"), "undo restored the task branch");
+  check(git("branch", "--list", "agent/*").includes(taskBranch), "undo restored the task branch");
   await w.shot("6-undone");
   console.log("All good");
 } finally {
