@@ -1096,6 +1096,46 @@ pub(crate) fn clean_up_tasks(app: State<App>) -> Result<String, String> {
     })
 }
 
+#[derive(Serialize)]
+pub(crate) struct RuleSuggestion {
+    rule: String,
+    /// The tasks whose corrections it came from.
+    tasks: Vec<String>,
+}
+
+/// Repeated corrections across the repository's tasks, as candidate lines
+/// for CLAUDE.md (#107). Asks Claude Code, so it takes a while.
+#[tauri::command(async)]
+pub(crate) fn suggest_rules(app: State<App>) -> Result<Vec<RuleSuggestion>, String> {
+    let tasks = app.tasks()?;
+    Ok(spor::rules::suggest(&tasks)?
+        .into_iter()
+        .map(|s| RuleSuggestion {
+            rule: s.rule,
+            tasks: s.tasks,
+        })
+        .collect())
+}
+
+/// Add a rule to the repository's CLAUDE.md (or AGENTS.md) as an
+/// uncommitted change.
+#[tauri::command(async)]
+pub(crate) fn add_rule(app: State<App>, rule: String) -> Result<String, String> {
+    let tasks = app.tasks()?;
+    let path = spor::rules::add(&tasks, &rule)?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok(format!("Added to {name}. It's an uncommitted change"))
+}
+
+/// Turn a suggested rule down; it isn't suggested again.
+#[tauri::command(async)]
+pub(crate) fn decline_rule(app: State<App>, rule: String) -> Result<(), String> {
+    spor::rules::decline(&app.tasks()?, &rule)
+}
+
 /// Answer a question the agent asked: allow, or deny (with what to do
 /// instead, if `message` says). `always`: allow it for the rest of the
 /// session (#40).

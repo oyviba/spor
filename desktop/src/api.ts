@@ -33,6 +33,7 @@ import type {
   WorktreeInfo,
   WorkBranch,
   WorkItemInfo,
+  RuleSuggestion,
 } from "./types";
 import type { Place } from "./shared/DiffView";
 
@@ -243,6 +244,10 @@ export const api = {
   sendQueued: (id: string, agent: AgentChoice, mode: Mode) => call<boolean>("send_queued", { id, agent, mode }),
   /** Delete the run checkpoints of tasks that are done, and discarded tasks' transcripts. */
   cleanUpTasks: () => call<string>("clean_up_tasks"),
+  /** Repeated corrections across tasks, as candidate lines for CLAUDE.md (#107). Slow: it asks Claude. */
+  suggestRules: () => call<RuleSuggestion[]>("suggest_rules"),
+  addRule: (rule: string) => call<string>("add_rule", { rule }),
+  declineRule: (rule: string) => call<void>("decline_rule", { rule }),
   /** A notification from the operating system, for when the window is in the background. */
   notify: (title: string, body: string) => call<void>("notify_os", { title, body }),
   /** Keep an image for a prompt; returns the path the prompt names it by.

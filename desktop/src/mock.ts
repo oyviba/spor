@@ -899,6 +899,15 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         return null;
       case "clean_up_tasks":
         return "Nothing to clean up";
+      case "suggest_rules":
+        return [
+          { rule: "Use pnpm, not npm.", tasks: ["fix-login", "add-readme"] },
+          { rule: "Tests go beside the file they test.", tasks: ["fix-login", "add-readme", "rename-greet"] },
+        ];
+      case "add_rule":
+        return "Added to CLAUDE.md. It's an uncommitted change";
+      case "decline_rule":
+        return null;
       case "notify_os":
         return null;
       default:
