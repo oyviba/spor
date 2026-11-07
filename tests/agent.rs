@@ -112,7 +112,11 @@ const NO_COMMANDS: Permissions = Permissions {
 #[test]
 fn a_custom_command_runs_in_the_task_folder() {
     let f = fixture();
-    let task = f.tasks.create("Write a note", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Write a note", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     let kind =
         AgentKind::Command("echo \"$SPOR_PROMPT\" > note.txt; echo {prompt}; echo bye".into());
@@ -135,7 +139,11 @@ fn a_custom_command_runs_in_the_task_folder() {
 #[test]
 fn a_failing_command_reports_its_exit_code() {
     let f = fixture();
-    let task = f.tasks.create("Fail", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Fail", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     runs.start(
         &task,
@@ -154,7 +162,11 @@ fn a_failing_command_reports_its_exit_code() {
 #[test]
 fn stop_ends_the_agent_and_what_it_started() {
     let f = fixture();
-    let task = f.tasks.create("Wait forever", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Wait forever", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     runs.start(
         &task,
@@ -188,7 +200,11 @@ fn stop_ends_the_agent_and_what_it_started() {
 fn claude_runs_and_follow_ups_resume_its_session() {
     fake_claude();
     let f = fixture();
-    let task = f.tasks.create("Leave a mark", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Leave a mark", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     runs.start(&task, &AgentKind::Claude, "Leave a mark", None, NO_COMMANDS)
         .unwrap();
@@ -235,7 +251,11 @@ fn claude_runs_and_follow_ups_resume_its_session() {
 #[test]
 fn transcripts_survive_discard_and_undo() {
     let f = fixture();
-    let task = f.tasks.create("Note", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Note", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     runs.start(
         &task,
@@ -256,9 +276,21 @@ fn transcripts_survive_discard_and_undo() {
 #[test]
 fn merge_conflicts_between_branches() {
     let f = fixture();
-    let a = f.tasks.create("Edit one way", "main").unwrap();
-    let b = f.tasks.create("Edit another way", "main").unwrap();
-    let c = f.tasks.create("Edit elsewhere", "main").unwrap();
+    let a = f
+        .tasks
+        .create("Edit one way", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
+    let b = f
+        .tasks
+        .create("Edit another way", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
+    let c = f
+        .tasks
+        .create("Edit elsewhere", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     for (task, file, text) in [
         (&a, "app.txt", "A\n"),
         (&b, "app.txt", "B\n"),
@@ -386,7 +418,11 @@ fn run_command(task: &spor::tasks::Task, runs: &Runs, command: &str) -> usize {
 #[test]
 fn each_run_has_its_own_diff() {
     let f = fixture();
-    let task = f.tasks.create("Notes", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Notes", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     let first = run_command(&task, &runs, "echo first > note.txt");
     let second = run_command(&task, &runs, "echo second >> note.txt; echo two > app.txt");
@@ -405,7 +441,11 @@ fn each_run_has_its_own_diff() {
 #[test]
 fn a_rebase_onto_the_base_is_left_out_of_the_runs_diff() {
     let f = fixture();
-    let task = f.tasks.create("Notes", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Notes", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     run_command(
         &task,
@@ -431,7 +471,11 @@ fn a_rebase_onto_the_base_is_left_out_of_the_runs_diff() {
 fn the_last_run_can_be_undone_and_redone() {
     fake_claude();
     let f = fixture();
-    let task = f.tasks.create("Leave marks", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Leave marks", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     let wt = &task.worktree;
     runs.start(&task, &AgentKind::Claude, "First", None, NO_COMMANDS)
@@ -479,7 +523,11 @@ fn the_last_run_can_be_undone_and_redone() {
 #[test]
 fn forgetting_a_task_deletes_its_checkpoints() {
     let f = fixture();
-    let task = f.tasks.create("Note", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Note", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     let run = run_command(&task, &runs, "echo hi > note.txt");
     let before = runs.checkpoint_ref(run, "before");
@@ -507,7 +555,11 @@ fn the_setup_script_runs_before_the_first_agent_only() {
         "setup",
         "echo \"setting up $SPOR_TASK from $SPOR_BASE\"\necho ready > prepared.txt\necho x >> setups.txt\ntest -d \"$SPOR_REPO/.git\"\n",
     );
-    let task = f.tasks.create("Use the setup", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Use the setup", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     assert!(runs.setup_script(&task).is_some());
     run_command(&task, &runs, "cat prepared.txt > seen.txt");
@@ -550,7 +602,11 @@ fn the_setup_script_runs_before_the_first_agent_only() {
 fn a_failing_setup_stops_the_agent_until_skipped() {
     let f = fixture();
     commit_spor_file(&f, "setup", "echo 'npm: not found'\nexit 3\n");
-    let task = f.tasks.create("Broken setup", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Broken setup", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     runs.start(
         &task,
@@ -585,7 +641,11 @@ fn a_private_setup_script_wins() {
     let private = f.repo.root().join(".git/spor");
     std::fs::create_dir_all(&private).unwrap();
     std::fs::write(private.join("setup"), "echo private > which.txt\n").unwrap();
-    let task = f.tasks.create("Which setup", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Which setup", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     run_command(&task, &runs, "true");
     assert_eq!(
@@ -604,7 +664,11 @@ fn listed_ignored_files_are_copied_into_a_new_folder() {
     std::fs::create_dir_all(root.join("config")).unwrap();
     std::fs::write(root.join("config/local.toml"), "debug = true\n").unwrap();
     std::fs::write(f.dir.join("outside.txt"), "nope\n").unwrap();
-    let task = f.tasks.create("Copy secrets", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Copy secrets", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     assert_eq!(read(&task.worktree, ".env").as_deref(), Some("TOKEN=1\n"));
     assert_eq!(
         read(&task.worktree, "config/local.toml").as_deref(),
@@ -623,7 +687,11 @@ fn listed_ignored_files_are_copied_into_a_new_folder() {
 fn a_follow_up_goes_to_the_agent_and_model_that_did_the_work() {
     fake_claude();
     let f = fixture();
-    let task = f.tasks.create("Leave a mark", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Leave a mark", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     // Starting needs an agent picked; the task's prompt goes as is.
     assert_eq!(
@@ -664,7 +732,11 @@ fn a_follow_up_goes_to_the_agent_and_model_that_did_the_work() {
 #[test]
 fn feedback_without_a_session_sends_the_whole_task_again() {
     let f = fixture();
-    let task = f.tasks.create("Write a note", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Write a note", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     let kind = AgentKind::Command("echo \"$SPOR_PROMPT\" > note.txt".into());
     let default = Model::default();
@@ -690,7 +762,11 @@ fn feedback_without_a_session_sends_the_whole_task_again() {
 #[test]
 fn an_agent_that_isnt_there_is_refused() {
     let f = fixture();
-    let task = f.tasks.create("Anything", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Anything", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     let empty = AgentKind::Command("  ".into());
     assert!(spor::agent::missing(&empty).is_some());
@@ -709,7 +785,11 @@ fn an_agent_that_isnt_there_is_refused() {
 #[test]
 fn queued_follow_ups_are_kept_with_the_task() {
     let f = fixture();
-    let task = f.tasks.create("Queue", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Queue", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     assert!(runs.queued().is_empty());
     runs.queue("first\nwith two lines").unwrap();
@@ -730,7 +810,11 @@ fn queued_follow_ups_are_kept_with_the_task() {
 #[test]
 fn a_queued_follow_up_goes_once_the_agent_is_idle() {
     let f = fixture();
-    let task = f.tasks.create("Write a note", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Write a note", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     let kind = AgentKind::Command("sleep 0.3; echo \"$SPOR_PROMPT\" > note.txt".into());
     let default = Model::default();
@@ -754,7 +838,11 @@ fn a_queued_follow_up_goes_once_the_agent_is_idle() {
 #[test]
 fn undo_from_an_earlier_run_takes_back_everything_after_it() {
     let f = fixture();
-    let task = f.tasks.create("Marks", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Marks", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     let wt = &task.worktree;
     run_command(&task, &runs, "echo 1 > one.txt");
@@ -791,9 +879,21 @@ fn undo_from_an_earlier_run_takes_back_everything_after_it() {
 #[test]
 fn cleaning_up_removes_landed_and_discarded_tasks_checkpoints() {
     let f = fixture();
-    let open = f.tasks.create("Keep", "main").unwrap();
-    let landed = f.tasks.create("Land", "main").unwrap();
-    let gone = f.tasks.create("Throw", "main").unwrap();
+    let open = f
+        .tasks
+        .create("Keep", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
+    let landed = f
+        .tasks
+        .create("Land", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
+    let gone = f
+        .tasks
+        .create("Throw", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     for t in [&open, &landed, &gone] {
         run_command(t, &Runs::of(&f.tasks, t), &format!("echo x > {}.txt", t.id));
     }
@@ -823,7 +923,11 @@ fn the_setup_script_reports_how_it_went() {
     use spor::agent::SetupState;
     let f = fixture();
     commit_spor_file(&f, "setup", "echo ok\n");
-    let task = f.tasks.create("Setup status", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Setup status", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     let setup = runs.setup(&task);
     assert_eq!(setup.script.as_deref(), Some(Path::new(".spor/setup")));
@@ -838,4 +942,42 @@ fn the_setup_script_reports_how_it_went() {
     assert_eq!(runs.setup(&task).state, Some(SetupState::Worked));
     runs.skip_setup().unwrap();
     assert_eq!(runs.setup(&task).state, Some(SetupState::Skipped));
+}
+
+#[test]
+fn a_run_that_can_write_gives_a_new_task_its_branch() {
+    let f = fixture();
+    let task = f.tasks.create("Write a note", "main").unwrap();
+    assert!(!task.worktree.exists());
+    let runs = Runs::of(&f.tasks, &task);
+    let kind = AgentKind::Command("echo hi > note.txt".into());
+    runs.start(&task, &kind, "Write a note", None, NO_COMMANDS)
+        .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    let started = f.tasks.get(&task.id).unwrap();
+    assert!(!started.pending);
+    assert_eq!(
+        std::fs::read_to_string(started.worktree.join("note.txt")).unwrap(),
+        "hi\n"
+    );
+    assert!(!f.repo.path("note.txt").exists());
+}
+
+#[test]
+fn a_plan_run_reads_without_making_a_branch() {
+    let f = fixture();
+    let task = f.tasks.create("Look around", "main").unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let plan = Permissions {
+        mode: spor::agent::Mode::Plan,
+    };
+    let kind = AgentKind::Command("ls app.txt".into());
+    runs.start(&task, &kind, "Look around", None, plan).unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    let after = f.tasks.get(&task.id).unwrap();
+    assert!(after.pending && !after.worktree.exists());
+    assert!(f
+        .repo
+        .resolve(&format!("refs/heads/{}", after.branch))
+        .is_err());
 }

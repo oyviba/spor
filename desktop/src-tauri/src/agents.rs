@@ -846,7 +846,10 @@ pub(crate) fn discard_task(app: State<App>, id: String) -> Result<String, String
 
 #[tauri::command(async)]
 pub(crate) fn open_folder(app: State<App>, id: String) -> Result<(), String> {
-    let (_, task) = app.task(&id)?;
+    let (tasks, task) = app.task(&id)?;
+    // A task has no folder until it first writes (#110); opening it is
+    // wanting to work in it.
+    let task = tasks.start_branch(&task).map_err(|e| first_line(&e))?;
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(windows) {

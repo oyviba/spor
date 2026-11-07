@@ -344,7 +344,9 @@ fn branch_item(
         .or_else(|| pull.map(|p| p.base.clone()))
         .or_else(|| Some(s.trunk.to_string()));
     let worktree = match task {
-        Some(t) if t.task.state == TaskState::Open => Some(t.task.worktree.clone()),
+        Some(t) if t.task.state == TaskState::Open && !t.task.pending => {
+            Some(t.task.worktree.clone())
+        }
         Some(_) => None,
         None => branch.and_then(|b| b.worktree.clone()),
     };
