@@ -2,9 +2,9 @@
 // first; finished and failed only until you've looked.
 
 import type { Pull, TaskSummary } from "../../types";
-import { duration } from "./transcript";
-import { steps } from "./progress";
-import { activityAt } from "../work/items";
+import { duration } from "./transcript.ts";
+import { steps } from "./progress.ts";
+import { activityAt } from "../work/items.ts";
 
 import type { Status } from "../../shared/StatusPill";
 
