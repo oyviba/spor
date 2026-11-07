@@ -621,6 +621,8 @@ pub struct Runs {
     /// Where the task's checkpoints live: `refs/spor/tasks/<id>`.
     refs: String,
     worktree: PathBuf,
+    /// For giving a pending task its branch when an agent first writes.
+    tasks: Tasks,
     base: String,
     /// The main checkout, for setup scripts that copy from it.
     repo_root: PathBuf,
@@ -634,6 +636,7 @@ impl Runs {
             dir: tasks.run_dir(&task.id),
             refs: checkpoint_prefix(&task.id),
             worktree: task.worktree.clone(),
+            tasks: tasks.clone(),
             base: task.start().to_string(),
             repo_root: tasks.root().to_path_buf(),
             attachments: tasks.attachments_dir(),
@@ -989,7 +992,17 @@ impl Runs {
         if self.latest().is_some_and(|r| r.state == RunState::Running) {
             return Err(format!("An agent is already working on {}", task.id));
         }
-        if !task.worktree.exists() {
+        // A task has no branch until an agent that can change things runs
+        // (#110). Planning only reads, so it looks at the main checkout and
+        // leaves nothing behind; anything else gets its branch now.
+        let started;
+        let (task, folder) = if task.pending && permissions.mode == Mode::Plan {
+            (task, self.repo_root.clone())
+        } else {
+            started = self.tasks.start_branch(task)?;
+            (&started, started.worktree.clone())
+        };
+        if !folder.exists() {
             return Err(format!("{}'s folder is gone", task.id));
         }
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
@@ -1013,7 +1026,7 @@ impl Runs {
         let exit = self.file(index, "exit");
         // What the folder was like before, for this run's diff and undo.
         // Best effort: a run without checkpoints still runs.
-        let _ = checkpoint::capture(&task.worktree, &self.checkpoint_ref(index, "before"));
+        let _ = checkpoint::capture(&folder, &self.checkpoint_ref(index, "before"));
         // "$@" is the agent; its exit code lands in the exit file however
         // it ends, short of the machine going down. The after checkpoint is
         // taken first, so a finished run always has one.
@@ -1051,7 +1064,12 @@ echo $code > "$SPOR_EXIT""#;
         };
         // A new folder's setup script runs first, in the same detached
         // process, and the agent only if it worked (#23).
-        let setup = self.setup_script(task);
+        // (Not for a plan that reads the main checkout.)
+        let setup = if folder == task.worktree {
+            self.setup_script(task)
+        } else {
+            None
+        };
         let mut cmd = match &setup {
             Some(_) => {
                 let mut cmd = Command::new("sh");
@@ -1073,7 +1091,7 @@ echo $code > "$SPOR_EXIT""#;
                 .env("SPOR_REPO", &self.repo_root)
                 .env("SPOR_BASE", &task.base);
         }
-        cmd.current_dir(&task.worktree)
+        cmd.current_dir(&folder)
             .env("SPOR_LOG", &log)
             .env("SPOR_EXIT", &exit)
             .env("SPOR_AFTER", self.checkpoint_ref(index, "after"))

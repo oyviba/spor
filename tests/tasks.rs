@@ -76,7 +76,11 @@ fn subjects(dir: &Path) -> Vec<String> {
 #[test]
 fn create_puts_a_branch_in_its_own_folder() {
     let f = fixture();
-    let task = f.tasks.create("Fix the login redirect", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Fix the login redirect", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     assert_eq!(task.id, "fix-login-redirect");
     assert_eq!(task.branch, "agent/fix-login-redirect");
     assert!(task.worktree.ends_with("app.spor/fix-login-redirect"));
@@ -86,7 +90,11 @@ fn create_puts_a_branch_in_its_own_folder() {
         Some("agent/fix-login-redirect")
     );
     // The same prompt again gets its own id.
-    let again = f.tasks.create("Fix the login redirect", "main").unwrap();
+    let again = f
+        .tasks
+        .create("Fix the login redirect", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     assert_eq!(again.id, "fix-login-redirect-2");
     let listed: Vec<String> = f.tasks.list().into_iter().map(|t| t.id).collect();
     assert_eq!(listed.len(), 2);
@@ -98,7 +106,11 @@ fn create_puts_a_branch_in_its_own_folder() {
 #[test]
 fn tasks_are_shared_by_every_worktree() {
     let f = fixture();
-    let task = f.tasks.create("Add a parser", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Add a parser", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let from_task = Tasks::open(&task.repo()).unwrap();
     assert_eq!(from_task.list()[0].id, task.id);
 }
@@ -106,7 +118,11 @@ fn tasks_are_shared_by_every_worktree() {
 #[test]
 fn stats_count_commits_and_uncommitted_work() {
     let f = fixture();
-    let task = f.tasks.create("Add a parser", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Add a parser", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     assert!(f.tasks.stats(&task).is_empty());
     work(
         &task.worktree,
@@ -135,6 +151,7 @@ fn land_squashes_onto_the_base_and_cleans_up() {
     let task = f
         .tasks
         .create("Add a parser\n\nKeep it small.", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
         .unwrap();
     work(&task.worktree, "parser.rs", "a\n", Some("wip 1"));
     work(&task.worktree, "parser.rs", "a\nb\n", Some("wip 2"));
@@ -152,7 +169,11 @@ fn land_squashes_onto_the_base_and_cleans_up() {
 #[test]
 fn land_with_a_merge_keeps_the_commits() {
     let f = fixture();
-    let task = f.tasks.create("Add a parser", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Add a parser", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(&task.worktree, "parser.rs", "a\n", Some("wip 1"));
     f.tasks.land(&task, LandMode::Merge, false).unwrap();
     assert_eq!(subjects(f.repo.root()), ["Add a parser", "wip 1", "start"]);
@@ -161,7 +182,11 @@ fn land_with_a_merge_keeps_the_commits() {
 #[test]
 fn land_rebases_when_the_base_moved() {
     let f = fixture();
-    let task = f.tasks.create("Add a parser", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Add a parser", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(&task.worktree, "parser.rs", "a\n", Some("parser"));
     work(f.repo.root(), "other.txt", "o\n", Some("meanwhile on main"));
     assert!(f.tasks.stats(&task).base_moved);
@@ -176,7 +201,11 @@ fn land_rebases_when_the_base_moved() {
 #[test]
 fn land_refuses_conflicts_and_leaves_everything_alone() {
     let f = fixture();
-    let task = f.tasks.create("Change two", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Change two", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(
         &task.worktree,
         "app.txt",
@@ -199,7 +228,11 @@ fn land_refuses_conflicts_and_leaves_everything_alone() {
 #[test]
 fn land_asks_about_uncommitted_work() {
     let f = fixture();
-    let task = f.tasks.create("Add notes", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Add notes", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(&task.worktree, "notes.txt", "n\n", None);
     assert!(f.tasks.land(&task, LandMode::Squash, false).is_err());
     f.tasks.land(&task, LandMode::Squash, true).unwrap();
@@ -209,7 +242,11 @@ fn land_asks_about_uncommitted_work() {
 #[test]
 fn land_needs_the_base_checked_out() {
     let f = fixture();
-    let task = f.tasks.create("Add notes", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Add notes", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(&task.worktree, "notes.txt", "n\n", Some("notes"));
     git(f.repo.root(), &["switch", "--quiet", "-c", "elsewhere"]);
     let err = f.tasks.land(&task, LandMode::Squash, false).unwrap_err();
@@ -219,7 +256,11 @@ fn land_needs_the_base_checked_out() {
 #[test]
 fn discard_and_land_can_be_undone() {
     let f = fixture();
-    let task = f.tasks.create("Add notes", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Add notes", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(&task.worktree, "notes.txt", "n\n", Some("notes"));
     let undo = f.tasks.discard(&task).unwrap();
     assert!(!task.worktree.exists());
@@ -247,6 +288,7 @@ fn issue_tasks_are_named_after_the_issue_and_close_it_when_landed() {
             7,
             "Login fails on Safari",
         )
+        .and_then(|t| f.tasks.start_branch(&t))
         .unwrap();
     assert_eq!(task.id, "7-login-fails-safari");
     assert_eq!(task.branch, "agent/7-login-fails-safari");
@@ -275,7 +317,11 @@ fn publish_pushes_the_branch_before_opening_a_pull_request() {
         f.repo.root(),
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
-    let task = f.tasks.create("Add a thing", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Add a thing", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
 
     let err = f
         .tasks
@@ -324,7 +370,11 @@ fn publish_pushes_the_branch_before_opening_a_pull_request() {
 #[test]
 fn settle_cleans_up_after_a_merged_pull_request_and_can_be_undone() {
     let f = fixture();
-    let task = f.tasks.create("Merged elsewhere", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Merged elsewhere", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(&task.worktree, "app.txt", "done\n", Some("Do it"));
     f.tasks.link_pull(&task, 12).unwrap();
     let task = f.tasks.get(&task.id).unwrap();
@@ -352,7 +402,11 @@ fn settle_cleans_up_after_a_merged_pull_request_and_can_be_undone() {
 #[test]
 fn close_cleans_up_after_a_closed_pull_request_and_can_be_undone() {
     let f = fixture();
-    let task = f.tasks.create("Closed elsewhere", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Closed elsewhere", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(&task.worktree, "app.txt", "done\n", Some("Do it"));
     f.tasks.link_pull(&task, 13).unwrap();
     let task = f.tasks.get(&task.id).unwrap();
@@ -367,7 +421,11 @@ fn close_cleans_up_after_a_closed_pull_request_and_can_be_undone() {
     assert!(err.contains("already settled"), "{err}");
 
     // Closed tasks sort after open ones.
-    let open = f.tasks.create("Still going", "main").unwrap();
+    let open = f
+        .tasks
+        .create("Still going", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let ids: Vec<String> = f.tasks.list().into_iter().map(|t| t.id).collect();
     assert_eq!(ids, [open.id.clone(), task.id.clone()]);
 
@@ -380,7 +438,11 @@ fn close_cleans_up_after_a_closed_pull_request_and_can_be_undone() {
 #[test]
 fn undoes_reports_base_work_the_task_would_revert() {
     let f = fixture();
-    let task = f.tasks.create("Rename things", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Rename things", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(&task.worktree, "task.txt", "mine\n", Some("task work"));
     // main gains lines after the task started, one of them like a diff header.
     work(
@@ -407,7 +469,11 @@ fn undoes_reports_base_work_the_task_would_revert() {
 #[test]
 fn undoes_ignores_lines_that_were_there_when_the_task_started() {
     let f = fixture();
-    let task = f.tasks.create("Drop two", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Drop two", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(&task.worktree, "app.txt", "one\nthree\n", Some("drop two"));
     work(
         f.repo.root(),
@@ -421,7 +487,11 @@ fn undoes_ignores_lines_that_were_there_when_the_task_started() {
 #[test]
 fn undoes_ignores_base_work_the_task_moved() {
     let f = fixture();
-    let task = f.tasks.create("Move app", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Move app", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     work(
         f.repo.root(),
         "app.txt",
@@ -472,7 +542,11 @@ fn tasks_start_from_origin_and_land_once_the_base_is_pulled() {
     git(&root, &["fetch", "--quiet", "origin"]);
     assert_eq!(f.repo.default_start().as_deref(), Some("origin/main"));
 
-    let task = f.tasks.create("Add a thing", "origin/main").unwrap();
+    let task = f
+        .tasks
+        .create("Add a thing", "origin/main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     assert_eq!(task.base, "main");
     assert_eq!(task.from.as_deref(), Some("origin/main"));
     assert_eq!(
@@ -500,7 +574,11 @@ fn tasks_start_from_origin_and_land_once_the_base_is_pulled() {
 fn a_local_base_is_taken_as_is() {
     let f = fixture();
     assert_eq!(f.repo.default_start().as_deref(), Some("main"), "no origin");
-    let task = f.tasks.create("Add a thing", "main").unwrap();
+    let task = f
+        .tasks
+        .create("Add a thing", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     assert_eq!((task.base.as_str(), task.from), ("main", None));
 }
 
@@ -603,4 +681,73 @@ fn discarding_an_adopted_branch_keeps_the_branch() {
     // ⌘Z brings the folder back on the same branch.
     f.tasks.restore(&undo).unwrap();
     assert!(task.worktree.exists());
+}
+
+#[test]
+fn a_new_task_has_no_branch_or_folder_until_it_writes() {
+    let f = fixture();
+    let task = f.tasks.create("Just look around", "main").unwrap();
+    assert!(task.pending);
+    assert_eq!(task.branch, "agent/just-look-around");
+    assert!(!task.worktree.exists());
+    assert!(f
+        .repo
+        .resolve(&format!("refs/heads/{}", task.branch))
+        .is_err());
+    assert!(git(f.repo.root(), &["worktree", "list"]).lines().count() == 1);
+    // It is saved, still pending, and reads as empty rather than missing.
+    assert!(f.tasks.get(&task.id).unwrap().pending);
+    let stats = f.tasks.stats(&task);
+    assert!(!stats.missing && stats.commits == 0 && stats.files == 0);
+    assert_eq!(f.tasks.patch(&task).unwrap(), "");
+    // Nothing to land or publish.
+    assert!(f.tasks.land(&task, LandMode::Squash, false).is_err());
+    assert!(f
+        .tasks
+        .publish(&task, "origin", false, false, false)
+        .is_err());
+}
+
+#[test]
+fn discarding_a_read_only_task_leaves_nothing_behind() {
+    let f = fixture();
+    let task = f.tasks.create("Just look around", "main").unwrap();
+    let undo = f.tasks.discard(&task).unwrap();
+    assert!(f.tasks.get(&task.id).is_none());
+    assert!(f
+        .repo
+        .list_branches()
+        .unwrap()
+        .iter()
+        .all(|b| b.name == "main"));
+    assert!(!task.worktree.exists());
+    // Undo brings the task back, still without a branch.
+    f.tasks.restore(&undo).unwrap();
+    let back = f.tasks.get(&task.id).unwrap();
+    assert!(back.pending && !back.worktree.exists());
+    // A merged pull request settles it the same way.
+    let settled = f.tasks.close(&back).unwrap();
+    assert_eq!(f.tasks.get(&task.id).unwrap().state, TaskState::Closed);
+    assert!(!settled.task.worktree.exists());
+}
+
+#[test]
+fn the_branch_is_made_on_first_write_from_the_base_as_it_is_then() {
+    let f = fixture();
+    let task = f.tasks.create("Add a parser", "main").unwrap();
+    // The base moves on before the task writes anything.
+    work(f.repo.root(), "later.txt", "later\n", Some("later"));
+    let started = f.tasks.start_branch(&task).unwrap();
+    assert!(!started.pending);
+    assert!(started.worktree.join("later.txt").exists());
+    assert_eq!(
+        started.repo().tracking().unwrap().branch.as_deref(),
+        Some("agent/add-parser")
+    );
+    assert!(!f.tasks.get(&task.id).unwrap().pending);
+    // Starting again changes nothing.
+    assert_eq!(f.tasks.start_branch(&started).unwrap(), started);
+    work(&started.worktree, "parser.rs", "a\n", Some("parser"));
+    f.tasks.land(&started, LandMode::Squash, false).unwrap();
+    assert!(f.repo.root().join("parser.rs").exists());
 }

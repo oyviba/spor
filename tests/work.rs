@@ -55,6 +55,7 @@ fn task(id: &str) -> Task {
         state: TaskState::Open,
         issue: None,
         pull: None,
+        pending: false,
     }
 }
 

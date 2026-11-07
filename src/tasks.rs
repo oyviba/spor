@@ -41,6 +41,10 @@ pub struct Task {
     pub issue: Option<u64>,
     /// The pull request its branch was published as.
     pub pull: Option<u64>,
+    /// Not started yet (#110): `branch` and `worktree` are where the task
+    /// will work, but neither exists until an agent first wants to write
+    /// ([`Tasks::start_branch`]). A task that only reads never gets them.
+    pub pending: bool,
 }
 
 impl Task {
@@ -51,7 +55,8 @@ impl Task {
         self.branch.starts_with("agent/")
     }
 
-    /// The task's working tree as a repository.
+    /// The task's working tree as a repository. For a pending task that's
+    /// a folder that doesn't exist yet.
     pub fn repo(&self) -> Repo {
         Repo::new(&self.worktree)
     }
@@ -252,19 +257,15 @@ impl Tasks {
         if prompt.is_empty() {
             return Err("Describe the task first".into());
         }
-        let base_sha = self.repo.resolve(base)?;
+        self.repo.resolve(base)?;
         let (base, from) = match self.repo.remote_branch(base) {
             Some(local) => (local, Some(base.to_string())),
             None => (base.to_string(), None),
         };
         let id = self.unique_id(id);
+        // Only named: the branch and folder come with the first write.
         let branch = format!("agent/{id}");
         let worktree = self.worktree_dir()?.join(&id);
-        std::fs::create_dir_all(worktree.parent().unwrap_or(&worktree))
-            .map_err(|e| format!("Couldn't create {}: {e}", worktree.display()))?;
-        self.repo
-            .add_worktree(&worktree, &branch, Some(&base_sha))?;
-        self.copy_ignored(&worktree);
         let task = Task {
             id,
             prompt: prompt.to_string(),
@@ -276,9 +277,31 @@ impl Tasks {
             state: TaskState::Open,
             issue,
             pull: None,
+            pending: true,
         };
         self.save(&task)?;
         Ok(task)
+    }
+
+    /// Give a pending task its branch and folder, from where its base is
+    /// now (#110). Called when an agent first wants to write; a task that
+    /// has them already is returned as it is.
+    pub fn start_branch(&self, task: &Task) -> Result<Task, String> {
+        if !task.pending || task.state != TaskState::Open {
+            return Ok(task.clone());
+        }
+        let sha = self.repo.resolve(task.start())?;
+        std::fs::create_dir_all(task.worktree.parent().unwrap_or(&task.worktree))
+            .map_err(|e| format!("Couldn't create {}: {e}", task.worktree.display()))?;
+        self.repo
+            .add_worktree(&task.worktree, &task.branch, Some(&sha))?;
+        self.copy_ignored(&task.worktree);
+        let started = Task {
+            pending: false,
+            ..task.clone()
+        };
+        self.save(&started)?;
+        Ok(started)
     }
 
     /// Hand one of your branches to an agent (#80, #82): a task whose folder
@@ -377,6 +400,7 @@ impl Tasks {
             state: TaskState::Open,
             issue: None,
             pull: None,
+            pending: false,
         };
         self.save(&task)?;
         Ok((task, moving))
@@ -548,6 +572,9 @@ impl Tasks {
         if task.state != TaskState::Open {
             return TaskStats::default();
         }
+        if task.pending {
+            return TaskStats::default();
+        }
         let wt = task.repo();
         if !task.worktree.exists() {
             return TaskStats {
@@ -643,6 +670,9 @@ impl Tasks {
     /// Everything the task changed since it left its base, uncommitted work
     /// and new files included.
     pub fn patch(&self, task: &Task) -> Result<String, String> {
+        if task.pending {
+            return Ok(String::new());
+        }
         let wt = task.repo();
         let start = wt.merge_base(task.start(), "HEAD")?;
         wt.patch_since(&start)
@@ -652,6 +682,15 @@ impl Tasks {
     /// it adopted). Uncommitted work in the folder is lost; the branch can
     /// come back with [`Tasks::restore`].
     pub fn discard(&self, task: &Task) -> Result<Undoable, String> {
+        if task.pending {
+            // Nothing was made: forgetting the task is all there is.
+            self.unlist(&task.id)?;
+            return Ok(Undoable {
+                task: task.clone(),
+                branch_sha: String::new(),
+                base_before: None,
+            });
+        }
         let branch_sha = self.repo.resolve(&task.branch)?;
         if task.worktree.exists() {
             self.repo.remove_worktree(&task.worktree, true)?;
@@ -668,6 +707,12 @@ impl Tasks {
     /// Bring back a discarded or landed task: its branch, its folder, and
     /// for a land, the base as it was.
     pub fn restore(&self, undo: &Undoable) -> Result<(), String> {
+        if undo.task.pending {
+            return self.save(&Task {
+                state: TaskState::Open,
+                ..undo.task.clone()
+            });
+        }
         if let Some(before) = &undo.base_before {
             let current = self.repo.tracking()?.branch;
             if current.as_deref() != Some(undo.task.base.as_str()) {
@@ -707,6 +752,9 @@ impl Tasks {
         mode: LandMode,
         commit_uncommitted: bool,
     ) -> Result<Undoable, String> {
+        if task.pending {
+            return Err(format!("{} hasn't changed anything to land", task.id));
+        }
         let here = self.repo.tracking()?;
         if here.branch.as_deref() != Some(task.base.as_str()) {
             return Err(format!("Check out {} to land {} on it", task.base, task.id));
@@ -811,6 +859,9 @@ impl Tasks {
         if task.state != TaskState::Open {
             return Err(format!("{} is already settled", task.id));
         }
+        if task.pending {
+            return Err(format!("{} has no commits to publish", task.id));
+        }
         let stats = self.stats(task);
         if stats.missing {
             return Err(format!("{}'s folder is gone", task.id));
@@ -858,7 +909,7 @@ impl Tasks {
     /// Push the task's branch to `remote`. With `commit_uncommitted`,
     /// uncommitted work in its folder is committed first, so it goes too.
     pub fn push(&self, task: &Task, remote: &str, commit_uncommitted: bool) -> Result<(), String> {
-        if task.state != TaskState::Open || !task.worktree.exists() {
+        if task.state != TaskState::Open || task.pending || !task.worktree.exists() {
             return Err(format!("{} has no folder to push from", task.id));
         }
         let wt = task.repo();
@@ -901,6 +952,17 @@ impl Tasks {
     fn settle_as(&self, task: &Task, state: TaskState) -> Result<Undoable, String> {
         if task.state != TaskState::Open {
             return Err(format!("{} is already settled", task.id));
+        }
+        if task.pending {
+            self.save(&Task {
+                state,
+                ..task.clone()
+            })?;
+            return Ok(Undoable {
+                task: task.clone(),
+                branch_sha: String::new(),
+                base_before: None,
+            });
         }
         let branch_sha = self.repo.resolve(&task.branch)?;
         if task.worktree.exists() {
@@ -1030,6 +1092,7 @@ fn render_task(t: &Task) -> String {
         ("state", state),
     ];
     let optional = [("issue", t.issue), ("pull", t.pull)];
+    let pending = t.pending.then_some("pending\ttrue\n");
     fields
         .iter()
         .map(|(k, v)| format!("{k}\t{}\n", escape(v)))
@@ -1039,6 +1102,7 @@ fn render_task(t: &Task) -> String {
                 .iter()
                 .filter_map(|(k, v)| v.map(|n| format!("{k}\t{n}\n"))),
         )
+        .chain(pending.map(String::from))
         .collect()
 }
 
@@ -1065,6 +1129,7 @@ fn parse_task(text: &str) -> Option<Task> {
         state,
         issue: get("issue").and_then(|n| n.parse().ok()),
         pull: get("pull").and_then(|n| n.parse().ok()),
+        pending: get("pending").is_some(),
     })
 }
 
@@ -1144,6 +1209,7 @@ mod tests {
             state: TaskState::Landed("abc".into()),
             issue: Some(7),
             pull: Some(12),
+            pending: true,
         };
         assert_eq!(parse_task(&render_task(&task)), Some(task.clone()));
         let closed = Task {
@@ -1166,6 +1232,7 @@ mod tests {
             state: TaskState::Open,
             issue: None,
             pull: None,
+            pending: false,
         };
         assert_eq!(
             task.agent_command(),

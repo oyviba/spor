@@ -151,7 +151,11 @@ fn fixture() -> Fixture {
 }
 
 fn start(f: &Fixture, prompt: &str) -> (Task, Runs) {
-    let task = f.tasks.create(prompt, "main").unwrap();
+    let task = f
+        .tasks
+        .create(prompt, "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     runs.start(
         &task,
@@ -385,7 +389,11 @@ fn interrupt_ends_the_turn() {
 #[test]
 fn the_mode_can_change_while_it_works() {
     let f = fixture();
-    let task = f.tasks.create("mode please", "main").unwrap();
+    let task = f
+        .tasks
+        .create("mode please", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let runs = Runs::of(&f.tasks, &task);
     runs.start(
         &task,

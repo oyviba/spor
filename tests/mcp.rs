@@ -128,8 +128,16 @@ fn it_speaks_mcp() {
 #[test]
 fn other_tasks_shows_the_rest_and_where_they_collide() {
     let f = fixture();
-    let a = f.tasks.create("Rewrite the app text", "main").unwrap();
-    let b = f.tasks.create("Add a readme", "main").unwrap();
+    let a = f
+        .tasks
+        .create("Rewrite the app text", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
+    let b = f
+        .tasks
+        .create("Add a readme", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     std::fs::write(a.worktree.join("app.txt"), "changed\n").unwrap();
     std::fs::write(b.worktree.join("app.txt"), "also changed\n").unwrap();
     std::fs::write(b.worktree.join("README.md"), "hi\n").unwrap();
@@ -154,7 +162,11 @@ fn other_tasks_shows_the_rest_and_where_they_collide() {
 #[test]
 fn why_finds_the_task_behind_a_line() {
     let f = fixture();
-    let t = f.tasks.create("Reword the second line", "main").unwrap();
+    let t = f
+        .tasks
+        .create("Reword the second line", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     std::fs::write(t.worktree.join("app.txt"), "one\nTWO\n").unwrap();
     git(&t.worktree, &["add", "."]);
     git(&t.worktree, &["commit", "--quiet", "-m", &t.land_message()]);
@@ -177,7 +189,11 @@ fn why_finds_the_task_behind_a_line() {
 #[test]
 fn ask_returns_the_answer_and_progress_goes_to_the_log() {
     let f = fixture();
-    let t = f.tasks.create("Anything", "main").unwrap();
+    let t = f
+        .tasks
+        .create("Anything", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let c = ctx(&f, &t.id);
     assert_eq!(
         call(&c, "ask", r#"{"question":"Which?","answer":"SQLite"}"#),
@@ -207,7 +223,11 @@ fn ask_returns_the_answer_and_progress_goes_to_the_log() {
 #[test]
 fn pr_tools_say_so_when_there_is_no_pull_request() {
     let f = fixture();
-    let t = f.tasks.create("Anything", "main").unwrap();
+    let t = f
+        .tasks
+        .create("Anything", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let c = ctx(&f, &t.id);
     assert!(call(&c, "pr_comments", "{}").0.contains("no pull request"));
     assert!(call(&c, "ci_log", "{}").1);
