@@ -2313,6 +2313,18 @@ pub(crate) fn ask_readonly(
     prompt: &str,
     what: &str,
 ) -> Result<String, String> {
+    ask_readonly_in(&task.worktree, session, effort, prompt, what)
+}
+
+/// [`ask_readonly`] from any folder (the repository's own, for a question
+/// that isn't about one task).
+pub(crate) fn ask_readonly_in(
+    cwd: &Path,
+    session: Option<String>,
+    effort: Option<&str>,
+    prompt: &str,
+    what: &str,
+) -> Result<String, String> {
     let mut args: Vec<String> = [
         "--output-format",
         "json",
@@ -2334,7 +2346,7 @@ pub(crate) fn ask_readonly(
     args.extend(["-p".into(), prompt.into()]);
     let mut child = Command::new("claude")
         .args(&args)
-        .current_dir(&task.worktree)
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

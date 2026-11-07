@@ -18,5 +18,6 @@ pub mod json;
 pub mod mcp;
 pub mod patch;
 pub mod remote;
+pub mod rules;
 pub mod tasks;
 pub mod work;
