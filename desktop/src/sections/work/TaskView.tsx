@@ -47,6 +47,8 @@ interface Props {
   onCopy: (text: string, what: string) => void;
   /** Open its folder, to work in it yourself. */
   onOpenFolder: () => unknown;
+  /** Start a new task (from a debrief's follow-up). */
+  onStartTask: (prompt: string) => unknown;
   /** What Changes shows: everything, or run N's changes. */
   source: "all" | number;
   onSource: (s: "all" | number) => void;
@@ -185,6 +187,8 @@ export const TaskView = forwardRef<ComposerHandle, Props>(function TaskView(p, c
           onAskRebase={p.onAskRebase}
           onAskRestore={p.onAskRestore}
           onRerunSetup={p.onRerunSetup}
+          onSend={p.onSend}
+          onStartTask={p.onStartTask}
           {...p.github}
         />
       }

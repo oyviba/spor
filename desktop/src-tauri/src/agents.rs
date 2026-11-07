@@ -388,6 +388,57 @@ pub(crate) struct TaskDetail {
     asks: Vec<AskInfo>,
     /// The running agent can be answered, steered and interrupted.
     listening: bool,
+    /// The latest run's debrief (#104), if it has one.
+    debrief: Option<DebriefInfo>,
+    /// The latest run ended and should get a debrief (`debrief_task`).
+    wants_debrief: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct DebriefInfo {
+    run: usize,
+    changed: String,
+    checked: String,
+    risks: Vec<RiskInfo>,
+    open_questions: Vec<String>,
+    follow_ups: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct RiskInfo {
+    path: String,
+    note: String,
+}
+
+pub(crate) fn debrief_info(run: usize, d: spor::debrief::Debrief) -> DebriefInfo {
+    DebriefInfo {
+        run,
+        changed: d.changed,
+        checked: d.checked,
+        risks: d
+            .risks
+            .into_iter()
+            .map(|r| RiskInfo {
+                path: r.path,
+                note: r.note,
+            })
+            .collect(),
+        open_questions: d.open_questions,
+        follow_ups: d.follow_ups,
+    }
+}
+
+/// Write the latest run's debrief (#104) if it wants one: a short
+/// read-only fork of its session. Slow, so the app asks for it apart from
+/// `task_detail`. None when the run has none and the repository opted out.
+#[tauri::command(async)]
+pub(crate) fn debrief_task(app: State<App>, id: String) -> Result<Option<DebriefInfo>, String> {
+    let (tasks, task) = app.task(&id)?;
+    let runs = Runs::of(&tasks, &task);
+    let Some(index) = runs.latest().map(|r| r.index) else {
+        return Ok(None);
+    };
+    Ok(runs.debrief_latest(&task)?.map(|d| debrief_info(index, d)))
 }
 
 #[derive(Serialize)]
@@ -595,6 +646,11 @@ pub(crate) fn task_detail(app: State<App>, id: String) -> Result<TaskDetail, Str
             })
             .collect(),
         listening: runs.listening(),
+        debrief: runs
+            .latest()
+            .and_then(|r| runs.debrief(r.index).map(|d| debrief_info(r.index, d))),
+        wants_debrief: spor::debrief::enabled(&task)
+            && runs.latest().is_some_and(|r| runs.wants_debrief(&r)),
         runs: runs.list().into_iter().map(RunInfo::from).collect(),
         undoes: if conflicts.is_empty() {
             tasks

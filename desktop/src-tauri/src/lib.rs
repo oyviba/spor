@@ -456,6 +456,7 @@ pub fn run() {
             askpass_answer,
             legacy_workspaces,
             repo_heads,
+            agents::debrief_task,
             inbox::inbox_tasks,
             inbox::inbox_github,
             agents::list_tasks,

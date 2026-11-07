@@ -183,6 +183,20 @@ export interface TaskDetail {
   asks: Ask[];
   /** The running agent can be answered, steered and interrupted. */
   listening: boolean;
+  /** The latest run's debrief (#104), once written. */
+  debrief: Debrief | null;
+  /** The latest run ended and should get one (`debriefTask`). */
+  wants_debrief: boolean;
+}
+
+/** What a run says about itself, in a fixed shape (#104). */
+export interface Debrief {
+  run: number;
+  changed: string;
+  checked: string;
+  risks: { path: string; note: string }[];
+  open_questions: string[];
+  follow_ups: string[];
 }
 
 export interface SetupInfo {
@@ -457,6 +471,8 @@ export interface InboxTask {
   asks: number;
   /** The first question in a few words ("asks: Keep the old endpoint?"); null when none waits. */
   ask: string | null;
+  /** Why a finished run is worth a look, from its debrief ("2 open questions"). */
+  reason?: string | null;
   run: "running" | "finished" | "failed" | "stopped" | null;
   started: number | null;
   ended: number | null;

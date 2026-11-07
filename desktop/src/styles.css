@@ -3898,3 +3898,8 @@ body.resizing * {
 .todo.in_progress > .dot {
   color: var(--sky);
 }
+
+.debrief p { margin: 4px 0; }
+.debrief ul { margin: 2px 0 6px; padding-left: 16px; }
+.debrief-question { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+.debrief-followup { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0; }

@@ -30,6 +30,9 @@ pub(crate) struct InboxTask {
     /// The first of them in a few words ("asks: Keep the old endpoint?"),
     /// for its row and notification (#102).
     ask: Option<String>,
+    /// Why a finished run is worth a look, from its debrief (#104):
+    /// "2 open questions", "tests not run".
+    reason: Option<String>,
     /// The latest run: running, finished, failed, stopped; None before one.
     run: Option<&'static str>,
     started: Option<i64>,
@@ -59,6 +62,11 @@ pub(crate) fn inbox_tasks(roots: Vec<String>) -> Vec<InboxTask> {
                 title: task.title(),
                 asks: asks.len(),
                 ask: asks.first().map(|a| a.gist()),
+                reason: latest
+                    .as_ref()
+                    .filter(|r| r.state == RunState::Finished)
+                    .and_then(|r| runs.debrief(r.index))
+                    .and_then(|d| d.reason()),
                 run: latest.as_ref().map(|r| match r.state {
                     RunState::Running => "running",
                     RunState::Finished => "finished",
