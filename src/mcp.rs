@@ -330,12 +330,7 @@ fn why(tasks: &Tasks, task: &Task, path: &str, line: usize) -> Result<String, St
         b.summary
     );
     let message = repo.message(&b.hash).unwrap_or_default();
-    let Some(id) = message
-        .lines()
-        .rev()
-        .find_map(|l| l.strip_prefix("Spor-Task:"))
-        .map(str::trim)
-    else {
+    let Some(id) = Task::trailer_id(&message) else {
         out.push_str("No agent task is recorded for that commit.");
         return Ok(out);
     };

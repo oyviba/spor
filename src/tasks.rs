@@ -76,6 +76,16 @@ impl Task {
         }
     }
 
+    /// The id in a commit message's `Spor-Task: <id>` trailer, if it has one.
+    pub fn trailer_id(message: &str) -> Option<&str> {
+        message
+            .lines()
+            .rev()
+            .find_map(|l| l.strip_prefix("Spor-Task:"))
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+    }
+
     /// The landing commit's message: the title, the prompt (an issue's
     /// whole text is left out: the issue has it), `Closes #n`, and the
     /// `Spor-Task` trailer.
