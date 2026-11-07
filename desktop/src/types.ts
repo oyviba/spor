@@ -152,7 +152,13 @@ export type Item =
       output: string;
       truncated: boolean;
       check: "tests" | "build" | null;
-    };
+    }
+  /** The agent thinking (#99). */
+  | { kind: "thinking"; text: string }
+  /** A subagent started by the Task/Agent call `id`. */
+  | { kind: "subagent"; id: string; agent: string; description: string; prompt: string }
+  /** Something a subagent did, under the call that started it. */
+  | { kind: "nested"; parent: string; item: Item };
 
 /** One step of the agent's plan. */
 export interface Todo {

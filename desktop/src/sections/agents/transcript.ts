@@ -35,7 +35,21 @@ export type Block =
   /** The conversation was compacted here; the agent may have lost detail. */
   | { kind: "compacted" }
   /** MCP servers that failed to connect when the agent started. */
-  | { kind: "mcp"; failed: string[] };
+  | { kind: "mcp"; failed: string[] }
+  /** The agent thinking, shown folded (#99). Never in a summary. */
+  | { kind: "thinking"; text: string }
+  /** A subagent: what it was asked, what it did (its own stretch), what it reported. */
+  | {
+      kind: "subagent";
+      id: string;
+      agent: string;
+      description: string;
+      prompt: string;
+      blocks: Block[];
+      report: string | null;
+      /** What it did, as items, until the run is read to its end. */
+      items: Item[];
+    };
 
 export interface RunView {
   index: number;
@@ -91,6 +105,14 @@ export function runs(items: Item[], running: boolean): RunView[] {
       case "result": {
         if (!current) break;
         const run = current as RunView;
+        if (item.name === "Task" || item.name === "Agent") {
+          // The subagent's report: the one started with this description and not yet answered.
+          const sub = run.blocks.findLast(
+            (b) => b.kind === "subagent" && b.description === item.detail && b.report == null,
+          );
+          if (sub?.kind === "subagent") sub.report = item.output;
+          break;
+        }
         // The call it answers: the latest one of that command without output yet.
         for (const b of run.blocks.toReversed()) {
           if (b.kind !== "tools") continue;
@@ -132,6 +154,17 @@ export function runs(items: Item[], running: boolean): RunView[] {
       case "compacted":
         push({ kind: "compacted" });
         break;
+      case "thinking":
+        push({ kind: "thinking", text: item.text });
+        break;
+      case "subagent":
+        push({ ...item, kind: "subagent", blocks: [], report: null, items: [] });
+        break;
+      case "nested": {
+        const sub = current && findSubagent(current as RunView, item.parent);
+        if (sub) sub.items.push(item.item);
+        break;
+      }
       case "init":
         if (item.mcp_failed.length > 0) push({ kind: "mcp", failed: item.mcp_failed });
         break;
@@ -145,8 +178,30 @@ export function runs(items: Item[], running: boolean): RunView[] {
   }
   const last = out.at(-1);
   if (last && running && !last.done) last.live = true;
-  for (const run of out) run.fold = foldOf(run);
+  for (const run of out) {
+    // A subagent's events are read the way a run's are, as its own stretch.
+    for (const b of run.blocks) {
+      if (b.kind !== "subagent") continue;
+      const inner = runs([{ kind: "prompt", text: b.prompt }, ...b.items], false)[0];
+      b.blocks = inner?.blocks ?? [];
+      // What it edited and ran counts for the run.
+      if (inner?.edited) run.edited = true;
+      if (inner?.checks.tests != null && run.checks.tests == null) run.checks.tests = inner.checks.tests;
+      if (inner?.checks.build != null && run.checks.build == null) run.checks.build = inner.checks.build;
+    }
+    run.fold = foldOf(run);
+  }
   return out;
+}
+
+function findSubagent(run: RunView, id: string): Extract<Block, { kind: "subagent" }> | undefined {
+  const b = run.blocks.findLast((b) => b.kind === "subagent" && b.id === id);
+  return b?.kind === "subagent" ? b : undefined;
+}
+
+/** "3 subagents working" for a live run, if any have yet to report. */
+export function subagentsWorking(run: RunView): number {
+  return run.blocks.filter((b) => b.kind === "subagent" && b.report == null).length;
 }
 
 /** Just the kind of question an ask item is (older logs have none: a permission). */

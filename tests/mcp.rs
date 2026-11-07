@@ -236,8 +236,16 @@ fn pr_tools_say_so_when_there_is_no_pull_request() {
 #[test]
 fn the_agent_is_told_where_it_is_and_what_the_others_touch() {
     let f = fixture();
-    let a = f.tasks.create("Rewrite the app text", "main").unwrap();
-    let b = f.tasks.create("Add a readme\n\nwith more", "main").unwrap();
+    let a = f
+        .tasks
+        .create("Rewrite the app text", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
+    let b = f
+        .tasks
+        .create("Add a readme\n\nwith more", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     std::fs::write(b.worktree.join("README.md"), "hi\n").unwrap();
     std::fs::create_dir_all(a.worktree.join(".spor")).unwrap();
     std::fs::write(a.worktree.join(".spor/context.md"), "Use tabs.\n").unwrap();
@@ -260,7 +268,11 @@ fn the_agent_is_told_where_it_is_and_what_the_others_touch() {
 #[test]
 fn a_lone_task_hears_of_no_others() {
     let f = fixture();
-    let a = f.tasks.create("Rewrite the app text", "main").unwrap();
+    let a = f
+        .tasks
+        .create("Rewrite the app text", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
     let text = Runs::of(&f.tasks, &a).context(&a);
     assert!(!text.contains("Other agents"), "{text}");
 }

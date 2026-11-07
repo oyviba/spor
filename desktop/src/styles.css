@@ -3931,3 +3931,30 @@ body.resizing * {
 .debrief ul { margin: 2px 0 6px; padding-left: 16px; }
 .debrief-question { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
 .debrief-followup { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0; }
+.thinking-text,
+.subagent-prompt,
+.subagent-report {
+  margin: 2px 0 6px 6px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+}
+.thinking-text {
+  font-style: italic;
+}
+.subagent-body {
+  margin: 2px 0 6px 6px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.subagent-body .subagent-prompt,
+.subagent-body .subagent-report {
+  margin: 0;
+  padding-left: 0;
+  border-left: 0;
+}

@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Item, Progress, RunInfo, TaskDetail, Todo } from "../../types";
 import { liveLine } from "./progress";
-import { duration, runs as toRuns, stoppedLabel, summarize, tokens, type Block, type RunView, type Tool } from "./transcript";
+import { duration, runs as toRuns, stoppedLabel, subagentsWorking, summarize, tokens, type Block, type RunView, type Tool } from "./transcript";
 import { useChanged, useNow, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { Markdown } from "../../shared/Markdown";
@@ -91,6 +91,7 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetryS
             waiting={detail.asks.length > 0}
             progress={detail.task.progress}
             plan={views.at(-1)?.plan ?? null}
+            subagents={views.at(-1) ? subagentsWorking(views.at(-1)!) : 0}
             onStop={onStop}
           />
         )}
@@ -358,6 +359,45 @@ function BlockView({
       </div>
     );
   }
+  if (block.kind === "thinking") {
+    const shown = open.has(id);
+    return (
+      <div className="thinking">
+        <button className="tools-summary" onClick={() => toggle(id)} aria-expanded={shown}>
+          <span>{thoughtFor(block.text)}</span>
+          <Chevron size={12} className={`chev${shown ? " open" : ""}`} />
+        </button>
+        {shown && <p className="thinking-text">{block.text}</p>}
+      </div>
+    );
+  }
+  if (block.kind === "subagent") {
+    const shown = open.has(id);
+    return (
+      <div className="subagent">
+        <button className="tools-summary" onClick={() => toggle(id)} aria-expanded={shown}>
+          <ToolIcon name="Task" />
+          <span>
+            {block.agent ? `${block.agent}: ` : "Subagent: "}
+            {block.description || "working"}
+          </span>
+          {block.report == null && live && <span className="muted">working…</span>}
+          <Chevron size={12} className={`chev${shown ? " open" : ""}`} />
+        </button>
+        {shown && (
+          <div className="subagent-body">
+            {block.prompt && <p className="subagent-prompt">{block.prompt}</p>}
+            {block.blocks
+              .filter((b) => b.kind !== "ask")
+              .map((b, i) => (
+                <BlockView key={i} block={b} id={`${id}-${i}`} live={false} open={open} toggle={toggle} />
+              ))}
+            {block.report && <p className="subagent-report">{block.report}</p>}
+          </div>
+        )}
+      </div>
+    );
+  }
   if (block.kind === "output") {
     const shown = open.has(id) ? block.lines : block.lines.slice(-6);
     return (
@@ -436,6 +476,11 @@ function ToolGroup({
   );
 }
 
+/** "Thought for a moment" / "Thought for a while", by how much there is. */
+function thoughtFor(text: string): string {
+  return text.length < 400 ? "Thought for a moment" : "Thought for a while";
+}
+
 /** A command's output, folded like an Actions log step (#97). */
 function ResultOutput({
   result,
@@ -479,12 +524,14 @@ function LiveLine({
   waiting,
   progress,
   plan,
+  subagents,
   onStop,
 }: {
   run: RunInfo;
   waiting: boolean;
   progress: Progress | null;
   plan: Todo[] | null;
+  subagents: number;
   onStop: () => unknown;
 }) {
   const now = useNow(1000);
@@ -527,6 +574,7 @@ function LiveLine({
         <span className={`dot${waiting ? "" : " pulse"}`} />
         <span className="num truncate" title={liveLine(progress, seconds)}>
           {waiting ? `Waiting for you · ${duration(seconds)}` : liveLine(progress, seconds)}
+          {!waiting && subagents > 0 && ` · ${subagents} ${subagents === 1 ? "subagent" : "subagents"} working`}
         </span>
         <Button className="ghost small" onClick={onStop}>
           <Square size={10} /> Stop
