@@ -147,7 +147,7 @@ interface Props {
   /** Start the task's own prompt (no runs yet). */
   onStart: () => unknown;
   /** A follow-up; queued by the caller when the agent is working. */
-  onSend: (text: string) => unknown;
+  onSend: (text: string, fresh?: boolean) => unknown;
   /** The running agent can take a message into the turn it's on (#22). */
   canSteer: boolean;
   onSteer: (text: string) => unknown;
@@ -195,6 +195,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
   // Sending, starting or stopping (the button spins); answering a question
   // (its buttons wait). By click or by key, nothing goes twice.
   const [sending, setSending] = useState(false);
+  // Carry on in a new session that starts from the debrief, not a full context (#98).
+  const [fresh, setFresh] = useState(false);
   const [answering, setAnswering] = useState<"deny" | "allow" | "session" | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   useImperativeHandle(ref, () => ({ focus: () => input.current?.focus() }));
@@ -244,8 +246,9 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
             ? p.onAnswer(ask!, false, message)
             : act === "steer"
               ? p.onSteer(message)
-              : p.onSend(message);
+              : p.onSend(message, fresh);
     if (act !== "stop" && act !== "start") {
+      setFresh(false);
       setText("");
       attachments.clear();
     }
@@ -282,8 +285,13 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
             <Alert size={12} />
             <span>
               The agent's context is {p.latest.context}% full. A follow-up may make Claude Code compact the
-              conversation, and the agent can lose track of earlier decisions. Restate what matters in your message.
+              conversation, and the agent can lose track of earlier decisions. Restate what matters in your message,
+              or start a new session from a summary.
             </span>
+            <label className="context-fresh">
+              <input type="checkbox" checked={fresh} onChange={(e) => setFresh(e.target.checked)} />
+              Start fresh with a summary
+            </label>
           </div>
         )}
         {p.queued.length > 0 && (

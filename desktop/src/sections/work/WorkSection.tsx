@@ -288,7 +288,7 @@ export function WorkSection() {
     }
   };
 
-  const send = (text: string) => {
+  const send = (text: string, fresh = false) => {
     if (!shown) return;
     const id = shown.task.id;
     setComments((c) => ({ ...c, [id]: [] }));
@@ -296,7 +296,7 @@ export function WorkSection() {
       return api.queueFollowUp(id, text).then(afterChange, fail);
     }
     return api
-      .sendToAgent(id, text, choiceOf(settings), settings.mode)
+      .sendToAgent(id, text, choiceOf(settings), settings.mode, fresh)
       .then(() => setTab("agent"))
       .then(afterChange, fail);
   };

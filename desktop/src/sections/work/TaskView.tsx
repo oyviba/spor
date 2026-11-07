@@ -38,7 +38,7 @@ interface Props {
   queued: string[];
   onUnqueue: (i: number) => void;
   onStart: () => unknown;
-  onSend: (text: string) => unknown;
+  onSend: (text: string, fresh?: boolean) => unknown;
   onStop: () => unknown;
   onLand: (merge: boolean, commitUncommitted: boolean) => unknown;
   onDiscard: () => unknown;

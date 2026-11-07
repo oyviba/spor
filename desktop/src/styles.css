@@ -3664,6 +3664,7 @@ body.resizing * {
 }
 .context-note {
   margin-bottom: 6px;
+  flex-wrap: wrap;
 }
 .compacted {
   display: flex;
@@ -3957,4 +3958,12 @@ body.resizing * {
   margin: 0;
   padding-left: 0;
   border-left: 0;
+}
+.context-fresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  white-space: nowrap;
+  cursor: pointer;
 }

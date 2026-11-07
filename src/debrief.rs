@@ -32,6 +32,30 @@ pub struct Debrief {
 }
 
 impl Debrief {
+    /// The debrief as a hand-over for a new session (#98): what the last
+    /// one did, checked and left open, so a fresh agent can carry on
+    /// without the conversation behind it.
+    pub fn handoff(&self) -> String {
+        let mut out = String::from("What the previous agent got to:\n");
+        let mut line = |label: &str, text: &str| {
+            if !text.trim().is_empty() {
+                out.push_str(&format!("- {label}: {}\n", text.trim()));
+            }
+        };
+        line("Changed", &self.changed);
+        line("Checked", &self.checked);
+        for r in &self.risks {
+            line("Look closely at", &format!("{}: {}", r.path, r.note));
+        }
+        for q in &self.open_questions {
+            line("Open question", q);
+        }
+        for f in &self.follow_ups {
+            line("Not done yet", f);
+        }
+        out
+    }
+
     /// Read the JSON a debrief is saved as (and asked for). Tolerates a
     /// fence around it, or text before and after.
     pub fn parse(reply: &str) -> Option<Debrief> {

@@ -875,10 +875,17 @@ pub(crate) fn send_to_agent(
     message: Option<String>,
     agent: AgentChoice,
     mode: String,
+    fresh: Option<bool>,
 ) -> Result<(), String> {
     let mode = mode_of(&mode)?;
     let (tasks, task) = app.task(&id)?;
     let runs = Runs::of(&tasks, &task);
+    // A new session that starts from the debrief, not the full context (#98).
+    if let (Some(true), Some(message)) = (fresh, message.as_deref()) {
+        return runs
+            .follow_up_fresh(&task, message, Permissions { mode })
+            .map(|_| ());
+    }
     let chosen = agent.chosen(&runs, message.is_some())?;
     runs.follow_up(
         &task,
