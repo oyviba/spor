@@ -210,7 +210,7 @@ fn report_progress(args: &Json, ctx: &Context) -> Result<String, String> {
 }
 
 /// Every file the task has changed, committed or not.
-fn changed_files(task: &Task) -> Vec<String> {
+pub(crate) fn changed_files(task: &Task) -> Vec<String> {
     let wt = task.repo();
     let start = wt
         .merge_base(task.start(), "HEAD")
@@ -220,6 +220,19 @@ fn changed_files(task: &Task) -> Vec<String> {
     files.sort();
     files.dedup();
     files
+}
+
+/// The other open tasks that have a folder: id, prompt, files changed so far.
+pub(crate) fn others_touching(tasks: &Tasks, me: &Task) -> Vec<(String, String, Vec<String>)> {
+    tasks
+        .list()
+        .into_iter()
+        .filter(|t| t.state == TaskState::Open && t.id != me.id && t.worktree.exists())
+        .map(|t| {
+            let files = changed_files(&t);
+            (t.id, t.prompt, files)
+        })
+        .collect()
 }
 
 fn other_tasks(tasks: &Tasks, me: &Task) -> String {
