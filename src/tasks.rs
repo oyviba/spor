@@ -570,6 +570,55 @@ impl Tasks {
         self.dir.join(format!("{id}.d"))
     }
 
+    /// The lock that makes counting running agents and starting one a
+    /// single step, shared by every window (#limit).
+    pub fn agents_lock(&self) -> PathBuf {
+        self.dir.join("agents.lock")
+    }
+
+    /// How many tasks have an agent running now.
+    pub fn running_agents(&self) -> usize {
+        self.list()
+            .into_iter()
+            .filter(|t| t.state == TaskState::Open)
+            .filter(|t| {
+                crate::agent::Runs::of(self, t)
+                    .latest()
+                    .is_some_and(|r| r.state == crate::agent::RunState::Running)
+            })
+            .count()
+    }
+
+    /// Tasks whose start is waiting for a free slot, longest first.
+    pub fn waiting(&self) -> Vec<Task> {
+        let mut waiting: Vec<(i64, Task)> = self
+            .list()
+            .into_iter()
+            .filter(|t| t.state == TaskState::Open)
+            .filter_map(|t| {
+                let since = crate::agent::Runs::of(self, &t).waiting()?.since;
+                Some((since, t))
+            })
+            .collect();
+        waiting.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.created.cmp(&b.1.created)));
+        waiting.into_iter().map(|(_, t)| t).collect()
+    }
+
+    /// Start waiting tasks, longest first, while there are free slots.
+    /// Returns how many went.
+    pub fn start_waiting(&self) -> usize {
+        let mut started = 0;
+        for task in self.waiting() {
+            match crate::agent::Runs::of(self, &task).start_waiting(&task) {
+                Ok(true) => started += 1,
+                // Full: the rest wait too.
+                Ok(false) => break,
+                Err(_) => {}
+            }
+        }
+        started
+    }
+
     /// Where images attached to prompts are kept: `.git/spor/attachments/`,
     /// beside the tasks, so they stay out of every folder and commit.
     pub fn attachments_dir(&self) -> PathBuf {

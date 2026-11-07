@@ -290,3 +290,7 @@ When the latest Claude run's context is 80% full or more, the composer offers *S
 ## Finding the conversation behind a line (#108)
 
 A commit landed by a task carries a `Spor-Task: <id>` trailer. History's commit card says which task made it, with *Open conversation*; Blame shows *Why?* by the first line of each group whose commit has one. Landed tasks keep their transcripts (clean-up only deletes the transcripts of discarded tasks). ⌘K also searches what was said across all of a repository's tasks, landed ones included: prompts, follow-ups, the agent's words, steering and debriefs. A result opens the task; it doesn't yet scroll to the run it was found in.
+
+## Agents at once
+
+`git config spor.maxAgents <n>` (Settings → Agents) limits how many agents run at once in a repository; with none set there is no limit. A start past the limit (a new task, a follow-up, a queued follow-up) is written down in the task's run directory as `waiting` and the task shows "Waiting for a slot · #n in line". When an agent finishes, the app starts the waiting tasks, longest first. Counting and starting happen under a lock file shared by every window, so two starts can't both take the last slot. Stopping a waiting task takes it out of the line. Subagents an agent starts are part of that agent and aren't counted; neither are the short read-only calls (debrief, rules search). The line is only worked through while the app is open.

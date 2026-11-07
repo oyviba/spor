@@ -155,9 +155,22 @@ pub(crate) struct TaskSummary {
     pull: Option<u64>,
     /// Follow-ups waiting for the agent to finish (#22), kept with the task.
     queued: Vec<String>,
+    /// Its place in line (1 is next) while its start waits for a free slot
+    /// because the repository limits agents at once.
+    waiting: Option<usize>,
     /// What all its runs cost, and the tokens they used (#98).
     spent: f64,
     tokens: u64,
+}
+
+/// A start that has to wait for a free slot (the repository's limit on
+/// agents at once) isn't an error: the task says it's waiting.
+fn waiting_is_fine(started: Result<spor::agent::Run, String>) -> Result<(), String> {
+    match started {
+        Ok(_) => Ok(()),
+        Err(e) if e == spor::agent::WAITING => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
@@ -193,6 +206,13 @@ fn summary(tasks: &Tasks, task: &Task) -> TaskSummary {
         issue: task.issue,
         pull: task.pull,
         queued: runs.queued(),
+        waiting: runs.waiting().and_then(|_| {
+            tasks
+                .waiting()
+                .iter()
+                .position(|t| t.id == task.id)
+                .map(|i| i + 1)
+        }),
         spent,
         tokens,
     }
@@ -769,14 +789,14 @@ pub(crate) fn create_issue_task(
         .create_for_issue(&prompt, &base, number, title)
         .map_err(|e| format!("Couldn't create the task: {}", first_line(&e)))?;
     if let Some(kind) = kind {
-        Runs::of(&tasks, &task).start_with(
+        waiting_is_fine(Runs::of(&tasks, &task).start_with(
             &task,
             &kind,
             &task.prompt,
             None,
             Permissions { mode },
             &model,
-        )?;
+        ))?;
     }
     Ok(summary(&tasks, &task))
 }
@@ -811,14 +831,14 @@ pub(crate) fn create_task(
         .create(&prompt, &base)
         .map_err(|e| format!("Couldn't create the task: {}", first_line(&e)))?;
     if let Some(kind) = kind {
-        Runs::of(&tasks, &task).start_with(
+        waiting_is_fine(Runs::of(&tasks, &task).start_with(
             &task,
             &kind,
             &task.prompt,
             None,
             Permissions { mode },
             &model,
-        )?;
+        ))?;
     }
     Ok(summary(&tasks, &task))
 }
@@ -854,14 +874,14 @@ pub(crate) fn hand_to_agent(
         },
     );
     if let Some(kind) = kind {
-        Runs::of(&tasks, &task).start_with(
+        waiting_is_fine(Runs::of(&tasks, &task).start_with(
             &task,
             &kind,
             &task.prompt,
             None,
             Permissions { mode },
             &model,
-        )?;
+        ))?;
     }
     Ok(summary(&tasks, &task))
 }
@@ -882,18 +902,15 @@ pub(crate) fn send_to_agent(
     let runs = Runs::of(&tasks, &task);
     // A new session that starts from the debrief, not the full context (#98).
     if let (Some(true), Some(message)) = (fresh, message.as_deref()) {
-        return runs
-            .follow_up_fresh(&task, message, Permissions { mode })
-            .map(|_| ());
+        return waiting_is_fine(runs.follow_up_fresh(&task, message, Permissions { mode }));
     }
     let chosen = agent.chosen(&runs, message.is_some())?;
-    runs.follow_up(
+    waiting_is_fine(runs.follow_up(
         &task,
         message.as_deref(),
         chosen.as_ref().map(|(k, m)| (k, m)),
         Permissions { mode },
-    )
-    .map(|_| ())
+    ))
 }
 
 #[tauri::command(async)]
@@ -901,7 +918,43 @@ pub(crate) fn stop_agent(app: State<App>, id: String) -> Result<(), String> {
     let (tasks, task) = app.task(&id)?;
     // An interrupt when it listens (it keeps its session); else, or if that
     // doesn't land, the old kill.
-    Runs::of(&tasks, &task).finish(std::time::Duration::from_secs(4))
+    let runs = Runs::of(&tasks, &task);
+    // Stopping a task that is only waiting for a slot takes it out of the line.
+    runs.cancel_waiting();
+    runs.finish(std::time::Duration::from_secs(4))
+}
+
+/// How many agents may run at once here (`spor.maxAgents`), if limited.
+#[tauri::command(async)]
+pub(crate) fn get_max_agents(app: State<App>) -> Result<Option<usize>, String> {
+    Ok(Runs::max_agents(app.tasks()?.root()))
+}
+
+/// Limit how many agents run at once in this repository; none: no limit.
+/// Starts past the limit wait for a free slot.
+#[tauri::command(async)]
+pub(crate) fn set_max_agents(app: State<App>, limit: Option<usize>) -> Result<(), String> {
+    let tasks = app.tasks()?;
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .current_dir(tasks.root())
+            .args(args)
+            .output()
+            .map_err(|e| e.to_string())
+    };
+    match limit.filter(|n| *n > 0) {
+        Some(n) => git(&["config", "spor.maxAgents", &n.to_string()])?,
+        None => git(&["config", "--unset", "spor.maxAgents"])?,
+    };
+    // A higher limit may free slots for starts that are waiting.
+    tasks.start_waiting();
+    Ok(())
+}
+
+/// Start waiting tasks while there are free slots; how many went.
+#[tauri::command(async)]
+pub(crate) fn start_waiting(app: State<App>) -> Result<usize, String> {
+    Ok(app.tasks()?.start_waiting())
 }
 
 /// Keep an image pasted or dropped into a prompt, and say where it is: the

@@ -1024,3 +1024,91 @@ fn a_fresh_follow_up_carries_the_debrief_instead_of_the_session() {
     assert!(sent.contains("- Open question: Keep v1?"), "{sent}");
     assert!(!sent.contains("git diff"), "{sent}");
 }
+
+#[test]
+fn only_so_many_agents_run_at_once_and_the_rest_wait_their_turn() {
+    use spor::agent::WAITING;
+    let f = fixture();
+    git(f.repo.root(), &["config", "spor.maxAgents", "1"]);
+    let make = |prompt: &str| {
+        f.tasks
+            .create(prompt, "main")
+            .and_then(|t| f.tasks.start_branch(&t))
+            .unwrap()
+    };
+    let (a, b, c) = (make("First"), make("Second"), make("Third"));
+    let slow = AgentKind::Command("sleep 30".into());
+    let quick = AgentKind::Command("echo done".into());
+
+    Runs::of(&f.tasks, &a)
+        .start(&a, &slow, "x", None, NO_COMMANDS)
+        .unwrap();
+    assert_eq!(f.tasks.running_agents(), 1);
+
+    // Past the limit a start waits, and keeps its place in line.
+    let rb = Runs::of(&f.tasks, &b);
+    let err = rb
+        .start(&b, &quick, "second", None, NO_COMMANDS)
+        .unwrap_err();
+    assert_eq!(err, WAITING);
+    std::thread::sleep(Duration::from_millis(1100));
+    let rc = Runs::of(&f.tasks, &c);
+    assert_eq!(
+        rc.start(&c, &quick, "third", None, NO_COMMANDS)
+            .unwrap_err(),
+        WAITING
+    );
+    assert!(rb.latest().is_none(), "nothing ran for it");
+    let line: Vec<String> = f.tasks.waiting().into_iter().map(|t| t.id).collect();
+    assert_eq!(line, [b.id.clone(), c.id.clone()]);
+    assert_eq!(rb.waiting().unwrap().prompt, "second");
+    // Asking again doesn't lose its place.
+    assert!(rb.start(&b, &quick, "second", None, NO_COMMANDS).is_err());
+    assert_eq!(f.tasks.waiting()[0].id, b.id);
+
+    // Nothing starts while the slot is taken.
+    assert_eq!(f.tasks.start_waiting(), 0);
+    // A freed slot goes to the one waiting longest, then the next.
+    Runs::of(&f.tasks, &a).stop().unwrap();
+    assert_eq!(wait_until_done(&Runs::of(&f.tasks, &a)), RunState::Stopped);
+    assert_eq!(f.tasks.start_waiting(), 1);
+    assert_eq!(wait_until_done(&rb), RunState::Finished);
+    assert!(rb.waiting().is_none());
+    assert_eq!(f.tasks.start_waiting(), 1, "the slot b used is free again");
+    assert_eq!(wait_until_done(&rc), RunState::Finished);
+    assert!(f.tasks.waiting().is_empty());
+
+    // Giving up waiting takes it out of the line.
+    Runs::of(&f.tasks, &a)
+        .start(&a, &slow, "again", None, NO_COMMANDS)
+        .unwrap();
+    assert_eq!(
+        rb.start(&b, &quick, "more", None, NO_COMMANDS).unwrap_err(),
+        WAITING
+    );
+    rb.cancel_waiting();
+    assert!(f.tasks.waiting().is_empty());
+    Runs::of(&f.tasks, &a).stop().unwrap();
+}
+
+#[test]
+fn without_a_limit_agents_just_start() {
+    let f = fixture();
+    let make = |prompt: &str| {
+        f.tasks
+            .create(prompt, "main")
+            .and_then(|t| f.tasks.start_branch(&t))
+            .unwrap()
+    };
+    let (a, b) = (make("One"), make("Two"));
+    let slow = AgentKind::Command("sleep 30".into());
+    Runs::of(&f.tasks, &a)
+        .start(&a, &slow, "x", None, NO_COMMANDS)
+        .unwrap();
+    Runs::of(&f.tasks, &b)
+        .start(&b, &slow, "y", None, NO_COMMANDS)
+        .unwrap();
+    assert_eq!(f.tasks.running_agents(), 2);
+    Runs::of(&f.tasks, &a).stop().unwrap();
+    Runs::of(&f.tasks, &b).stop().unwrap();
+}

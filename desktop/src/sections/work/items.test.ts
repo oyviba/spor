@@ -144,3 +144,13 @@ test("unseen until opened", () => {
   assert.equal(unseen(item, { "pull:1": 50 }), false);
   assert.equal(unseen(item, { "pull:1": 40 }), true);
 });
+
+test("a task whose start is held back by the agent limit says it is waiting for a slot", async () => {
+  const { statusOf } = await import("../agents/status.ts");
+  const waiting = (n: number) => statusOf(task("a", 1, { waiting: n }), undefined, 0);
+  assert.equal(waiting(1)?.label, "Waiting for a slot");
+  assert.equal(waiting(3)?.label, "Waiting for a slot · #3 in line");
+  assert.equal(waiting(1)?.live, false);
+  // A question still comes first.
+  assert.equal(statusOf(task("a", 1, { waiting: 1, asks: 1 }), undefined, 0)?.label, "Needs you");
+});

@@ -95,6 +95,7 @@ const summary = (id: string, prompt: string, created: number, over: Partial<Task
   issue: null,
   pull: null,
   queued: [],
+  waiting: null,
   spent: 0.42,
   tokens: 190_200,
   ...over,
@@ -899,6 +900,11 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         return null;
       case "clean_up_tasks":
         return "Nothing to clean up";
+      case "get_max_agents":
+        return null;
+      case "set_max_agents":
+      case "start_waiting":
+        return cmd === "start_waiting" ? 0 : null;
       case "search_transcripts": {
         const q = String(args.query ?? "").toLowerCase().trim();
         if (!q) return [];

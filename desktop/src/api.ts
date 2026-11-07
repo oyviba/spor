@@ -248,6 +248,11 @@ export const api = {
   /** Repeated corrections across tasks, as candidate lines for CLAUDE.md (#107). Slow: it asks Claude. */
   /** Search what was said across every task's conversation, landed ones included (#108). */
   searchTranscripts: (query: string) => call<TranscriptHit[]>("search_transcripts", { query }),
+  /** How many agents may run at once in this repository; null: no limit. Starts past it wait. */
+  maxAgents: () => call<number | null>("get_max_agents"),
+  setMaxAgents: (limit: number | null) => call<void>("set_max_agents", { limit }),
+  /** Start tasks waiting for a free slot, while there are some. */
+  startWaiting: () => call<number>("start_waiting"),
   suggestRules: () => call<RuleSuggestion[]>("suggest_rules"),
   addRule: (rule: string) => call<string>("add_rule", { rule }),
   declineRule: (rule: string) => call<void>("decline_rule", { rule }),
