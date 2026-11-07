@@ -4,7 +4,7 @@ import type { LineComment, Pull, RunPatch, TaskDetail, TaskPull, TaskSummary, Wo
 import { activityAt, matches, moveTo, shelve, workItems, type Filter, type WorkItem } from "./items";
 import { isOpen } from "../agents/status";
 import { catchUpPrompt, restorePrompt } from "../agents/prompts";
-import { useChanged, usePoll, useRepoChanges, useStored } from "../../shared/hooks";
+import { useChanged, usePoll, useRepoChanges, useStored, GITHUB_POLL_MS, GITHUB_LIVE_MS } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { EmptyState } from "../../shared/Layout";
 import { Sidebar } from "./Sidebar";
@@ -97,7 +97,7 @@ export function WorkSection() {
       setHub(NO_GITHUB);
     }
   }, []);
-  usePoll(refreshGithub, 60_000, [repo.root]);
+  usePoll(refreshGithub, GITHUB_POLL_MS, [repo.root], true, true);
 
   const refreshTasks = shell.reloadTasks;
 
@@ -127,7 +127,7 @@ export function WorkSection() {
           );
     merged.current = now;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  usePoll(refreshPulls, 30_000, [repo.root, openTasks], openTasks > 0);
+  usePoll(refreshPulls, GITHUB_LIVE_MS, [repo.root, openTasks], openTasks > 0, true);
 
   const items = useMemo(
     () => workItems({ tasks, taskPulls: pulls, branches, pulls: hub.pulls, yours: hub.yours, review: hub.review, seen }),

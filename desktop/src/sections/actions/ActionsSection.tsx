@@ -5,7 +5,7 @@ import { Button } from "../../shared/Button";
 import { useShell } from "../../shared/app";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromBranch } from "../../shared/work";
-import { useChanged, useNow, usePoll, useStored } from "../../shared/hooks";
+import { useChanged, useNow, usePoll, useStored, GITHUB_POLL_MS, GITHUB_LIVE_MS } from "../../shared/hooks";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { StatusPill } from "../../shared/StatusPill";
 import { CiIcon, ciStatus, elapsed } from "../../shared/ci";
@@ -51,8 +51,10 @@ export function ActionsSection() {
         setRuns([]);
       }
     },
-    anyLive ? 10_000 : 30_000,
+    anyLive ? GITHUB_LIVE_MS : GITHUB_POLL_MS,
     [workflow, branch, nonce],
+    true,
+    true,
   );
   useEffect(() => {
     api.workflows().then(setWorkflows, () => {});
@@ -87,9 +89,10 @@ export function ActionsSection() {
         fail(e);
       }
     },
-    live ? 5000 : 60_000,
+    live ? 15_000 : GITHUB_POLL_MS,
     [selected, nonce],
     selected != null && !error,
+    true,
   );
   useChanged(() => setDetail(null), [selected]);
 

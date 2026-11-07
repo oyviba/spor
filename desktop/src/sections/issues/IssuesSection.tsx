@@ -4,7 +4,7 @@ import type { Issue, IssueDetail, TaskSummary } from "../../types";
 import { useShell } from "../../shared/app";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromIssue, itemFromTask } from "../../shared/work";
-import { useChanged, usePoll, useStored } from "../../shared/hooks";
+import { useChanged, usePoll, useStored, GITHUB_POLL_MS } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { Markdown } from "../../shared/Markdown";
@@ -60,8 +60,10 @@ export function IssuesSection() {
         setIssues([]);
       }
     },
-    60_000,
+    GITHUB_POLL_MS,
     [filter],
+    true,
+    true,
   );
   useChanged(() => {
     if (shell.target.section === "issues" && shell.target.number) setSelected(shell.target.number);
@@ -75,7 +77,7 @@ export function IssuesSection() {
       fail(e);
     }
   };
-  usePoll(loadDetail, 60_000, [selected], selected != null && !error);
+  usePoll(loadDetail, GITHUB_POLL_MS, [selected], selected != null && !error, true);
   useChanged(() => setDetail(null), [selected]);
 
   // The newest task on an issue: an open one, else the last that landed.

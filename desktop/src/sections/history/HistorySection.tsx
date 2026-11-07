@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import type { BranchInfo, CommitDetail, Graph as GraphData, PrBadge, TagInfo, WorktreeInfo } from "../../types";
 import { useShell } from "../../shared/app";
-import { useChanged, useNow, usePoll, useStored } from "../../shared/hooks";
+import { useChanged, useNow, usePoll, useStored, GITHUB_POLL_MS } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
@@ -63,8 +63,10 @@ export function HistorySection() {
         (list) => setPrs(new Map(list.map((b) => [b.branch, b]))),
         () => undefined,
       ),
-    60_000,
+    GITHUB_POLL_MS,
     [state?.refs],
+    true,
+    true,
   );
 
   // Sent here from elsewhere: a branch (an agent task's), a commit, or a
