@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useChanged } from "../../shared/hooks";
 import type { SetupInfo, TaskDetail, TaskPull } from "../../types";
-import { duration, tokens } from "./transcript";
+import { checksLabel, duration, latestChecks, runs as toRuns, tokens } from "./transcript";
 import { useShell } from "../../shared/app";
 import { Button } from "../../shared/Button";
 import { Debrief } from "./Debrief";
@@ -104,6 +104,11 @@ export function Inspector({ detail, ...p }: Props) {
   const undoneLines = detail.undoes.reduce((n, u) => n + u.lines, 0);
   const lastRun = detail.runs.at(-1);
   const spent = detail.runs.reduce((n, r) => n + (r.cost_usd ?? 0), 0);
+  const views = toRuns(detail.transcript, running);
+  const checks = checksLabel(
+    latestChecks(views),
+    views.some((r) => r.edited),
+  );
   const spentTokens = detail.runs.reduce((n, r) => n + r.tokens_in + r.tokens_out, 0);
 
   // What merging its PR from here waits for. GitHub has the final say
@@ -247,6 +252,13 @@ export function Inspector({ detail, ...p }: Props) {
               {spentTokens > 0 && ` · ${tokens(spentTokens)} tokens`}
             </span>
           </div>
+          {checks && (
+            <div className="inspector-row">
+              <span className="num small-text" title="Read from the commands the agent ran">
+                {checks}
+              </span>
+            </div>
+          )}
           {lastRun.model && (
             <div className="inspector-row">
               <span className="num small-text muted" title="The model that actually ran, from Claude Code's start-up message">

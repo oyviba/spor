@@ -258,6 +258,16 @@ pub(crate) enum Item {
     Todos {
         todos: Vec<TodoInfo>,
     },
+    /// What a command printed (#97), and whether it was a test run or a build.
+    Result {
+        name: String,
+        detail: String,
+        ok: bool,
+        output: String,
+        truncated: bool,
+        /// "tests", "build", or none.
+        check: Option<&'static str>,
+    },
 }
 
 #[derive(Serialize)]
@@ -350,6 +360,24 @@ impl Item {
                 model: init.model,
             },
             Entry::Compacted => Item::Compacted,
+            Entry::Result {
+                name,
+                detail,
+                ok,
+                output,
+                truncated,
+            } => Item::Result {
+                check: match spor::agent::check_kind(&detail) {
+                    Some(spor::agent::CheckKind::Tests) => Some("tests"),
+                    Some(spor::agent::CheckKind::Build) => Some("build"),
+                    None => None,
+                },
+                detail: detail.replace(folder, ""),
+                name,
+                ok,
+                output: output.replace(folder, ""),
+                truncated,
+            },
             Entry::Todos(list) => Item::Todos {
                 todos: list
                     .into_iter()

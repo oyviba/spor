@@ -142,7 +142,17 @@ export type Item =
   /** The conversation was compacted here. */
   | { kind: "compacted" }
   /** The agent's plan as it now stands (TodoWrite, #96). */
-  | { kind: "todos"; todos: Todo[] };
+  | { kind: "todos"; todos: Todo[] }
+  /** What a command printed (#97): the end of its output, and whether it's a test run or a build. */
+  | {
+      kind: "result";
+      name: string;
+      detail: string;
+      ok: boolean;
+      output: string;
+      truncated: boolean;
+      check: "tests" | "build" | null;
+    };
 
 /** One step of the agent's plan. */
 export interface Todo {

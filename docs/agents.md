@@ -270,3 +270,7 @@ Claude Code doesn't prompt for any tool.
 ## What the agent is told (#105)
 
 Each run gets a short generated block: its folder, branch and base, that spor publishes (so it shouldn't push), the issue it is for, where attached images live, whether `.spor/checks` exists, and the other active tasks with the files they have changed so far. Claude Code gets it with `--append-system-prompt`; a custom command gets it in `$SPOR_CONTEXT`. A committed `.spor/context.md` is appended. The text is kept beside the run as `run-N.context`, and every run (follow-ups too) builds it fresh.
+
+## Reading what commands printed (#97)
+
+`parse_claude` pairs each `Bash` call with its result by `tool_use_id` and keeps the end of the output (8,000 characters; the whole text stays in `run-N.log`) and whether the tool reported an error. In the Agent tab, an unfolded command opens to its output. Test and build commands (`cargo test`, `pnpm test`, `pytest`, `go test`, `tsc`, `cargo build` and the like) are recognised, and the last outcome of each shows on the run's fold and the task's details card: "Tests ✓ · Build ✓", "Tests ✗ (last run)", or "Tests not run" for a run that changed files.

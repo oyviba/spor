@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import type { Progress, RunInfo, TaskDetail, Todo } from "../../types";
+import type { Item, Progress, RunInfo, TaskDetail, Todo } from "../../types";
 import { liveLine } from "./progress";
 import { duration, runs as toRuns, stoppedLabel, summarize, tokens, type Block, type RunView, type Tool } from "./transcript";
 import { useChanged, useNow, useStored } from "../../shared/hooks";
@@ -371,7 +371,7 @@ function BlockView({
       </div>
     );
   }
-  return <ToolGroup tools={block.tools} id={id} live={live} expanded={open.has(id)} toggle={toggle} />;
+  return <ToolGroup tools={block.tools} id={id} live={live} expanded={open.has(id)} open={open} toggle={toggle} />;
 }
 
 /** A stretch of tool calls as one sentence; open it for the list. */
@@ -380,12 +380,14 @@ function ToolGroup({
   id,
   live,
   expanded,
+  open,
   toggle,
 }: {
   tools: Tool[];
   id: string;
   live: boolean;
   expanded: boolean;
+  open: Set<string>;
   toggle: (key: string) => void;
 }) {
   const { text, failed } = summarize(tools);
@@ -410,6 +412,7 @@ function ToolGroup({
                   <ToolIcon name={t.name} size={12} />
                   <span className="tool-name">{t.name}</span>
                   <code>{t.detail}</code>
+                  {t.result && <ResultOutput result={t.result} id={`${id}-out-${i}`} open={open} toggle={toggle} />}
                 </>
               ) : (
                 <>
@@ -430,6 +433,42 @@ function ToolGroup({
         )
       )}
     </div>
+  );
+}
+
+/** A command's output, folded like an Actions log step (#97). */
+function ResultOutput({
+  result,
+  id,
+  open,
+  toggle,
+}: {
+  result: Extract<Item, { kind: "result" }>;
+  id: string;
+  open: Set<string>;
+  toggle: (key: string) => void;
+}) {
+  const shown = open.has(id);
+  const empty = result.output.trim() === "";
+  return (
+    <>
+      {result.check && (
+        <span className={`check-badge ${result.ok ? "ok" : "bad"}`}>
+          {result.check === "tests" ? "tests" : "build"} {result.ok ? "✓" : "✗"}
+        </span>
+      )}
+      {!empty && (
+        <button className="link result-toggle" onClick={() => toggle(id)} aria-expanded={shown}>
+          {shown ? "Hide output" : "Output"}
+        </button>
+      )}
+      {shown && (
+        <pre className="result-output">
+          {result.truncated && "… (the start is in the run's log)\n"}
+          {result.output}
+        </pre>
+      )}
+    </>
   );
 }
 

@@ -845,6 +845,7 @@ button.busy::after {
   gap: 3px;
 }
 .tool-list li {
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -860,6 +861,33 @@ button.busy::after {
 }
 .tool-list li.bad {
   color: var(--red);
+}
+.check-badge {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.check-badge.ok {
+  color: var(--green, var(--fg-2));
+}
+.check-badge.bad {
+  color: var(--red);
+}
+.result-toggle {
+  font-size: 11px;
+}
+.tool-list li .result-output {
+  flex-basis: 100%;
+  margin: 2px 0 4px;
+  background: var(--raised);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font: 11.5px/1.45 var(--mono);
+  white-space: pre-wrap;
+  max-height: 280px;
+  overflow: auto;
+  color: var(--fg-2);
 }
 .tool-name {
   font-weight: 500;
