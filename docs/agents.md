@@ -31,7 +31,7 @@ be an agent. It should be the control tower the agents report to.
 ## The idea in one paragraph
 
 A **task** is a prompt plus the branch and worktree it runs in. Starting one
-creates `agent/<slug>` from a base branch, checks it out in its own
+creates `agent/<three-random-words>` from a base branch, checks it out in its own
 worktree, and launches an agent there. From then on spor treats the branch
 like any other, so its commits show up live in History as their own lane.
 It also tracks what git can't tell it: whether the agent is running,
@@ -65,7 +65,7 @@ The groundwork this needs is now in the core (`src/git.rs`):
 
 ```rust
 struct Task {
-    id: String,             // short slug, also the branch suffix
+    id: String,             // three random words (brave-otter-jumps), also the branch suffix
     prompt: String,
     base: String,           // branch it started from, e.g. "main"
     branch: String,         // "agent/<id>"

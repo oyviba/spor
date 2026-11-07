@@ -81,13 +81,15 @@ fn create_puts_a_branch_in_its_own_folder() {
         .create("Fix the login redirect", "main")
         .and_then(|t| f.tasks.start_branch(&t))
         .unwrap();
-    assert_eq!(task.id, "fix-login-redirect");
-    assert_eq!(task.branch, "agent/fix-login-redirect");
-    assert!(task.worktree.ends_with("app.spor/fix-login-redirect"));
+    // Three random words, not the prompt's.
+    assert_eq!(task.id.split('-').count(), 3, "{}", task.id);
+    assert!(!task.id.contains("login"), "{}", task.id);
+    assert_eq!(task.branch, format!("agent/{}", task.id));
+    assert!(task.worktree.ends_with(format!("app.spor/{}", task.id)));
     assert!(task.worktree.join("app.txt").exists());
     assert_eq!(
         task.repo().tracking().unwrap().branch.as_deref(),
-        Some("agent/fix-login-redirect")
+        Some(task.branch.as_str())
     );
     // The same prompt again gets its own id.
     let again = f
@@ -95,7 +97,7 @@ fn create_puts_a_branch_in_its_own_folder() {
         .create("Fix the login redirect", "main")
         .and_then(|t| f.tasks.start_branch(&t))
         .unwrap();
-    assert_eq!(again.id, "fix-login-redirect-2");
+    assert_ne!(again.id, task.id);
     let listed: Vec<String> = f.tasks.list().into_iter().map(|t| t.id).collect();
     assert_eq!(listed.len(), 2);
     assert!(f.tasks.create("  ", "main").is_err());
@@ -159,7 +161,7 @@ fn land_squashes_onto_the_base_and_cleans_up() {
     assert_eq!(subjects(f.repo.root()), ["Add a parser", "start"]);
     let body = git(f.repo.root(), &["log", "-1", "--format=%B"]);
     assert!(body.contains("Keep it small."));
-    assert!(body.contains("Spor-Task: add-parser"));
+    assert!(body.contains(&format!("Spor-Task: {}", task.id)));
     assert!(!task.worktree.exists());
     assert!(f.repo.resolve(&task.branch).is_err());
     let landed = f.tasks.get(&task.id).unwrap();
@@ -290,8 +292,10 @@ fn issue_tasks_are_named_after_the_issue_and_close_it_when_landed() {
         )
         .and_then(|t| f.tasks.start_branch(&t))
         .unwrap();
-    assert_eq!(task.id, "7-login-fails-safari");
-    assert_eq!(task.branch, "agent/7-login-fails-safari");
+    assert!(task.id.starts_with("7-"), "{}", task.id);
+    assert_eq!(task.id.split('-').count(), 4, "the number and three words");
+    assert!(!task.id.contains("safari"), "{}", task.id);
+    assert_eq!(task.branch, format!("agent/{}", task.id));
     assert_eq!(task.issue, Some(7));
     assert_eq!(f.tasks.get(&task.id).unwrap().issue, Some(7));
     assert!(task.pull_request_body(None).starts_with("Closes #7"));
@@ -301,7 +305,10 @@ fn issue_tasks_are_named_after_the_issue_and_close_it_when_landed() {
     let message = git(f.repo.root(), &["log", "-1", "--format=%B"]);
     assert_eq!(
         message.trim(),
-        "Login fails on Safari (#7)\n\nCloses #7\n\nSpor-Task: 7-login-fails-safari"
+        format!(
+            "Login fails on Safari (#7)\n\nCloses #7\n\nSpor-Task: {}",
+            task.id
+        )
     );
 }
 
@@ -345,7 +352,11 @@ fn publish_pushes_the_branch_before_opening_a_pull_request() {
     assert!(err.contains("GitHub"), "{err}");
     git(
         &remote,
-        &["rev-parse", "--verify", "refs/heads/agent/add-thing"],
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("refs/heads/{}", task.branch),
+        ],
     );
     assert_eq!(f.tasks.get(&task.id).unwrap().pull, None);
 
@@ -363,7 +374,7 @@ fn publish_pushes_the_branch_before_opening_a_pull_request() {
     assert_eq!((stats.uncommitted, stats.unpushed), (0, 0));
     assert_eq!(
         subjects(&task.worktree)[0],
-        "Uncommitted work from add-thing"
+        format!("Uncommitted work from {}", task.id)
     );
 }
 
@@ -387,7 +398,10 @@ fn settle_cleans_up_after_a_merged_pull_request_and_can_be_undone() {
 
     let undo = f.tasks.settle(&task, "abc123").unwrap();
     assert!(!task.worktree.exists());
-    assert!(f.repo.resolve("refs/heads/agent/merged-elsewhere").is_err());
+    assert!(f
+        .repo
+        .resolve(&format!("refs/heads/{}", task.branch))
+        .is_err());
     let settled = f.tasks.get(&task.id).unwrap();
     assert_eq!(settled.state, TaskState::Landed("abc123".into()));
     assert_eq!(settled.pull, Some(12));
@@ -413,7 +427,10 @@ fn close_cleans_up_after_a_closed_pull_request_and_can_be_undone() {
 
     let undo = f.tasks.close(&task).unwrap();
     assert!(!task.worktree.exists());
-    assert!(f.repo.resolve("refs/heads/agent/closed-elsewhere").is_err());
+    assert!(f
+        .repo
+        .resolve(&format!("refs/heads/{}", task.branch))
+        .is_err());
     let closed = f.tasks.get(&task.id).unwrap();
     assert_eq!(closed.state, TaskState::Closed);
     assert_eq!(closed.pull, Some(13));
@@ -688,7 +705,7 @@ fn a_new_task_has_no_branch_or_folder_until_it_writes() {
     let f = fixture();
     let task = f.tasks.create("Just look around", "main").unwrap();
     assert!(task.pending);
-    assert_eq!(task.branch, "agent/just-look-around");
+    assert_eq!(task.branch, format!("agent/{}", task.id));
     assert!(!task.worktree.exists());
     assert!(f
         .repo
@@ -742,7 +759,7 @@ fn the_branch_is_made_on_first_write_from_the_base_as_it_is_then() {
     assert!(started.worktree.join("later.txt").exists());
     assert_eq!(
         started.repo().tracking().unwrap().branch.as_deref(),
-        Some("agent/add-parser")
+        Some(started.branch.as_str())
     );
     assert!(!f.tasks.get(&task.id).unwrap().pending);
     // Starting again changes nothing.
