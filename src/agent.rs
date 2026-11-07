@@ -1535,7 +1535,7 @@ echo $code > "$SPOR_EXIT""#;
             .map(unescape)
     }
 
-    fn file(&self, index: usize, ext: &str) -> PathBuf {
+    pub(crate) fn file(&self, index: usize, ext: &str) -> PathBuf {
         self.dir.join(format!("run-{index}.{ext}"))
     }
 }
@@ -1973,23 +1973,17 @@ fn rule_words(tool: &str, content: Option<&str>) -> String {
     }
 }
 
-/// A pull request title and description for the task's work, written by
-/// Claude Code. It continues (a fork of) the task's session when there is
-/// one, so it knows why the work was done, not just what changed, and it
-/// can only read: look at the branch, not change it.
-pub fn describe_pull(tasks: &Tasks, task: &Task) -> Result<(String, String), String> {
-    let prompt = format!(
-        "Write the pull request for this branch's work: `{branch}` into `{base}`. \
-         Look at what it changes (`git log {start}..HEAD`, `git diff {start}...HEAD`) \
-         and, if this conversation has it, why.\n\n\
-         Reply with only the pull request: its title on the first line (under 72 \
-         characters, no prefix, no quotes), a blank line, then the description in \
-         GitHub markdown: what changed and why, and anything a reviewer should look \
-         at closely. Only say how it was tested if it was. Don't change any files.",
-        branch = task.branch,
-        base = task.base,
-        start = task.start(),
-    );
+/// Ask Claude Code one read-only question in a fork of `session` (when
+/// there is one), from the task's folder, and return its reply. `effort`
+/// is the `--effort` flag, if any. `what` completes "Claude took too long
+/// to …" and "Claude couldn't …".
+pub(crate) fn ask_readonly(
+    task: &Task,
+    session: Option<String>,
+    effort: Option<&str>,
+    prompt: &str,
+    what: &str,
+) -> Result<String, String> {
     let mut args: Vec<String> = [
         "--output-format",
         "json",
@@ -2002,10 +1996,13 @@ pub fn describe_pull(tasks: &Tasks, task: &Task) -> Result<(String, String), Str
     ]
     .map(String::from)
     .to_vec();
-    if let Some(session) = Runs::of(tasks, task).session() {
+    if let Some(session) = session {
         args.extend(["--resume".into(), session, "--fork-session".into()]);
     }
-    args.extend(["-p".into(), prompt]);
+    if let Some(effort) = effort {
+        args.extend(["--effort".into(), effort.into()]);
+    }
+    args.extend(["-p".into(), prompt.into()]);
     let mut child = Command::new("claude")
         .args(&args)
         .current_dir(&task.worktree)
@@ -2029,7 +2026,7 @@ pub fn describe_pull(tasks: &Tasks, task: &Task) -> Result<(String, String), Str
             None if std::time::Instant::now() > deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("Claude took too long to describe the pull request".into());
+                return Err(format!("Claude took too long to {what}"));
             }
             None => std::thread::sleep(std::time::Duration::from_millis(200)),
         }
@@ -2037,10 +2034,36 @@ pub fn describe_pull(tasks: &Tasks, task: &Task) -> Result<(String, String), Str
     let stdout = reader.join().unwrap_or_default();
     let event = Json::parse(stdout.trim()).ok_or("Couldn't read Claude's reply")?;
     if event.get("is_error").bool() == Some(true) {
-        return Err("Claude couldn't describe the pull request".into());
+        return Err(format!("Claude couldn't {what}"));
     }
-    let result = event.get("result").str().unwrap_or("");
-    parse_pull_text(result).ok_or_else(|| "Claude's description had no title".into())
+    Ok(event.get("result").str().unwrap_or("").to_string())
+}
+
+/// A pull request title and description for the task's work, written by
+/// Claude Code. It continues (a fork of) the task's session when there is
+/// one, so it knows why the work was done, not just what changed, and it
+/// can only read: look at the branch, not change it.
+pub fn describe_pull(tasks: &Tasks, task: &Task) -> Result<(String, String), String> {
+    let prompt = format!(
+        "Write the pull request for this branch's work: `{branch}` into `{base}`. \
+         Look at what it changes (`git log {start}..HEAD`, `git diff {start}...HEAD`) \
+         and, if this conversation has it, why.\n\n\
+         Reply with only the pull request: its title on the first line (under 72 \
+         characters, no prefix, no quotes), a blank line, then the description in \
+         GitHub markdown: what changed and why, and anything a reviewer should look \
+         at closely. Only say how it was tested if it was. Don't change any files.",
+        branch = task.branch,
+        base = task.base,
+        start = task.start(),
+    );
+    let result = ask_readonly(
+        task,
+        Runs::of(tasks, task).session(),
+        None,
+        &prompt,
+        "describe the pull request",
+    )?;
+    parse_pull_text(&result).ok_or_else(|| "Claude's description had no title".into())
 }
 
 /// A reply of a title line, a blank line and a description, as (title,

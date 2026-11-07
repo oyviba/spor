@@ -1,4 +1,5 @@
 import type {
+  Debrief,
   AgentChoice,
   BlameRow,
   BranchInfo,
@@ -190,6 +191,8 @@ export const api = {
   // Agents
   listTasks: () => call<TaskSummary[]>("list_tasks"),
   taskDetail: (id: string) => call<TaskDetail>("task_detail", { id }),
+  /** Write the latest run's debrief if it wants one (#104); null when the repository opted out. */
+  debriefTask: (id: string) => call<Debrief | null>("debrief_task", { id }),
   taskPatch: (id: string) => call<string>("task_patch", { id }),
   createTask: (prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
     call<TaskSummary>("create_task", { prompt, base, agent, mode }),

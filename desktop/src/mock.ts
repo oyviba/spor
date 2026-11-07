@@ -644,6 +644,8 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           setup: t.summary.id === "login-redirect" ? { script: ".spor/setup", state: "worked", code: null } : null,
           asks: t.asks ?? [],
           listening: t.summary.run?.state === "running",
+          debrief: null,
+          wants_debrief: false,
         };
         return structuredClone(detail);
       }

@@ -77,3 +77,8 @@ test("a question's row says what it asks", () => {
   );
   assert.equal(askLine(null, 1), "The agent is asking before it goes on");
 });
+
+test("a finished run says why from its debrief", () => {
+  const [item] = inboxItems([task({ reason: "2 open questions" })], null, {});
+  assert.equal(item.detail, "The agent finished · 2 open questions");
+});

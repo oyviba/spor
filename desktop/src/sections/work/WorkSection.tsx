@@ -536,6 +536,7 @@ export function WorkSection() {
                 return refreshTasks();
               })
             }
+            onStartTask={(prompt) => create(prompt, shown.task.base, true)}
             onAskRebase={askRebase}
             onAskRestore={askRestore}
             onCopy={(text, what) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), fail)}

@@ -4,6 +4,7 @@ import type { SetupInfo, TaskDetail, TaskPull } from "../../types";
 import { duration, tokens } from "./transcript";
 import { useShell } from "../../shared/app";
 import { Button } from "../../shared/Button";
+import { Debrief } from "./Debrief";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromTask } from "../../shared/work";
 import {
@@ -50,6 +51,10 @@ interface Props extends GithubActions {
   /** Ask the agent to put back what it would undo on the base. */
   onAskRestore: () => void;
   onRerunSetup: () => unknown;
+  /** Send the agent a follow-up (answers to its open questions). */
+  onSend: (text: string) => unknown;
+  /** Start a new task from something the agent noticed. */
+  onStartTask: (prompt: string) => unknown;
 }
 
 /** The task's details and landing actions, in a small floating card, under
@@ -259,6 +264,7 @@ export function Inspector({ detail, ...p }: Props) {
           )}
         </div>
       )}
+      {!running && <Debrief detail={detail} onSend={p.onSend} onStartTask={p.onStartTask} />}
       {merged && (
         <div className="inspector-actions">
           <div className="inspector-note">Its pull request landed. Its folder and branch can go.</div>

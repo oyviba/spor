@@ -63,7 +63,12 @@ export function inboxItems(
         kind: "ready",
         repo: t.repo,
         title: t.title,
-        detail: t.run === "failed" ? "The agent's run failed" : "The agent finished",
+        detail:
+          t.run === "failed"
+            ? "The agent's run failed"
+            : t.reason
+              ? `The agent finished · ${t.reason}`
+              : "The agent finished",
         since: taskActivity(t),
         target,
       });
