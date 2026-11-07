@@ -203,17 +203,45 @@ export interface Command {
 }
 
 /** ⌘K: every command, section, recent repository and branch, by typing. */
-export function Palette({ commands, onClose }: { commands: Command[]; onClose: () => void }) {
+export function Palette({
+  commands,
+  onClose,
+  search,
+}: {
+  commands: Command[];
+  onClose: () => void;
+  /** Also look in what was said in agents' conversations (#108); results come after a pause in typing. */
+  search?: (query: string) => Promise<Command[]>;
+}) {
   const [query, setQuery] = useState("");
+  const [found, setFound] = useState<Command[]>([]);
+  useEffect(() => {
+    setFound([]);
+    const q = query.trim();
+    if (!search || q.length < 3) return;
+    let stale = false;
+    const timer = setTimeout(() => {
+      search(q).then(
+        (hits) => !stale && setFound(hits),
+        () => {},
+      );
+    }, 250);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [query, search]);
   const [sel, setSel] = useState(0);
   const list = useRef<HTMLDivElement>(null);
   const shown = useMemo(() => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    return commands.filter((c) => {
+    const own = commands.filter((c) => {
       const hay = `${c.label} ${c.hint ?? ""}`.toLowerCase();
       return words.every((w) => hay.includes(w));
     });
-  }, [query, commands]);
+    // What was said in conversations comes after the commands.
+    return [...own, ...found];
+  }, [query, commands, found]);
   useEffect(() => setSel(0), [query]);
   useEffect(() => {
     list.current?.querySelector(".palette-item.selected")?.scrollIntoView({ block: "nearest" });

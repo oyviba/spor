@@ -286,3 +286,7 @@ When the latest Claude run's context is 80% full or more, the composer offers *S
 ## Rules worth writing down (#107)
 
 *Look for rules to write down* (at the foot of the Work sidebar) collects what people told the agents across the repository's tasks: follow-up messages (line comments go in them), steering, and the reason given for a denial. Claude Code, read-only at low effort, groups them into candidate lines for the repository's rules file. Only rules that at least two different tasks asked for are shown, each with an editable line, *Add* and *Not this one*. *Add* appends a bullet to `CLAUDE.md` (or `AGENTS.md` if that is what the repository has) in the main checkout, as an uncommitted change; added and declined rules are remembered in `.git/spor/rules.known` and not suggested again. Permission patterns (a command allowed in several tasks) aren't suggested yet.
+
+## Finding the conversation behind a line (#108)
+
+A commit landed by a task carries a `Spor-Task: <id>` trailer. History's commit card says which task made it, with *Open conversation*; Blame shows *Why?* by the first line of each group whose commit has one. Landed tasks keep their transcripts (clean-up only deletes the transcripts of discarded tasks). ⌘K also searches what was said across all of a repository's tasks, landed ones included: prompts, follow-ups, the agent's words, steering and debriefs. A result opens the task; it doesn't yet scroll to the run it was found in.

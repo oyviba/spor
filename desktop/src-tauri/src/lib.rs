@@ -484,6 +484,7 @@ pub fn run() {
             agents::send_queued,
             agents::clean_up_tasks,
             agents::suggest_rules,
+            agents::search_transcripts,
             agents::add_rule,
             agents::decline_rule,
             agents::create_issue_task,

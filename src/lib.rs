@@ -19,5 +19,6 @@ pub mod mcp;
 pub mod patch;
 pub mod remote;
 pub mod rules;
+pub mod search;
 pub mod tasks;
 pub mod work;

@@ -1097,6 +1097,43 @@ pub(crate) fn clean_up_tasks(app: State<App>) -> Result<String, String> {
 }
 
 #[derive(Serialize)]
+pub(crate) struct TranscriptHit {
+    task: String,
+    title: String,
+    /// The run it was said in.
+    run: usize,
+    /// "prompt", "agent", "steer" or "debrief".
+    kind: &'static str,
+    snippet: String,
+}
+
+/// Search what was said across every task's conversation, landed ones
+/// included (#108).
+#[tauri::command(async)]
+pub(crate) fn search_transcripts(
+    app: State<App>,
+    query: String,
+) -> Result<Vec<TranscriptHit>, String> {
+    use spor::search::Where;
+    let tasks = app.tasks()?;
+    Ok(spor::search::transcripts(&tasks, &query)
+        .into_iter()
+        .map(|h| TranscriptHit {
+            title: tasks.get(&h.task).map(|t| t.title()).unwrap_or_default(),
+            task: h.task,
+            run: h.run,
+            kind: match h.kind {
+                Where::Prompt => "prompt",
+                Where::Agent => "agent",
+                Where::Steer => "steer",
+                Where::Debrief => "debrief",
+            },
+            snippet: h.snippet,
+        })
+        .collect())
+}
+
+#[derive(Serialize)]
 pub(crate) struct RuleSuggestion {
     rule: String,
     /// The tasks whose corrections it came from.
