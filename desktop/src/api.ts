@@ -219,8 +219,9 @@ export const api = {
   /** Its PR merged: mark it landed and remove its folder and branch (⌘Z undoes). */
   settleTask: (id: string, commit: string) => call<string>("settle_task", { id, commit }),
   /** `message` null starts the task's own prompt; otherwise it's a follow-up. */
-  sendToAgent: (id: string, message: string | null, agent: AgentChoice, mode: Mode) =>
-    call<void>("send_to_agent", { id, message, agent, mode }),
+  /** `fresh`: start a new session from the task's prompt and the last debrief, not the full context (#98). */
+  sendToAgent: (id: string, message: string | null, agent: AgentChoice, mode: Mode, fresh?: boolean) =>
+    call<void>("send_to_agent", { id, message, agent, mode, fresh: fresh ?? null }),
   /** Answer a question the agent asked; `message` says what to do instead,
    * `always` allows it for the rest of the session (#40). */
   answerAsk: (id: string, requestId: string, allow: boolean, message = "", always = false) =>

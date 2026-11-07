@@ -2485,6 +2485,34 @@ impl Runs {
         })
     }
 
+    /// A follow-up in a new session (#98): when the last one's context is
+    /// nearly full, the task's prompt and the latest debrief (if it has
+    /// one) go in as the start of a fresh conversation, with `message`
+    /// after them. The agent and model are the last run's.
+    pub fn follow_up_fresh(
+        &self,
+        task: &Task,
+        message: &str,
+        permissions: Permissions,
+    ) -> Result<Run, String> {
+        let last = self
+            .latest()
+            .ok_or("There's no earlier run to carry on from")?;
+        if let Some(e) = missing(&last.kind) {
+            return Err(e);
+        }
+        let mut prompt = format!("{}\n\n", task.prompt.trim());
+        match self.latest_debrief() {
+            Some(d) => prompt.push_str(&d.handoff()),
+            None => prompt.push_str(
+                "A previous agent already worked on this; its changes are in the folder. \
+                 Look at them (git status, git diff) before you start.\n",
+            ),
+        }
+        prompt.push_str(&format!("\nNow:\n{}", message.trim()));
+        self.start_with(task, &last.kind, &prompt, None, permissions, &last.model)
+    }
+
     /// Start an agent on the task, as `plan` says.
     pub fn follow_up(
         &self,

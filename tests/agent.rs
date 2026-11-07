@@ -981,3 +981,46 @@ fn a_plan_run_reads_without_making_a_branch() {
         .resolve(&format!("refs/heads/{}", after.branch))
         .is_err());
 }
+
+#[test]
+fn a_fresh_follow_up_carries_the_debrief_instead_of_the_session() {
+    let f = fixture();
+    let task = f
+        .tasks
+        .create("Add the flag", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let agent = AgentKind::Command(r#"printf '%s' "$SPOR_PROMPT" > prompt.txt"#.into());
+    runs.start(&task, &agent, "Add the flag", None, NO_COMMANDS)
+        .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+
+    // Without a debrief it says to look at the folder.
+    runs.follow_up_fresh(&task, "Also add docs", NO_COMMANDS)
+        .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    let sent = std::fs::read_to_string(task.worktree.join("prompt.txt")).unwrap();
+    assert!(sent.starts_with("Add the flag"), "{sent}");
+    assert!(
+        sent.contains("git diff") && sent.ends_with("Now:\nAlso add docs"),
+        "{sent}"
+    );
+
+    // With one, it carries what the last agent did and left open.
+    let debrief = spor::debrief::Debrief::parse(
+        r#"{"changed":"Added the flag","checked":"","risks":[],"open_questions":["Keep v1?"],"follow_ups":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        f.tasks.run_dir(&task.id).join("run-1.debrief"),
+        debrief.to_json(),
+    )
+    .unwrap();
+    runs.follow_up_fresh(&task, "Go on", NO_COMMANDS).unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    let sent = std::fs::read_to_string(task.worktree.join("prompt.txt")).unwrap();
+    assert!(sent.contains("- Changed: Added the flag"), "{sent}");
+    assert!(sent.contains("- Open question: Keep v1?"), "{sent}");
+    assert!(!sent.contains("git diff"), "{sent}");
+}

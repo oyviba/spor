@@ -278,3 +278,7 @@ Each run gets a short generated block: its folder, branch and base, that spor pu
 ## Subagents and thinking (#99)
 
 Events that carry a `parent_tool_use_id` are kept as `Entry::Nested` under the `Task`/`Agent` call that started them, and that call also gives an `Entry::Subagent` (its kind, description and prompt). The subagent's final report is the call's result. In the Agent tab a subagent is a card that opens into its own stretch of work; the main agent's summary still counts it as one action, and the live line says "3 subagents working". A subagent's plan and tool calls no longer replace the main agent's. `thinking` blocks become `Entry::Thinking`, shown folded as "Thought for a moment" where they happened, and never in summaries.
+
+## Starting fresh when the context is full (#98)
+
+When the latest Claude run's context is 80% full or more, the composer offers *Start fresh with a summary*. The follow-up then starts a new session (no `--resume`) whose prompt is the task's prompt, the latest run's debrief as a hand-over (what changed, what was checked, risks, open questions, work not done) and the message. Without a debrief it says to look at the folder's changes first. The agent and model are the last run's.
