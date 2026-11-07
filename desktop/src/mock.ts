@@ -769,6 +769,8 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       return done(`Commit “${String(args.message).split("\n")[0]}”`, "Committed a1b2c3d");
     case "last_message":
       return f.graph.rows.find((r: { head: boolean }) => r.head)?.subject ?? "";
+    case "match_upstream":
+      return done("Match origin/main", "main now matches origin/main");
     case "sync":
       return { fetch: "Fetched", pull: "Pulled", push: "Pushed" }[args.action as string];
     case "stashes":

@@ -475,6 +475,7 @@ pub fn run() {
             changes::commit,
             changes::last_message,
             changes::sync,
+            changes::match_upstream,
             changes::stashes,
             changes::stash,
             changes::stash_pop,

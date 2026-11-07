@@ -151,6 +151,8 @@ export const api = {
   commit: (message: string, amend: boolean) => call<string>("commit", { message, amend }),
   lastMessage: () => call<string>("last_message"),
   sync: (action: "fetch" | "pull" | "push") => call<string>("sync", { action }),
+  /** Make the branch match its upstream, dropping the commits only it has. */
+  matchUpstream: () => call<string>("match_upstream"),
   stashes: () => call<StashInfo[]>("stashes"),
   stash: (message: string | null) => call<string>("stash", { message }),
   stashPop: (index: number) => call<string>("stash_pop", { index }),

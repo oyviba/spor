@@ -53,6 +53,24 @@ export function BranchBar({ state }: { state: RepoState }) {
           <ArrowDown size={12} /> Pull {behind}
         </Button>
       )}
+      {branch && upstream && ahead > 0 && behind > 0 && (
+        <Button
+          className="ghost small"
+          disabled={busy != null}
+          title={`Drop the ${commits(ahead)} only on this computer and match ${upstream}`}
+          onClick={async () => {
+            const ok = await shell.confirm({
+              title: `Make ${branch} match ${upstream}?`,
+              detail: `${commits(ahead)} on this computer, not on ${upstream}, will be dropped. ⌘Z brings them back. Uncommitted changes stay.`,
+              action: `Match ${upstream}`,
+              danger: true,
+            });
+            if (ok) shell.act(() => api.matchUpstream(), { pending: `Matching ${upstream}…` });
+          }}
+        >
+          Use {upstream}
+        </Button>
+      )}
       {branch && (!upstream || ahead > 0) && (
         <Button
           className={`${behind > 0 ? "ghost" : "primary"} small`}

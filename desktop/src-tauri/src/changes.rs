@@ -233,6 +233,36 @@ pub(crate) fn sync(app: State<App>, action: String) -> Result<String, String> {
     }
 }
 
+/// Make the branch match its upstream exactly, dropping the commits only it
+/// has. For a branch that has diverged and the person just wants origin's
+/// version, instead of replaying its commits (and resolving each conflict).
+/// Uncommitted changes stay; if they touch what moves, git refuses.
+#[tauri::command(async)]
+pub(crate) fn match_upstream(app: State<App>) -> Result<String, String> {
+    let repo = app.repo()?;
+    let tracking = repo.tracking()?;
+    let (Some(branch), Some(upstream)) = (tracking.branch.clone(), tracking.upstream.clone())
+    else {
+        return Err("This branch has no upstream to match".into());
+    };
+    let before = repo.head_sha()?;
+    repo.reset(&upstream, ResetMode::Keep)
+        .map_err(|e| first_line(&e))?;
+    let after = repo.head_sha()?;
+    if before != after {
+        app.undo.push(
+            format!("Match {upstream}"),
+            Undo::Moved {
+                branch: Some(branch.clone()),
+                before,
+                after,
+                mode: ResetMode::Keep,
+            },
+        );
+    }
+    Ok(format!("{branch} now matches {upstream}"))
+}
+
 /// The background fetch: never asks for anything, and says nothing when it
 /// can't (no network, no stored credentials). The window's state poll sees
 /// what it brought in.
