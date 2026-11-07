@@ -30,6 +30,10 @@ export function statusOf(t: TaskSummary, seenAt: number | undefined, nowMs: numb
   if (t.stats.missing) return { label: "Folder gone", tone: "amber", live: false };
   const run = t.run;
   if (t.asks > 0) return { label: "Needs you", tone: "amber", live: false };
+  // The repository limits agents at once, and this one's start is in line.
+  if (t.waiting != null) {
+    return { label: t.waiting > 1 ? `Waiting for a slot · #${t.waiting} in line` : "Waiting for a slot", tone: "muted", live: false };
+  }
   if (run?.state === "running") {
     // How long, and how far through its plan (#96): "Working 12m · 5/7".
     const plan = steps(t.progress, true);

@@ -8,6 +8,7 @@ import { Button } from "./shared/Button";
 import { RepoPanel } from "./shared/Layout";
 import { BranchBar } from "./shared/BranchBar";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
+import { AgentLimit } from "./sections/agents/AgentLimit";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
 import { AppearancePage } from "./shared/ThemeEditor";
@@ -293,6 +294,8 @@ export function App() {
   const reloadTasks = useCallback(async () => {
     const list = await api.listTasks();
     setTasks(list);
+    // Starts held back by the limit on agents at once go when a slot is free.
+    if (list.some((t) => t.waiting != null)) api.startWaiting().catch(() => {});
     const waiting = list.filter((t) => t.asks > 0);
     if (asking.current) {
       for (const t of waiting) {
@@ -666,6 +669,7 @@ export function App() {
         />
       ),
     },
+    { id: "agents", label: "Agents", render: () => <AgentLimit /> },
     { id: "diffs", label: "Diffs", render: () => <DiffSettings /> },
     { id: "history", label: "History graph", render: () => <GraphOptionsPanel /> },
     {

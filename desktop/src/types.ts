@@ -82,6 +82,8 @@ export interface TaskSummary {
   pull: number | null;
   /** Follow-ups waiting for the agent to finish, kept with the task. */
   queued: string[];
+  /** Its place in line (1 is next) while its start waits for a free slot, because the repository limits agents at once. */
+  waiting: number | null;
   /** What all its runs cost, in dollars, and the tokens they used. */
   spent: number;
   tokens: number;

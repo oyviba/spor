@@ -22,6 +22,7 @@ use crate::json::Json;
 use crate::tasks::{Task, Tasks};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 /// Which agent a run uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -731,6 +732,62 @@ pub enum SetupState {
     Due,
 }
 
+/// What [`Runs::start_with`] returns, as an error, when the repository's
+/// limit on agents at once is reached: the start has been written down and
+/// goes by itself when a slot is free (#limit).
+pub const WAITING: &str = "Waiting for a free slot";
+
+/// A start waiting for a free slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Waiting {
+    pub kind: AgentKind,
+    pub prompt: String,
+    pub resume: Option<String>,
+    pub mode: Mode,
+    pub model: Model,
+    /// Unix time it began to wait: the line is in this order.
+    pub since: i64,
+}
+
+/// The right to look at the count of running agents and start one, held
+/// until dropped. A lock file made exclusively, so it works across windows;
+/// one older than half a minute was left by a crash and is taken over.
+struct SlotLock(PathBuf);
+
+impl SlotLock {
+    fn take(path: PathBuf) -> Result<SlotLock, String> {
+        for _ in 0..100 {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => return Ok(SlotLock(path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let stale = std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age > Duration::from_secs(30));
+                    if stale {
+                        let _ = std::fs::remove_file(&path);
+                    } else {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                }
+                Err(e) => return Err(format!("Couldn't check the agent limit: {e}")),
+            }
+        }
+        Err("Couldn't check the agent limit: another start is taking too long".into())
+    }
+}
+
+impl Drop for SlotLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// The runs of one task.
 #[derive(Debug, Clone)]
 pub struct Runs {
@@ -878,7 +935,13 @@ impl Runs {
         let Some(first) = self.queued().into_iter().next() else {
             return Ok(false);
         };
-        self.follow_up(task, Some(&first), chosen, permissions)?;
+        // At the limit it waits for a free slot instead; either way it
+        // leaves this queue.
+        match self.follow_up(task, Some(&first), chosen, permissions) {
+            Ok(_) => {}
+            Err(e) if e == WAITING => {}
+            Err(e) => return Err(e),
+        }
         // Someone may have changed the queue meanwhile: drop this message,
         // wherever it is now.
         let mut queued = self.queued();
@@ -1096,6 +1159,132 @@ impl Runs {
             })
     }
 
+    /// How many agents may run at once in this repository (`git config
+    /// spor.maxAgents`); none means no limit (#limit). Subagents an agent
+    /// starts are part of it and aren't counted.
+    pub fn max_agents(repo_root: &Path) -> Option<usize> {
+        let out = Command::new("git")
+            .current_dir(repo_root)
+            .args(["config", "--get", "spor.maxAgents"])
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n > 0)
+    }
+
+    /// Take a slot to start an agent in, or write the start down to wait
+    /// for one and return [`WAITING`]. With no limit there's nothing to take.
+    fn take_slot(
+        &self,
+        kind: &AgentKind,
+        prompt: &str,
+        resume: Option<&str>,
+        permissions: Permissions,
+        model: &Model,
+    ) -> Result<Option<SlotLock>, String> {
+        let Some(limit) = Self::max_agents(&self.repo_root) else {
+            return Ok(None);
+        };
+        let lock = SlotLock::take(self.tasks.agents_lock())?;
+        if self.tasks.running_agents() >= limit {
+            self.write_waiting(&Waiting {
+                kind: kind.clone(),
+                prompt: prompt.to_string(),
+                resume: resume.map(String::from),
+                mode: permissions.mode,
+                model: model.clone(),
+                since: now(),
+            })?;
+            drop(lock);
+            return Err(WAITING.into());
+        }
+        Ok(Some(lock))
+    }
+
+    /// The start waiting for a free slot, if the task has one.
+    pub fn waiting(&self) -> Option<Waiting> {
+        let text = std::fs::read_to_string(self.dir.join("waiting")).ok()?;
+        let get = |key: &str| {
+            text.lines()
+                .find_map(|l| l.strip_prefix(key)?.strip_prefix('\t'))
+                .map(unescape)
+        };
+        let kind = match get("kind")?.as_str() {
+            "claude" => AgentKind::Claude,
+            other => AgentKind::Command(other.strip_prefix("command ").unwrap_or(other).into()),
+        };
+        Some(Waiting {
+            kind,
+            prompt: get("prompt")?,
+            resume: get("resume").filter(|r| !r.is_empty()),
+            mode: Mode::from_flag(&get("mode")?)?,
+            model: Model::new(
+                get("model").as_deref(),
+                get("effort").as_deref().and_then(Effort::from_flag),
+            )
+            .ok()?,
+            since: get("since")?.parse().ok()?,
+        })
+    }
+
+    fn write_waiting(&self, w: &Waiting) -> Result<(), String> {
+        std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
+        // Waiting again keeps its place in line.
+        let since = self.waiting().map_or(w.since, |old| old.since);
+        let text: String = [
+            ("kind", kind_name(&w.kind)),
+            ("prompt", w.prompt.clone()),
+            ("resume", w.resume.clone().unwrap_or_default()),
+            ("mode", w.mode.flag().to_string()),
+            ("model", w.model.name.clone().unwrap_or_default()),
+            (
+                "effort",
+                w.model.effort.map(Effort::flag).unwrap_or_default().into(),
+            ),
+            ("since", since.to_string()),
+        ]
+        .iter()
+        .map(|(k, v)| format!("{k}\t{}\n", escape(v)))
+        .collect();
+        let tmp = self.dir.join("waiting.tmp");
+        std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, self.dir.join("waiting")).map_err(|e| e.to_string())
+    }
+
+    /// Give up waiting for a slot.
+    pub fn cancel_waiting(&self) {
+        let _ = std::fs::remove_file(self.dir.join("waiting"));
+    }
+
+    /// Start the task's waiting start if a slot is free. True if it went.
+    pub fn start_waiting(&self, task: &Task) -> Result<bool, String> {
+        let Some(w) = self.waiting() else {
+            return Ok(false);
+        };
+        match self.start_with(
+            task,
+            &w.kind,
+            &w.prompt,
+            w.resume.as_deref(),
+            Permissions { mode: w.mode },
+            &w.model,
+        ) {
+            Ok(_) => {
+                self.cancel_waiting();
+                Ok(true)
+            }
+            Err(e) if e == WAITING => Ok(false),
+            Err(e) => {
+                // It can't start (the folder is gone, say): don't hold the line.
+                self.cancel_waiting();
+                Err(e)
+            }
+        }
+    }
+
     /// `start`, with Claude Code on `model`.
     pub fn start_with(
         &self,
@@ -1109,6 +1298,10 @@ impl Runs {
         if self.latest().is_some_and(|r| r.state == RunState::Running) {
             return Err(format!("An agent is already working on {}", task.id));
         }
+        // At most `spor.maxAgents` at once: past that, the start waits for a
+        // free slot. The slot is held (a lock on the count) until this run
+        // is going, so two starts at once can't both take the last one.
+        let _slot = self.take_slot(kind, prompt, resume, permissions, model)?;
         // A task has no branch until an agent that can change things runs
         // (#110). Planning only reads, so it looks at the main checkout and
         // leaves nothing behind; anything else gets its branch now.
