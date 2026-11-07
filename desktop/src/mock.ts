@@ -899,6 +899,13 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         return null;
       case "clean_up_tasks":
         return "Nothing to clean up";
+      case "search_transcripts": {
+        const q = String(args.query ?? "").toLowerCase().trim();
+        if (!q) return [];
+        return tasks
+          .filter((t) => t.summary.prompt.toLowerCase().includes(q))
+          .map((t) => ({ task: t.summary.id, title: t.summary.title, run: 0, kind: "prompt", snippet: t.summary.prompt }));
+      }
       case "suggest_rules":
         return [
           { rule: "Use pnpm, not npm.", tasks: ["fix-login", "add-readme"] },

@@ -7,7 +7,7 @@ import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
 import { parsePatch } from "../../shared/diff";
-import { Bot, Branch, Chevron, Commit, Copy, Folder, Merge, Search, Tag, Trash, Undo } from "../../shared/Icons";
+import { Bot, Branch, Chevron, Commit, Copy, Folder, MessageSquare, Merge, Search, Tag, Trash, Undo } from "../../shared/Icons";
 import type { MenuItem } from "../../shared/Overlay";
 import type { Shell } from "../../shared/app";
 import { BRANCH_DRAG, Graph, type GraphHandle } from "./Graph";
@@ -437,6 +437,7 @@ export function HistorySection() {
                   path={blameOf.path}
                   rev={blameOf.rev}
                   onShowCommit={showCommit}
+                  onWhy={(taskId) => shell.go({ section: "work", taskId })}
                   onFileHistory={(path) => {
                     setQuery(`path:${path}`);
                     setTab("graph");
@@ -550,6 +551,15 @@ function CommitCard({
           {commit.author} · {commit.date}
         </div>
       </div>
+      {commit.task && (
+        <div className="inspector-section" title={commit.task.prompt}>
+          <button className="inspector-row action" onClick={() => shell.go({ section: "work", taskId: commit.task!.id })}>
+            <MessageSquare size={13} />
+            <span className="truncate">Made by the agent task “{commit.task.title}”</span>
+            <span className="muted"> · Open conversation</span>
+          </button>
+        </div>
+      )}
       <div className="inspector-section">
         <button className="inspector-row action" onClick={() => navigator.clipboard.writeText(commit.hash).then(() => shell.toast("Hash copied"))}>
           <Copy size={13} />

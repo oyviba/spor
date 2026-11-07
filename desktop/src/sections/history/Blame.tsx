@@ -14,9 +14,11 @@ interface Props {
   rev: string | null;
   onShowCommit: (hash: string) => void;
   onFileHistory: (path: string) => void;
+  /** Open the conversation of the agent task that made a commit (#108). */
+  onWhy: (taskId: string) => void;
 }
 
-export function Blame({ path, rev, onShowCommit, onFileHistory }: Props) {
+export function Blame({ path, rev, onShowCommit, onFileHistory, onWhy }: Props) {
   const [rows, setRows] = useState<BlameRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
@@ -68,11 +70,22 @@ export function Blame({ path, rev, onShowCommit, onFileHistory }: Props) {
                 <td className="blame-gutter">
                   {first &&
                     (r.hash ? (
+                      <>
                       <button className="blame-commit" title={`${r.summary}\n${r.author}`} onClick={() => onShowCommit(r.hash)}>
                         <span className="mono">{r.hash.slice(0, 7)}</span>
                         <span className="truncate">{r.summary}</span>
                         <span className="muted num">{ago(r.time, now)}</span>
                       </button>
+                      {r.task && (
+                        <button
+                          className="link small-text blame-why"
+                          title="Open the agent's conversation behind this commit"
+                          onClick={() => onWhy(r.task!)}
+                        >
+                          Why?
+                        </button>
+                      )}
+                      </>
                     ) : (
                       <span className="blame-commit muted">Not committed yet</span>
                     ))}

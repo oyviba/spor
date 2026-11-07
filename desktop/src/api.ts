@@ -34,6 +34,7 @@ import type {
   WorkBranch,
   WorkItemInfo,
   RuleSuggestion,
+  TranscriptHit,
 } from "./types";
 import type { Place } from "./shared/DiffView";
 
@@ -245,6 +246,8 @@ export const api = {
   /** Delete the run checkpoints of tasks that are done, and discarded tasks' transcripts. */
   cleanUpTasks: () => call<string>("clean_up_tasks"),
   /** Repeated corrections across tasks, as candidate lines for CLAUDE.md (#107). Slow: it asks Claude. */
+  /** Search what was said across every task's conversation, landed ones included (#108). */
+  searchTranscripts: (query: string) => call<TranscriptHit[]>("search_transcripts", { query }),
   suggestRules: () => call<RuleSuggestion[]>("suggest_rules"),
   addRule: (rule: string) => call<string>("add_rule", { rule }),
   declineRule: (rule: string) => call<void>("decline_rule", { rule }),

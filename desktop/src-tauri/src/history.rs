@@ -224,6 +224,33 @@ pub(crate) struct CommitDetail {
     time: i64,
     message: String,
     patch: String,
+    /// The agent task that made it, from the `Spor-Task` trailer (#108).
+    task: Option<TaskRef>,
+}
+
+/// An agent task behind a commit.
+#[derive(Serialize)]
+pub(crate) struct TaskRef {
+    id: String,
+    title: String,
+    prompt: String,
+    /// "open", "landed" or "closed".
+    state: &'static str,
+}
+
+/// The task a commit message names, if spor still has it.
+fn task_behind(tasks: &spor::tasks::Tasks, message: &str) -> Option<TaskRef> {
+    let task = tasks.get(spor::tasks::Task::trailer_id(message)?)?;
+    Some(TaskRef {
+        state: match task.state {
+            spor::tasks::TaskState::Open => "open",
+            spor::tasks::TaskState::Landed(_) => "landed",
+            spor::tasks::TaskState::Closed => "closed",
+        },
+        title: task.title(),
+        prompt: task.prompt.trim().chars().take(400).collect(),
+        id: task.id,
+    })
 }
 
 #[tauri::command(async)]
@@ -232,7 +259,11 @@ pub(crate) fn commit_detail(app: State<App>, hash: String) -> Result<CommitDetai
     let details = repo.commit_details(&hash)?;
     let parents = repo.parents(&hash)?;
     let patch = repo.commit_patch(&hash, &parents)?;
+    let task = spor::tasks::Tasks::open(&repo)
+        .ok()
+        .and_then(|tasks| task_behind(&tasks, &details.message));
     Ok(CommitDetail {
+        task,
         hash,
         parents,
         author: details.author,
@@ -842,6 +873,8 @@ pub(crate) struct BlameRow {
     summary: String,
     line: usize,
     text: String,
+    /// The agent task that made this line's commit, if spor has it (#108).
+    task: Option<String>,
 }
 
 /// Who last changed each line of `path`, as of `rev` (the working tree when
@@ -853,13 +886,29 @@ pub(crate) fn blame(
     rev: Option<String>,
 ) -> Result<Vec<BlameRow>, String> {
     let repo = app.repo()?;
+    let tasks = spor::tasks::Tasks::open(&repo).ok();
+    // Which commit came from which task: asked once per commit.
+    let mut made_by: std::collections::HashMap<String, Option<String>> = Default::default();
     Ok(repo
         .blame_at(&path, rev.as_deref())
         .map_err(|e| first_line(&e))?
         .into_iter()
         .map(|l| {
             let committed = !l.hash.chars().all(|c| c == '0');
+            let task = if committed {
+                made_by
+                    .entry(l.hash.clone())
+                    .or_insert_with(|| {
+                        let message = repo.message(&l.hash).ok()?;
+                        let id = spor::tasks::Task::trailer_id(&message)?;
+                        tasks.as_ref()?.get(id).map(|t| t.id)
+                    })
+                    .clone()
+            } else {
+                None
+            };
             BlameRow {
+                task,
                 hash: if committed { l.hash } else { String::new() },
                 author: if committed { l.author } else { "You".into() },
                 time: l.time,

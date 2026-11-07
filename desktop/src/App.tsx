@@ -600,6 +600,23 @@ export function App() {
     toast(moved, "ok", false, { label: "Show shortcuts", run: () => setSettingsPage("shortcuts") });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ⌘K also looks in what was said in agents' conversations (#108). A stable
+  // function, so the palette doesn't start its pause over on every render.
+  const goRef = useRef<Shell["go"] | null>(null);
+  goRef.current = shell?.go ?? null;
+  const searchConversations = useCallback(
+    (query: string): Promise<Command[]> =>
+      api.searchTranscripts(query).then((hits) =>
+        hits.map((h, i) => ({
+          id: `said:${h.task}:${h.run}:${i}`,
+          label: h.snippet,
+          hint: `${h.title} · ${h.kind === "prompt" ? (h.run === 0 ? "prompt" : "follow-up") : h.kind === "agent" ? "the agent said" : h.kind === "steer" ? "you steered" : "debrief"}`,
+          run: () => goRef.current?.({ section: "work", taskId: h.task }),
+        })),
+      ),
+    [],
+  );
+
   const commands = (branches: BranchInfo[]): Command[] => {
     if (!shell) return [];
     return [
@@ -671,7 +688,11 @@ export function App() {
       {settingsPage && <SettingsDialog pages={settingsPages} initial={settingsPage} onClose={() => setSettingsPage(null)} />}
       {menu && <MenuView spec={menu} onClose={() => setMenu(null)} />}
       {dialog && <DialogView spec={dialog} onClose={() => setDialog(null)} />}
-      {palette && <Palette commands={commands(palette.branches)} onClose={() => setPalette(null)} />}
+      {palette && <Palette
+          commands={commands(palette.branches)}
+          onClose={() => setPalette(null)}
+          search={searchConversations}
+        />}
       {credential && (
         <CredentialDialog
           ask={credential}

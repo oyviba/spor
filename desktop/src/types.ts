@@ -301,6 +301,26 @@ export interface CommitDetail {
   time: number;
   message: string;
   patch: string;
+  /** The agent task that made it, from the `Spor-Task` trailer (#108). */
+  task: TaskRef | null;
+}
+
+/** An agent task behind a commit. */
+export interface TaskRef {
+  id: string;
+  title: string;
+  prompt: string;
+  state: "open" | "landed" | "closed";
+}
+
+/** Somewhere a search found words in a task's conversation (#108). */
+export interface TranscriptHit {
+  task: string;
+  title: string;
+  /** The run it was said in. */
+  run: number;
+  kind: "prompt" | "agent" | "steer" | "debrief";
+  snippet: string;
 }
 
 export interface BranchInfo {
@@ -511,6 +531,8 @@ export interface BlameRow {
   summary: string;
   line: number;
   text: string;
+  /** The task whose commit this line is from, if spor has it (#108). */
+  task: string | null;
 }
 
 /** A conflicted file, split into text and conflict regions. */
