@@ -802,6 +802,68 @@ impl Runs {
         self.start_with(task, kind, prompt, resume, permissions, &Model::default())
     }
 
+    /// What the agent is told about where it is (#105): its folder, branch
+    /// and base, that spor publishes, the issue, the attachments, and the
+    /// other active tasks with the files they have changed so far. A
+    /// repository adds to it with a committed `.spor/context.md`.
+    pub fn context(&self, task: &Task) -> String {
+        let mut out = format!(
+            "You are working in spor, which runs coding agents in parallel, one folder per task.\n\
+             - Your folder is {} (a git worktree beside the repository), on branch {}, started from {}.\n\
+             - Don't push or open pull requests: spor publishes when the person decides.\n",
+            task.worktree.display(),
+            task.branch,
+            task.start()
+        );
+        if let Some(number) = task.issue {
+            out.push_str(&format!(
+                "- This task is for issue #{number}; its pull request will say `Closes #{number}`.\n"
+            ));
+        }
+        if self.worktree.join(".spor").join("checks").exists() {
+            out.push_str("- The repository has checks: run `.spor/checks` before you finish.\n");
+        }
+        out.push_str(&format!(
+            "- Images attached to prompts are kept in {}.\n",
+            self.attachments.display()
+        ));
+        if let Ok(tasks) = Tasks::open(&crate::git::Repo::new(&self.repo_root)) {
+            let others = crate::mcp::others_touching(&tasks, task);
+            if !others.is_empty() {
+                out.push_str(
+                    "\nOther agents are working in this repository right now. Avoid changing the files \
+                     they have changed unless your task needs it, and say so when you do:\n",
+                );
+                for (id, prompt, files) in others {
+                    let first = prompt.lines().next().unwrap_or_default().trim();
+                    let first: String = first.chars().take(100).collect();
+                    out.push_str(&format!("- {id}: {first}\n"));
+                    if !files.is_empty() {
+                        let shown: Vec<&str> = files.iter().take(15).map(String::as_str).collect();
+                        let more = files.len() - shown.len();
+                        out.push_str(&format!(
+                            "  changed so far: {}{}\n",
+                            shown.join(", "),
+                            if more > 0 {
+                                format!(" and {more} more")
+                            } else {
+                                String::new()
+                            }
+                        ));
+                    }
+                }
+                out.push_str("The `other_tasks` tool of the spor MCP server tells you what they touch now.\n");
+            }
+        }
+        if let Ok(extra) = std::fs::read_to_string(task.worktree.join(".spor").join("context.md")) {
+            let extra = extra.trim();
+            if !extra.is_empty() {
+                out.push_str(&format!("\n{extra}\n"));
+            }
+        }
+        out
+    }
+
     /// The arguments that give Claude Code spor's MCP server (#106): a
     /// config file in the run directory that starts the app's executable
     /// as the server, and the tools it may use without asking. `ask` isn't
@@ -872,8 +934,19 @@ impl Runs {
         let index = self.count();
         // Made up front, so an image attached while it works can be read.
         let _ = std::fs::create_dir_all(&self.attachments);
-        let (program, args) =
+        let (program, mut args) =
             command_for(kind, prompt, resume, permissions, model, &self.attachments);
+        // What the agent is told, kept beside the run so it's clear afterwards.
+        let context = self.context(task);
+        let _ = std::fs::write(self.file(index, "context"), &context);
+        if *kind == AgentKind::Claude {
+            // Before `-p <prompt>`, which stays last.
+            let at = args.iter().position(|a| a == "-p").unwrap_or(args.len());
+            args.splice(
+                at..at,
+                ["--append-system-prompt".to_string(), context.clone()],
+            );
+        }
         let log = self.file(index, "log");
         let exit = self.file(index, "exit");
         // What the folder was like before, for this run's diff and undo.
@@ -943,6 +1016,7 @@ echo $code > "$SPOR_EXIT""#;
             .env("SPOR_AFTER", self.checkpoint_ref(index, "after"))
             .env("SPOR_SNAPSHOT", checkpoint::SNAPSHOT_SH)
             .env("SPOR_PROMPT", prompt)
+            .env("SPOR_CONTEXT", &context)
             .env("SPOR_TASK", &task.id)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

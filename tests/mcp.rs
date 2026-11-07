@@ -1,5 +1,6 @@
 //! Spor's MCP server (#106): the tools, called as Claude Code would.
 
+use spor::agent::Runs;
 use spor::git::Repo;
 use spor::json::Json;
 use spor::mcp::{respond, Context};
@@ -210,4 +211,36 @@ fn pr_tools_say_so_when_there_is_no_pull_request() {
     let c = ctx(&f, &t.id);
     assert!(call(&c, "pr_comments", "{}").0.contains("no pull request"));
     assert!(call(&c, "ci_log", "{}").1);
+}
+
+#[test]
+fn the_agent_is_told_where_it_is_and_what_the_others_touch() {
+    let f = fixture();
+    let a = f.tasks.create("Rewrite the app text", "main").unwrap();
+    let b = f.tasks.create("Add a readme\n\nwith more", "main").unwrap();
+    std::fs::write(b.worktree.join("README.md"), "hi\n").unwrap();
+    std::fs::create_dir_all(a.worktree.join(".spor")).unwrap();
+    std::fs::write(a.worktree.join(".spor/context.md"), "Use tabs.\n").unwrap();
+
+    let text = Runs::of(&f.tasks, &a).context(&a);
+    assert!(
+        text.contains(&a.branch) && text.contains("Don't push"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("- {}: Add a readme", b.id)),
+        "{text}"
+    );
+    assert!(!text.contains("with more"), "only the first line: {text}");
+    assert!(text.contains("changed so far: README.md"), "{text}");
+    assert!(!text.contains("Rewrite the app text"), "not itself: {text}");
+    assert!(text.trim_end().ends_with("Use tabs."), "{text}");
+}
+
+#[test]
+fn a_lone_task_hears_of_no_others() {
+    let f = fixture();
+    let a = f.tasks.create("Rewrite the app text", "main").unwrap();
+    let text = Runs::of(&f.tasks, &a).context(&a);
+    assert!(!text.contains("Other agents"), "{text}");
 }

@@ -266,3 +266,7 @@ Claude Code doesn't prompt for any tool.
 - **Where task state lives.** `.git/spor/` is per-clone and invisible to
   collaborators. Sharing tasks across machines would mean a server, which
   is out of scope for now.
+
+## What the agent is told (#105)
+
+Each run gets a short generated block: its folder, branch and base, that spor publishes (so it shouldn't push), the issue it is for, where attached images live, whether `.spor/checks` exists, and the other active tasks with the files they have changed so far. Claude Code gets it with `--append-system-prompt`; a custom command gets it in `$SPOR_CONTEXT`. A committed `.spor/context.md` is appended. The text is kept beside the run as `run-N.context`, and every run (follow-ups too) builds it fresh.
