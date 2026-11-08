@@ -260,9 +260,17 @@ fn surface_puts_items_in_the_panel() {
     assert_eq!(
         got,
         [
-            ("link", "Preview (v2)".into(), "https://example.com/p".into()),
+            (
+                "link",
+                "Preview (v2)".into(),
+                "https://example.com/p".into()
+            ),
             ("file", "Notes".into(), "notes.md".into()),
-            ("note", "Heads up".into(), "Two tests were already failing.".into()),
+            (
+                "note",
+                "Heads up".into(),
+                "Two tests were already failing.".into()
+            ),
         ]
     );
 

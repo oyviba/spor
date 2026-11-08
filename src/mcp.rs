@@ -245,7 +245,7 @@ fn surface(args: &Json, ctx: &Context, task: &Task) -> Result<String, String> {
         "note" if value.chars().count() > SURFACE_NOTE => {
             return Err(format!("A note is at most {SURFACE_NOTE} characters"));
         }
-        "link" | "file" | "note" => {}
+        "link" | "note" => {}
         other => return Err(format!("kind must be link, file or note, not {other}")),
     }
     let title: String = title.chars().take(SURFACE_TITLE).collect();
