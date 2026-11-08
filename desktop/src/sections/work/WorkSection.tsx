@@ -37,16 +37,27 @@ interface GitHub {
 }
 const NO_GITHUB: GitHub = { pulls: [], yours: new Set(), review: new Set() };
 
+/** Work's page for one task, without the list: Agents shows it in its own
+ * view, so a follow-up is answered there, not in the task's repository. */
+export interface EmbeddedTask {
+  taskId: string;
+  /** The task is gone (landed, discarded) or the page was left. */
+  onGone: () => void;
+}
+
 /** Work: every piece of work in the repository (agents' tasks, your
  * branches, everyone's pull requests) in one list, and the selected one's
  * page. */
-export function WorkSection() {
+export function WorkSection({ embedded }: { embedded?: EmbeddedTask } = {}) {
   const shell = useShell();
   const { repo, fail, toast } = shell;
   // The shell's list, with the open task's row kept in step with its detail.
   const [tasks, setTasks] = useState<TaskSummary[]>(shell.tasks);
   useEffect(() => setTasks(shell.tasks), [shell.tasks]);
-  const [view, setView] = useStored<View>("work.view", { kind: "new" });
+  const [stored, setStored] = useStored<View>("work.view", { kind: "new" });
+  // Embedded, the task is the whole page: another view means it's over.
+  const view: View = embedded ? { kind: "task", id: embedded.taskId } : stored;
+  const setView = (v: View) => (embedded ? (v.kind === "task" && v.id === embedded.taskId ? undefined : embedded.onGone()) : setStored(v));
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
   // The Changes tab: everything against the base, or one run's changes.
@@ -70,7 +81,7 @@ export function WorkSection() {
   // Another section sent us to a task, a pull request or a branch.
   useChanged(() => {
     const t = shell.target;
-    if (t.section !== "work") return;
+    if (embedded || t.section !== "work") return;
     if (t.taskId) setView({ kind: "task", id: t.taskId });
     else if (t.number) setView({ kind: "pull", number: t.number });
     else if (t.branch) setView({ kind: "branch", name: t.branch });
@@ -254,7 +265,7 @@ export function WorkSection() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key === "n") {
+      if (e.key === "n" && !embedded) {
         e.preventDefault();
         const r = document.querySelector(".new-work")?.getBoundingClientRect();
         newMenu({ clientX: r?.left ?? 80, clientY: (r?.bottom ?? 40) + 4 });
@@ -400,6 +411,7 @@ export function WorkSection() {
 
   return (
     <>
+      {!embedded && (
       <Sidebar
         shelves={shelves}
         any={items.length > 0}
@@ -415,6 +427,7 @@ export function WorkSection() {
         onCleanUp={() => api.cleanUpTasks().then((msg) => toast(msg), fail)}
         spent={{ usd: tasks.reduce((n, t) => n + t.spent, 0), tokens: tasks.reduce((n, t) => n + t.tokens, 0) }}
       />
+      )}
       <main className="main">
         {view.kind === "new" ? (
           view.what === "issue" ? (
