@@ -97,7 +97,9 @@ function viewing(taskId: string): boolean {
   try {
     const section = JSON.parse(localStorage.getItem("spor.section") ?? "null");
     const view = JSON.parse(localStorage.getItem("spor.work.view") ?? "null");
-    return section === "work" && view?.kind === "task" && view.id === taskId && document.hasFocus();
+    const agents = JSON.parse(localStorage.getItem("spor.agents.open") ?? "null");
+    const open = (section === "work" && view?.kind === "task" && view.id === taskId) || (section === "agents" && agents?.taskId === taskId);
+    return open && document.hasFocus();
   } catch {
     return false;
   }
@@ -167,6 +169,9 @@ export function App() {
     [], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const [state, setState] = useState<RepoState | null>(null);
+  /** The open repository, for callbacks that outlive a render. */
+  const here = useRef<string | undefined>(undefined);
+  here.current = repo?.root;
   const [section, setSection] = useStored<SectionId>("section", "inbox");
   // The Inbox and Agents span every repository: open, they show no
   // repository (no column, branch bar or repository header), and a
@@ -322,6 +327,8 @@ export function App() {
         toast(`${t.title} is waiting for you`, "ok", false, {
           label: "Answer",
           run: () => {
+            // From Agents, answer there, not in the repository's Work.
+            if (localStorage.getItem("spor.section") === '"agents"' && here.current) return setAgentOpen({ repo: here.current, taskId: t.id });
             setSection("work");
             setTarget((old) => ({ section: "work", taskId: t.id, seq: old.seq + 1 }));
           },
@@ -387,6 +394,18 @@ export function App() {
     setSection(to.section);
     setTarget((old) => ({ ...to, seq: old.seq + 1 }));
   };
+
+  // The task open in Agents. Its repository is opened for it, behind the
+  // view, so answering needs no trip to the repository.
+  const [agentOpen, setAgentOpen] = useStored<{ repo: string; taskId: string } | null>("agents.open", null);
+  useEffect(() => {
+    if (section !== "agents" || !agentOpen || !repo || repo.root === agentOpen.repo) return;
+    openRepo(agentOpen.repo).then((ok) => {
+      if (!ok) return setAgentOpen(null);
+      const owner = workspaces.list.find((w) => w.repos.includes(agentOpen.repo));
+      if (owner && owner.id !== workspaces.active) switchTo(owner.id);
+    });
+  }, [section, agentOpen?.repo, repo?.root]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const shell: Shell | null = useMemo(
     () =>
@@ -859,7 +878,18 @@ export function App() {
                 agents: (
                   <AgentsSection
                     inbox={inbox}
-                    onOpen={(r, taskId) => openItem({ repo: r, target: { section: "work", taskId } })}
+                    selected={agentOpen}
+                    page={
+                      agentOpen && agentOpen.repo === repo.root ? (
+                        <WorkSection key={agentOpen.taskId} embedded={{ taskId: agentOpen.taskId, onGone: () => setAgentOpen(null) }} />
+                      ) : (
+                        <main className="main">
+                          <div className="boot" />
+                        </main>
+                      )
+                    }
+                    onOpen={(r, taskId) => setAgentOpen({ repo: r, taskId })}
+                    onClose={() => setAgentOpen(null)}
                     onOpenRepo={(r) => openItem({ repo: r, target: { section: "work" } })}
                   />
                 ),

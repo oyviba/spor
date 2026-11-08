@@ -54,7 +54,8 @@ section, run as end-to-end tests.
 - **Agents** (⌘⇧A) — every agent task in every repository of every
   workspace, by status (needs you, working, ready for review, failed or
   stopped, idle) or by repository, with a table of counts per repository.
-  A row opens the task's conversation in its repository's Work. It sits on
+  A row opens the task's conversation right there, to answer or follow
+  up on, whichever repository it's in. It sits on
   the rail beside the Inbox, since it spans repositories, and reads nothing
   of its own: it's built on the Inbox's poll of the tasks
 - **Work** (⌘2) — every piece of work in flight, in one list: agents'
