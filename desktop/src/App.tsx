@@ -3,7 +3,7 @@ import { api, errorText } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "./types";
 import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
-import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, X } from "./shared/Icons";
+import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, Sparkle, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
 import { RepoPanel } from "./shared/Layout";
 import { BranchBar } from "./shared/BranchBar";
@@ -44,6 +44,7 @@ import { IssuesSection } from "./sections/issues/IssuesSection";
 import { PullsSection } from "./sections/pulls/PullsSection";
 import { ActionsSection } from "./sections/actions/ActionsSection";
 import { InboxSection, useInbox } from "./sections/inbox/InboxSection";
+import { AgentsSection } from "./sections/agents/AgentsSection";
 import { askLine, type InboxItem } from "./sections/inbox/inbox";
 
 /** When you last looked at each task, by task id, as Work keeps it
@@ -75,12 +76,14 @@ interface Toast {
  * me, what's in flight, my checkout, the graph. Then, after a divider, the
  * browsers: GitHub's lists, for what belongs to no work item yet.
  *
- * Left to right is workspace → repository → section: the Inbox spans every
- * repository, so it sits on the rail with the workspaces; the rest belong to
- * one repository and are listed under the open one in the repository column.
+ * Left to right is workspace → repository → section: the Inbox and Agents
+ * span every repository (`global`), so they sit on the rail with the
+ * workspaces; the rest belong to one repository and are listed under the
+ * open one in the repository column.
  */
-const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string; browser?: boolean }[] = [
-  { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "Mod+1" },
+const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string; browser?: boolean; global?: boolean }[] = [
+  { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "Mod+1", global: true },
+  { id: "agents", label: "Agents", icon: <Sparkle size={17} />, key: "Mod+Shift+A", global: true },
   { id: "work", label: "Work", icon: <Bot size={17} />, key: "Mod+2" },
   { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "Mod+3" },
   { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+4" },
@@ -165,6 +168,14 @@ export function App() {
   );
   const [state, setState] = useState<RepoState | null>(null);
   const [section, setSection] = useStored<SectionId>("section", "inbox");
+  // The Inbox and Agents span every repository: open, they show no
+  // repository (no column, branch bar or repository header), and a
+  // workspace's badge goes back to the section last open in its repository.
+  const global = !!SECTIONS.find((s) => s.id === section)?.global;
+  const [repoSection, setRepoSection] = useStored<SectionId>("section.repo", "work");
+  useEffect(() => {
+    if (!global) setRepoSection(section);
+  }, [section]); // eslint-disable-line react-hooks/exhaustive-deps
   const [reposShown, setReposShown] = useStored("repos.shown", true);
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "work", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -361,7 +372,7 @@ export function App() {
 
   /** An Inbox row: its workspace and repository (switching if need be),
    * then its section. */
-  const openItem = async (item: InboxItem) => {
+  const openItem = async (item: Pick<InboxItem, "repo" | "target">) => {
     if (item.repo !== repo?.root && !(await openRepo(item.repo))) return;
     const owner = workspaces.list.find((w) => w.repos.includes(item.repo));
     if (owner && owner.id !== workspaces.active) switchTo(owner.id);
@@ -454,6 +465,7 @@ export function App() {
     const target = workspaces.list.find((w) => w.id === id);
     if (!target) return;
     switchTo(id);
+    if (global) setSection(repoSection);
     const path = landing(target);
     if (path && path !== repo?.root) openRepo(path);
     else if (!path) {
@@ -603,7 +615,7 @@ export function App() {
     }
     // Nothing to move for someone opening spor for the first time.
     if (firstRun) return;
-    const under = "Work, Changes, History and the browsers now sit under the open repository; the Inbox stays on the rail.";
+    const under = "Work, Changes, History and the browsers now sit under the open repository; the rail has the Inbox and Agents, across every repository.";
     // Only the layout moved since #83; the shortcuts are as they were.
     if (was === "2") {
       toast(under);
@@ -727,7 +739,7 @@ export function App() {
       {workspaces.list.map((w, i) => (
         <button
           key={w.id}
-          className={`workspace-badge${w.id === ws.id ? " active" : ""}`}
+          className={`workspace-badge${w.id === ws.id && !global ? " active" : ""}`}
           style={{ "--ws": WORKSPACE_COLORS[w.color] } as React.CSSProperties}
           onClick={() => goToWorkspace(w.id)}
           onContextMenu={(e) => {
@@ -736,7 +748,8 @@ export function App() {
           }}
           title={`${w.name}${keyLabel(`workspace:${i + 1}`) ? ` (${keyLabel(`workspace:${i + 1}`)})` : ""} — right-click to rename, recolor or delete`}
           aria-label={`Workspace ${w.name}`}
-          aria-current={w.id === ws.id ? "true" : undefined}
+          aria-current={w.id === ws.id && !global ? "true" : undefined}
+          data-current={w.id === ws.id || undefined}
         >
           {initials(w.name)}
         </button>
@@ -781,7 +794,7 @@ export function App() {
     );
   };
   const repoSections = (where: "panel" | "strip") =>
-    SECTIONS.slice(1).map((s, i, all) => (
+    SECTIONS.filter((s) => !s.global).map((s, i, all) => (
       <Fragment key={s.id}>
         {s.browser && !all[i - 1]?.browser && <span className={where === "panel" ? "repo-sections-divider" : "rail-divider"} />}
         {sectionLink(s, where)}
@@ -810,14 +823,14 @@ export function App() {
 
   return (
     <ShellContext.Provider value={shell}>
-      <div className={`app ${reposShown ? "with-repos" : "with-strip"}`}>
+      <div className={`app ${global ? "global-view" : reposShown ? "with-repos" : "with-strip"}`}>
         <nav className="rail" aria-label="Workspaces">
           {workspaceRail}
-          {sectionLink(SECTIONS[0], "rail")}
+          {SECTIONS.filter((s) => s.global).map((s) => sectionLink(s, "rail"))}
           <span className="flex-1" />
           {settingsButton}
         </nav>
-        {reposShown ? (
+        {global ? null : reposShown ? (
           <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed}>
             {repoSections("panel")}
           </RepoPanel>
@@ -835,10 +848,23 @@ export function App() {
           </nav>
         )}
         <div className="section">
-          {state && <BranchBar state={state} />}
-          {state?.operation && <OperationBanner state={state} />}
+          {state && !global && <BranchBar state={state} />}
+          {state?.operation && !global && <OperationBanner state={state} />}
           <div className="section-body">
-            <Sections key={repo.root} section={section} inbox={<InboxSection inbox={inbox} onOpen={openItem} />} />
+            <Sections
+              key={repo.root}
+              section={section}
+              globals={{
+                inbox: <InboxSection inbox={inbox} onOpen={openItem} />,
+                agents: (
+                  <AgentsSection
+                    inbox={inbox}
+                    onOpen={(r, taskId) => openItem({ repo: r, target: { section: "work", taskId } })}
+                    onOpenRepo={(r) => openItem({ repo: r, target: { section: "work" } })}
+                  />
+                ),
+              }}
+            />
           </div>
         </div>
         <Toasts toasts={toasts} onUndo={undo} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
@@ -848,7 +874,9 @@ export function App() {
   );
 }
 
-const SECTION_VIEWS: Record<Exclude<SectionId, "inbox">, () => React.ReactNode> = {
+type GlobalId = "inbox" | "agents";
+
+const SECTION_VIEWS: Record<Exclude<SectionId, GlobalId>, () => React.ReactNode> = {
   changes: ChangesSection,
   history: HistorySection,
   issues: IssuesSection,
@@ -860,17 +888,17 @@ const SECTION_VIEWS: Record<Exclude<SectionId, "inbox">, () => React.ReactNode> 
 /** The sections opened so far, kept mounted so going back to one shows it
  * as it was at once, and then brings it up to date. A hidden one keeps its
  * state but not its effects: it doesn't poll, watch or take keys. */
-function Sections({ section, inbox }: { section: SectionId; inbox: React.ReactNode }) {
+function Sections({ section, globals }: { section: SectionId; globals: Record<GlobalId, React.ReactNode> }) {
   const [opened, setOpened] = useState<SectionId[]>([section]);
   if (!opened.includes(section)) setOpened([...opened, section]);
   return (
     <>
       <KeepScroll shown={section} />
       {SECTIONS.filter((s) => opened.includes(s.id)).map((s) => {
-        const View = s.id === "inbox" ? null : SECTION_VIEWS[s.id];
+        const View = s.id === "inbox" || s.id === "agents" ? null : SECTION_VIEWS[s.id];
         return (
           <Activity key={s.id} mode={s.id === section ? "visible" : "hidden"}>
-            {View ? <View /> : inbox}
+            {View ? <View /> : globals[s.id as GlobalId]}
           </Activity>
         );
       })}

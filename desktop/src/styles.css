@@ -3539,6 +3539,18 @@ body.resizing * {
 }
 /* The repository column hidden (⌘⇧E): its open repository's sections, as
    icons, in a strip where it was. */
+/* The Inbox or Agents: across every repository, so no repository column. */
+.app.global-view {
+  grid-template-columns: 52px 1fr;
+}
+.scope-header {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px;
+  line-height: 1.25;
+}
 .app.with-strip {
   grid-template-columns: 52px 48px 1fr;
 }
@@ -4098,4 +4110,42 @@ body.resizing * {
 .rule-actions {
   display: flex;
   gap: 6px;
+}
+
+/* ---- Agents, across every repository ---- */
+
+.agents-overview {
+  margin-top: 18px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  text-align: left;
+}
+.agents-overview th {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.agents-overview td {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.agents-overview td.num,
+.agents-overview th.num {
+  text-align: right;
+}
+.agents-overview td:first-child {
+  white-space: nowrap;
+  color: var(--fg);
+}
+.agents-overview td:first-child svg {
+  vertical-align: -1px;
+  color: var(--muted);
+}
+.agents-overview tbody tr {
+  cursor: pointer;
+}
+.agents-overview tbody tr:hover td {
+  background: var(--hover);
 }

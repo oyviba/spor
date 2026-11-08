@@ -3,8 +3,11 @@
 Spor's app: a web UI on Tauri over the Rust core in the repository root
 (`spor::git`, `spor::graph`, `spor::github`, `spor::tasks`, `spor::agent`,
 `spor::askpass`). The layout reads left to right from the general to the
-particular: workspace → repository → section. The rail holds the workspaces
-and the **Inbox** (what needs me?, across every repository); the column
+particular: workspace → repository → section. The rail holds the workspaces,
+the **Inbox** (what needs me?) and **Agents** (what are my agents doing?),
+both across every repository, so while one is open the app shows no
+repository (no repository column, branch bar or repository header; a
+workspace's badge goes back in, to the section last open there); the column
 beside it lists the workspace's repositories, and under the open one its
 sections, ordered by the questions you come with (#83): **Work** (what's in
 flight?), **Changes** (what's in my checkout?) and **History** (what
@@ -16,6 +19,7 @@ at the bottom.
 | Section | ⌘ | Sidebar | Page | Details card | Bottom |
 |---|---|---|---|---|---|
 | **Inbox** | 1 | What needs you in every workspace: answers, finished runs, failed CI, review requests | | | |
+| **Agents** | ⇧A | Every agent task in every workspace, by status or by repository | Counts per repository (click one for its Work) | | |
 | **Work** | 2 | Every work item: agents' tasks, your branches with commits ahead of the base, and open PRs from anyone. Shelves: Needs you, In progress, In review, Settled (folded); filters Mine / Agents / Teammates; right-click to move one up or down. *New…* (⌘N): a branch, an agent task, or from an issue | The work page, for a task, a PR or a branch: the stage track and who it waits on, and the tabs with something in them: Agent · Discussion · Changes · Checks. *Take over* opens a task's folder; *Start an agent on this* hands a branch to one | The work card (issue → branch · folder → PR → checks, and the next step). A task: conflicts, publish, land, discard. A PR: land, check out, close. A branch: open a PR, switch to it | A task's composer, or a PR's comment box |
 | **Changes** | 3 | Conflicts, staged and unstaged files | The file's diff (unified or side by side): click lines, shift-click to extend, then stage, unstage or discard them; a conflicted file's regions, a side picked for each | The checked-out branch's work header (*Hand to an agent*: it moves to a task folder with your uncommitted work, ⌘Z brings it back) and work card, Fetch / Pull / Push (Publish the first time), stashes (pop, apply, drop) | Commit box (⌘↩), amend |
 | **History** | 4 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |

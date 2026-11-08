@@ -59,6 +59,20 @@ export function SidebarHeader({ children }: { children?: React.ReactNode }) {
   );
 }
 
+/** The top of a sidebar that spans every repository (the Inbox, Agents):
+ * what it is and its scope, in place of the repository. */
+export function ScopeHeader({ title, scope, children }: { title: string; scope: string; children?: React.ReactNode }) {
+  return (
+    <div className="sidebar-top">
+      <div className="scope-header">
+        <span className="repo-name">{title}</span>
+        <span className="repo-branch">{scope}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 /** The workspace's repositories with their branch and state: click to
  * switch, right-click to move one to another workspace or remove it. */
 function RepoSwitcher({ onClose, onOpenOther }: { onClose: () => void; onOpenOther: () => void }) {
