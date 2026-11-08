@@ -39,7 +39,7 @@ column or branch bar); a workspace's badge goes back into its repository,
 to the section you were last in there. The sections are ordered by the questions
 you come with: what needs me, what's in flight, what's in my checkout, what
 happened. Each
-is a list in the sidebar, a page, and a details card. What you follow is a
+is a list in the sidebar, a page, and a details pane. What you follow is a
 **work item** (a branch with its issue, task folder, agent, pull request and
 checks) moving from *Planned* to *Landed*, and every section uses the same
 words for it: [docs/concepts.md](docs/concepts.md). [docs/journeys.md](docs/journeys.md)

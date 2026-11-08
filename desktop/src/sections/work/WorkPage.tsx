@@ -16,7 +16,7 @@ import type { ReactNode } from "react";
 import type { WorkItemInfo } from "../../types";
 import { PanelRight } from "../../shared/Icons";
 import { StatusPill, type Status } from "../../shared/StatusPill";
-import { Tabs } from "../../shared/Layout";
+import { DismissPane, Tabs } from "../../shared/Layout";
 import { waitingText } from "../../shared/work";
 
 export type WorkTab = "agent" | "discussion" | "changes" | "checks";
@@ -127,7 +127,7 @@ export function WorkPage({
   children: ReactNode;
 }) {
   return (
-    <div className={`task-page${inspector ? " with-inspector" : ""}`}>
+    <div className="task-page">
       <WorkHeader item={item} title={title} hint={hint} status={status} action={action}>
         {tabs.length > 1 && (
           <Tabs
@@ -148,18 +148,20 @@ export function WorkPage({
           <button
             className={`icon-button${inspector ? " active" : ""}`}
             onClick={() => onInspector(!inspector)}
-            title="Details (⌘.)"
-            aria-label="Toggle details"
+            title={inspector ? "Hide details (⌘.)" : "Show details (⌘.)"}
+            aria-label={inspector ? "Hide details" : "Show details"}
           >
             <PanelRight />
           </button>
         )}
       </WorkHeader>
       <div className="task-body">
-        {children}
-        {inspector && details}
+        <div className="task-main">
+          {children}
+          {dock}
+        </div>
+        {inspector && <DismissPane.Provider value={onInspector ? () => onInspector(false) : null}>{details}</DismissPane.Provider>}
       </div>
-      {dock}
     </div>
   );
 }
