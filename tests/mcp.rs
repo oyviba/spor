@@ -117,6 +117,7 @@ fn it_speaks_mcp() {
         [
             "ask",
             "report_progress",
+            "surface",
             "other_tasks",
             "pr_comments",
             "ci_log",
@@ -218,6 +219,66 @@ fn ask_returns_the_answer_and_progress_goes_to_the_log() {
         log.contains(r#""type":"spor_progress","step":2,"of":5,"note":"Wiring it up""#),
         "{log}"
     );
+}
+
+#[test]
+fn surface_puts_items_in_the_panel() {
+    let f = fixture();
+    let t = f
+        .tasks
+        .create("Anything", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
+    // A run on disk whose log the server appends to.
+    let dir = f.tasks.run_dir(&t.id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("run-0.meta"), "kind\tclaude\nstarted\t1\n").unwrap();
+    std::fs::write(dir.join("run-0.exit"), "0").unwrap();
+    std::fs::write(dir.join("run-0.log"), "").unwrap();
+    let c = Context {
+        repo_root: f.root.display().to_string(),
+        task: t.id.clone(),
+        log: dir.join("run-0.log").display().to_string(),
+    };
+    std::fs::write(t.worktree.join("notes.md"), "hi").unwrap();
+
+    for args in [
+        r#"{"kind":"link","title":"Preview","value":"https://example.com/p"}"#,
+        r#"{"kind":"file","title":"Notes","value":"notes.md"}"#,
+        r#"{"kind":"note","title":"Heads up","value":"Two tests were already failing."}"#,
+        // The same link again takes the new title.
+        r#"{"kind":"link","title":"Preview (v2)","value":"https://example.com/p"}"#,
+    ] {
+        let (text, err) = call(&c, "surface", args);
+        assert!(!err, "{text}");
+    }
+    let got: Vec<(&str, String, String)> = Runs::of(&f.tasks, &t)
+        .surfaced()
+        .iter()
+        .map(|s| (s.kind.name(), s.title.clone(), s.value.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("link", "Preview (v2)".into(), "https://example.com/p".into()),
+            ("file", "Notes".into(), "notes.md".into()),
+            ("note", "Heads up".into(), "Two tests were already failing.".into()),
+        ]
+    );
+
+    // What it won't show.
+    for args in [
+        r#"{"kind":"link","title":"x","value":"http://example.com"}"#,
+        r#"{"kind":"link","title":"x","value":"javascript:alert(1)"}"#,
+        r#"{"kind":"file","title":"x","value":"../app.txt"}"#,
+        r#"{"kind":"file","title":"x","value":"/etc/passwd"}"#,
+        r#"{"kind":"file","title":"x","value":"missing.txt"}"#,
+        r#"{"kind":"video","title":"x","value":"y"}"#,
+        r#"{"kind":"note","title":"","value":"y"}"#,
+    ] {
+        assert!(call(&c, "surface", args).1, "{args}");
+    }
+    assert_eq!(Runs::of(&f.tasks, &t).surfaced().len(), 3);
 }
 
 #[test]

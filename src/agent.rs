@@ -503,6 +503,47 @@ pub struct Progress {
     pub tool: Option<(String, String)>,
 }
 
+/// What kind of thing the agent surfaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfacedKind {
+    /// An https URL.
+    Link,
+    /// A path in the task's folder.
+    File,
+    /// A few words of text.
+    Note,
+}
+
+impl SurfacedKind {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "link" => Some(Self::Link),
+            "file" => Some(Self::File),
+            "note" => Some(Self::Note),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Link => "link",
+            Self::File => "file",
+            Self::Note => "note",
+        }
+    }
+}
+
+/// Something the agent put in the task's panel with the `surface` tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Surfaced {
+    /// The run that surfaced it.
+    pub run: usize,
+    pub kind: SurfacedKind,
+    pub title: String,
+    /// The URL, the path or the note.
+    pub value: String,
+}
+
 /// `TodoWrite`'s list.
 fn todos(input: &Json) -> Vec<Todo> {
     input
@@ -1157,6 +1198,42 @@ impl Runs {
                     e.get("note").str().unwrap_or_default().to_string(),
                 )
             })
+    }
+
+    /// What the agent put in the panel with `surface`, over all its runs in
+    /// the order they came. The same thing again (kind and value) keeps its
+    /// place and takes the newer title.
+    pub fn surfaced(&self) -> Vec<Surfaced> {
+        let mut out: Vec<Surfaced> = Vec::new();
+        for run in self.list().into_iter().filter(|r| !r.undone) {
+            let Ok(log) = std::fs::read_to_string(self.file(run.index, "log")) else {
+                continue;
+            };
+            for e in log
+                .lines()
+                .filter(|l| l.contains("spor_surface"))
+                .filter_map(Json::parse)
+                .filter(|e| e.get("type").str() == Some("spor_surface"))
+            {
+                let (Some(kind), Some(title), Some(value)) = (
+                    e.get("kind").str().and_then(SurfacedKind::parse),
+                    e.get("title").str(),
+                    e.get("value").str(),
+                ) else {
+                    continue;
+                };
+                match out.iter_mut().find(|s| s.kind == kind && s.value == value) {
+                    Some(old) => old.title = title.to_string(),
+                    None => out.push(Surfaced {
+                        run: run.index,
+                        kind,
+                        title: title.to_string(),
+                        value: value.to_string(),
+                    }),
+                }
+            }
+        }
+        out
     }
 
     /// How many agents may run at once in this repository (`git config

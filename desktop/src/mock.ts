@@ -647,6 +647,14 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           listening: t.summary.run?.state === "running",
           debrief: null,
           wants_debrief: false,
+          surfaced:
+            t.summary.id === "dark-mode-dashboard"
+              ? [
+                  { kind: "link", title: "Preview", value: "https://example.com/preview" },
+                  { kind: "file", title: "Migration notes", value: "docs/theme-migration.md" },
+                  { kind: "note", title: "Heads up", value: "Two charts still hardcode their colours." },
+                ]
+              : [],
         };
         return structuredClone(detail);
       }
