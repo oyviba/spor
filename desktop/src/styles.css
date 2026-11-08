@@ -1660,6 +1660,11 @@ button.busy::after {
   z-index: 50;
   pointer-events: none;
 }
+/* A details pane with buttons at its foot has them in that corner: the toasts
+   stand above it, so they never cover Land or Publish. */
+body:has(.pane-foot) .toasts {
+  bottom: 190px;
+}
 .toast {
   pointer-events: auto;
   display: flex;
