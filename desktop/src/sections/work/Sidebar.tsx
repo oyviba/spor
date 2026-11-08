@@ -93,7 +93,7 @@ export function Sidebar(p: Props) {
               ? doing(i.task.progress)
               : i.kind === "task"
               ? i.task.landed
-                ? `landed on ${i.task.base}`
+                ? `merged into ${i.task.base}`
                 : i.task.closed
                   ? "pull request closed"
                   : i.task.branch

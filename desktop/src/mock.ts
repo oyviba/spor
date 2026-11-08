@@ -70,7 +70,7 @@ const run = (over: Partial<RunInfo>): RunInfo => ({
 });
 
 /** A task's base and where it started, as the backend has them: one
- * started from `origin/main` lands on `main`. */
+ * started from `origin/main` merges into `main`. */
 const startOf = (base: string) => (base.startsWith("origin/") ? { base: base.slice("origin/".length), from: base } : { base, from: null });
 
 const summary = (id: string, prompt: string, created: number, over: Partial<TaskSummary> = {}): TaskSummary => ({
@@ -708,7 +708,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         if (t.summary.run?.state === "running") throw "Stop the agent first";
         const index = tasks.indexOf(t);
         const landing = cmd === "land_task";
-        const message = landing ? `Landed ${id} on ${t.summary.base}` : `Discarded ${id}`;
+        const message = landing ? `Merged ${id} into ${t.summary.base}` : `Discarded ${id}`;
         undoable = { message, task: structuredClone(t), index };
         if (landing) t.summary.landed = "a1b2c3d";
         else tasks.splice(index, 1);

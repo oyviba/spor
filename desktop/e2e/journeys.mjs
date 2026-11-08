@@ -190,7 +190,7 @@ try {
   });
 
   // 2 ──────────────────────────────────────────────────────────────────────
-  await journey("2. From an issue to a landed pull request, with an agent", "Issues", 1, async (step) => {
+  await journey("2. From an issue to a merged pull request, with an agent", "Issues", 1, async (step) => {
     let pr = 0;
     let task = "";
     await step("pick an issue assigned to you", async () => {
@@ -237,13 +237,13 @@ try {
       await w.waitFor(".check-list");
       must((await w.text(".check-list")).includes("test"), "the PR's checks");
     });
-    await step("land it, and the task cleans up", async () => {
+    await step("merge it, and the task cleans up", async () => {
       await toastGone();
-      await w.until(`return [...$$(".inspector button")].some(b => b.textContent.includes("Land #"))`, "Land");
-      await w.clickText(".inspector button", "Land #");
-      await w.clickText(".inspector button", "Land #");
+      await w.until(`return [...$$(".inspector button")].some(b => b.textContent.includes("Merge #"))`, "Merge");
+      await w.clickText(".inspector button", "Merge #");
+      await w.clickText(".inspector button", "Merge #");
       await w.until(`return $(".toast")?.innerText.includes("Cleaned up")`, "the clean-up", 30000);
-      must(ghState().merged.includes(pr), "landed through gh");
+      must(ghState().merged.includes(pr), "merged through gh");
       must(!git("branch", "--list", task), "its branch is gone");
     });
   });
@@ -276,7 +276,7 @@ try {
       () => w.until(`return [...$$(".task-row, .inspector")].some(e => /collide|overlap|same files/i.test(e.innerText))`, "a collision", 3000),
       { why: "nothing compares tasks with each other yet: only each one with its base", blocks: true },
     );
-    await step("land them in order, each rebased on the last", async () => {
+    await step("merge them in order, each rebased on the last", async () => {
       throw new Error("needs the step before");
     });
   });
@@ -325,7 +325,7 @@ try {
       { why: "your own branch's Publish only pushes; Open a pull request goes to GitHub's page", blocks: true },
     );
     await step("fix a failed check", async () => {});
-    await step("land it", async () => {});
+    await step("merge it", async () => {});
   });
 } finally {
   await w.close();

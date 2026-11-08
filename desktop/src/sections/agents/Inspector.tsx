@@ -95,9 +95,9 @@ export function Inspector({ detail, ...p }: Props) {
   const landBlocked = running
     ? "The agent is still working"
     : !p.baseCheckedOut
-      ? `Check out ${t.base} in the main folder to land on it`
+      ? `Check out ${t.base} in the main folder to merge into it`
       : !hasWork
-        ? "Nothing to land yet"
+        ? "Nothing to merge yet"
         : s.uncommitted > 0 && !includeUncommitted
           ? "It has uncommitted changes"
           : null;
@@ -166,10 +166,10 @@ export function Inspector({ detail, ...p }: Props) {
           <Merge size={13} />
           {t.landed ? (
             <span>
-              Landed on <b>{t.base}</b> as <code>{t.landed.slice(0, 7)}</code>
+              Merged into <b>{t.base}</b> as <code>{t.landed.slice(0, 7)}</code>
             </span>
           ) : (
-            <span>Closed — its pull request didn't land</span>
+            <span>Closed — its pull request wasn't merged</span>
           )}
         </div>
         <WorkCard item={item} from="work" actions={false} />
@@ -196,7 +196,7 @@ export function Inspector({ detail, ...p }: Props) {
         {s.base_moved && !done && (
           <div className="inspector-row warn">
             <Alert size={13} />
-            <span>{t.from ?? t.base} has moved on — landing rebases first</span>
+            <span>{t.from ?? t.base} has moved on — merging rebases first</span>
           </div>
         )}
         {detail.conflicts.length > 0 && !done && (
@@ -279,11 +279,11 @@ export function Inspector({ detail, ...p }: Props) {
       {!running && <Debrief detail={detail} onSend={p.onSend} onStartTask={p.onStartTask} />}
       {merged && (
         <div className="inspector-actions">
-          <div className="inspector-note">Its pull request landed. Its folder and branch can go.</div>
+          <div className="inspector-note">Its pull request was merged. Its folder and branch can go.</div>
           <Button
             className="primary"
             disabled={running}
-            title="Mark it landed and remove its folder and branch (⌘Z undoes)"
+            title="Mark it merged and remove its folder and branch (⌘Z undoes)"
             onClick={() => p.onSettle(p.pull!.merge_commit ?? `#${pr!.number}`)}
           >
             <Merge size={12} /> Clean up
@@ -317,15 +317,15 @@ export function Inspector({ detail, ...p }: Props) {
             title={
               mergeBlocked ??
               (pr.checks === "failing"
-                ? "Its checks are failing — land it anyway: squash and merge on GitHub, then clean up"
+                ? "Its checks are failing — merge it anyway: squash and merge on GitHub, then clean up"
                 : pr.checks === "pending"
-                  ? "Its checks are still running — land it anyway: squash and merge on GitHub, then clean up"
+                  ? "Its checks are still running — merge it anyway: squash and merge on GitHub, then clean up"
                   : "Squash and merge on GitHub, then remove its folder and branch (⌘Z brings them back)")
             }
             onClick={() => (confirmMerge ? work("merge", p.onMerge) : setConfirmMerge(true))}
             onBlur={() => setConfirmMerge(false)}
           >
-            <Merge size={12} /> {confirmMerge ? `Land #${pr.number} on ${t.base}?` : `Land #${pr.number}`}
+            <Merge size={12} /> {confirmMerge ? `Merge #${pr.number} into ${t.base}?` : `Merge #${pr.number}`}
           </Button>
           {pr?.checks === "failing" && (
             <Button
@@ -354,7 +354,7 @@ export function Inspector({ detail, ...p }: Props) {
               checked={includeUncommitted}
               onChange={(e) => setIncludeUncommitted(e.target.checked)}
             />
-            Commit its uncommitted changes when landing or publishing
+            Commit its uncommitted changes when merging or publishing
           </label>
         )}
         {!pr && (
@@ -399,12 +399,12 @@ export function Inspector({ detail, ...p }: Props) {
             title={landBlocked ?? "One commit with the task as its message (⌘Z undoes)"}
             onClick={() => work("land", () => p.onLand(false, includeUncommitted))}
           >
-            Land on {t.base}
+            Merge into {t.base}
           </Button>
           <button
             className="primary split-more"
             disabled={landBlocked != null || working != null}
-            aria-label="More ways to land"
+            aria-label="More ways to merge"
             onClick={() => setLandMenu((v) => !v)}
           >
             <ChevronDown size={12} />
@@ -417,7 +417,7 @@ export function Inspector({ detail, ...p }: Props) {
                   work("land", () => p.onLand(true, includeUncommitted));
                 }}
               >
-                Land with a merge commit
+                Create a merge commit
               </button>
             </div>
           )}

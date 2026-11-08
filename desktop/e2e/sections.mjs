@@ -259,10 +259,10 @@ try {
   await w.clickText(".task-row", "#11");
   await w.until(`return $(".task-header")?.innerText.includes("#11")`, "#11");
   await w.click(".inspector .split .primary");
-  check((await w.text(".inspector .split")).includes("Land #11?"), "landing asks once more");
+  check((await w.text(".inspector .split")).includes("Merge #11?"), "merging asks once more");
   await w.click(".inspector .split .danger");
-  await w.until(`return $(".task-header .stage-track [aria-current]")?.innerText === "Landed"`, "the landing");
-  check(ghState().merged.includes(11), "Land merges through gh");
+  await w.until(`return $(".task-header .stage-track [aria-current]")?.innerText === "Merged"`, "the merge");
+  check(ghState().merged.includes(11), "Merging goes through gh");
   await w.shot("pulls-3-merged");
 
   console.log("Inbox");

@@ -118,7 +118,7 @@ export function WorkSection() {
       for (const p of list)
         if (now.has(p.task) && !merged.current.has(p.task))
           toast(
-            `#${p.pull.number} ${p.pull.state === "merged" ? "landed" : "was closed"} — ${p.task} can be cleaned up`,
+            `#${p.pull.number} ${p.pull.state === "merged" ? "merged" : "was closed"} — ${p.task} can be cleaned up`,
             "ok",
             false,
             p.pull.state === "merged"
@@ -163,7 +163,7 @@ export function WorkSection() {
       // Keep its row in step with the detail.
       setTasks((ts) => ts.map((t) => (t.id === d.task.id ? d.task : t)));
     } catch (e) {
-      // The task was landed or discarded elsewhere.
+      // The task was merged or discarded elsewhere.
       if (String(e).startsWith("No task")) setView({ kind: "new" });
     }
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -335,17 +335,17 @@ export function WorkSection() {
           pending: commitUncommitted ? "Committing and pushing…" : "Pushing…",
         })
         .then(afterChange),
-    // From prompt to landed in one place: merge on GitHub, then clean up
+    // From prompt to merged in one place: merge on GitHub, then clean up
     // at once (⌘Z brings its folder and branch back).
     onMerge: async () => {
       const pr = pulls[id]?.pull;
       if (!pr) return;
       const ok = await shell.act(() => api.pullAction(pr.number, "squash"), {
         undo: false,
-        pending: `Landing #${pr.number} on GitHub…`,
+        pending: `Merging #${pr.number} on GitHub…`,
       });
       if (!ok) return;
-      // Cleaned up here, so no "landed — can be cleaned up" note follows.
+      // Cleaned up here, so no "merged — can be cleaned up" note follows.
       merged.current?.add(id);
       const list = await api.taskPulls().catch(() => [] as TaskPull[]);
       await settle(id, list.find((p) => p.task === id)?.merge_commit ?? `#${pr.number}`);
@@ -371,7 +371,7 @@ export function WorkSection() {
     onClose: () => close(id),
   });
 
-  // Landing or publishing work that would take back what reached the base
+  // Merging or publishing work that would take back what reached the base
   // since (#81 did, by writing back old copies of files): say so first.
   const undoesOk = async (title: string) => {
     if (!shown || shown.undoes.length === 0) return true;
@@ -527,8 +527,8 @@ export function WorkSection() {
             onSend={send}
             onStop={() => api.stopAgent(shown.task.id).then(afterChange, fail)}
             onLand={async (merge, commitUncommitted) =>
-              (await undoesOk(`Land on ${shown.task.base} anyway?`)) &&
-              shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted), { pending: `Landing on ${shown.task.base}…` }).then(afterChange)
+              (await undoesOk(`Merge into ${shown.task.base} anyway?`)) &&
+              shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted), { pending: `Merging into ${shown.task.base}…` }).then(afterChange)
             }
             onDiscard={() =>
               shell.act(() => api.discardTask(shown.task.id), { pending: "Discarding…" }).then((ok) => {

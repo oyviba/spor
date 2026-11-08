@@ -41,7 +41,7 @@ you come with: what needs me, what's in flight, what's in my checkout, what
 happened. Each
 is a list in the sidebar, a page, and a details card. What you follow is a
 **work item** (a branch with its issue, task folder, agent, pull request and
-checks) moving from *Planned* to *Landed*, and every section uses the same
+checks) moving from *Planned* to *Merged*, and every section uses the same
 words for it: [docs/concepts.md](docs/concepts.md). [docs/journeys.md](docs/journeys.md)
 has five journeys through it, each with a budget of how often it changes
 section, run as end-to-end tests.
@@ -68,9 +68,9 @@ section, run as end-to-end tests.
   drop or attach images (screenshots, mockups) into any prompt — a new
   task, an issue's, or a follow-up; they're kept in `.git/spor/attachments/`
   and the agent is told where to find them. Watch the conversation, answer its questions, steer it while it works, review its
-  changes with line comments, send feedback, undo a run, then **Land** it
+  changes with line comments, send feedback, undo a run, then **Merge** it
   (one squashed commit, or a merge commit), **Publish** it as a pull request
-  and land that, or **Discard** it. A work item's issue, pull request and CI runs all open here,
+  and merge that, or **Discard** it. A work item's issue, pull request and CI runs all open here,
   wherever you click them from. [docs/agents.md](docs/agents.md) has the
   design
 - **Changes** (⌘3) — staged and unstaged files; click lines in a diff (shift-click
@@ -98,7 +98,7 @@ piece of work yet (an issue nobody has started, a run on `main`):
 - **Issues**, **Pull requests**, **Actions** (⌘5–⌘7) — through `gh`: an
   issue and its comments (and *Start with agent* from it); a PR's
   conversation, files and checks, with comments, line comments, approve,
-  land, check out; a run's jobs and its log folded by step, re-run and
+  merge, check out; a run's jobs and its log folded by step, re-run and
   cancel. Branch labels in the graph carry their open PR's number, review
   state and CI (`#42✓`)
 
@@ -106,7 +106,7 @@ Across the app:
 
 - **Undo instead of confirmations.** Staging, discarding, committing,
   amending, pulling, switching, merging, cherry-picks, reverts, rebases,
-  resets, rewrites, renames, deleting a branch, tag or stash, and landing or
+  resets, rewrites, renames, deleting a branch, tag or stash, and merging or
   discarding a task all happen at once and can be taken back with ⌘Z or the
   toast's Undo. Pushing makes commits final: their undos go. Only what git
   can't take back asks first (a hard reset, deleting on the remote)
@@ -151,7 +151,7 @@ output:
 - `src/askpass.rs` — credential prompts from git and ssh, handed to the app
   over a private socket, and running network git commands
 - `src/tasks.rs` — agent tasks: a prompt with its own branch and worktree;
-  creating, measuring, landing, discarding and restoring them
+  creating, measuring, merging, discarding and restoring them
 - `src/agent.rs`, `src/host.rs`, `src/checkpoint.rs` — running agents in
   task folders, the host that lets the app talk to a running Claude Code,
   and per-run checkpoints

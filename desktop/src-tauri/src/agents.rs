@@ -453,9 +453,9 @@ pub(crate) struct TaskDetail {
     task: TaskSummary,
     transcript: Vec<Item>,
     runs: Vec<RunInfo>,
-    /// Files that would conflict if the task landed on its base now.
+    /// Files that would conflict if the task merged into its base now.
     conflicts: Vec<String>,
-    /// Work that came to the base after the task started and landing it
+    /// Work that came to the base after the task started and merging it
     /// would take back out, per file (`Tasks::undoes`).
     undoes: Vec<Undone>,
     /// The run "Undo this run" would take back, if any.
@@ -1000,7 +1000,7 @@ pub(crate) fn land_task(
     let undo = tasks
         .land(&task, mode, commit_uncommitted)
         .map_err(|e| first_line(&e))?;
-    let message = format!("Landed {} on {}", task.id, task.base);
+    let message = format!("Merged {} into {}", task.id, task.base);
     app.undo.push(message.clone(), Undo::Task(undo));
     Ok(message)
 }
@@ -1450,7 +1450,7 @@ pub(crate) fn check_feedback(app: State<App>, id: String) -> Result<String, Stri
         .ok_or_else(|| format!("No Actions job has failed on #{number}"))
 }
 
-/// The task's pull request was merged: mark it landed and remove its folder
+/// The task's pull request was merged: mark it merged and remove its folder
 /// and branch. ⌘Z brings them back.
 #[tauri::command(async)]
 pub(crate) fn settle_task(app: State<App>, id: String, commit: String) -> Result<String, String> {
@@ -1462,7 +1462,7 @@ pub(crate) fn settle_task(app: State<App>, id: String, commit: String) -> Result
         return Err("Stop the agent first".into());
     }
     let undo = tasks.settle(&task, &commit).map_err(|e| first_line(&e))?;
-    let message = format!("Cleaned up {} — its pull request landed", task.id);
+    let message = format!("Cleaned up {} — its pull request was merged", task.id);
     app.undo.push(message.clone(), Undo::Task(undo));
     Ok(message)
 }

@@ -5,8 +5,8 @@
 //   SPOR_REPO=/path/to/a/scratch/repo node e2e/run.mjs path/to/spor-desktop out-dir
 //
 // It drives one task through the whole loop (create, agent works, review
-// the diff, comment on a line, send feedback, land, undo) and checks the
-// repository with git at each step. Use a throwaway repository: it lands.
+// the diff, comment on a line, send feedback, merge, undo) and checks the
+// repository with git at each step. Use a throwaway repository: it merges.
 
 import { existsSync, readFileSync } from "node:fs";
 import { check, gitIn, open, sleep } from "./webdriver.mjs";
@@ -132,16 +132,16 @@ try {
   await w.until(`return !$(".run.undone")`, "the redo");
   check(read("greet.py").includes("farewell") && !existsSync(`${metaDir}/run-1.undone`), "Undo on the toast brings the run back");
 
-  console.log("Land");
+  console.log("Merge");
   await w.click(".inspector .split .primary");
   await w.waitFor(".toast");
   await sleep(500);
-  check(git("log", "-1", "--format=%s", "main") === "Let greet() take an optional title", "landed as one commit on main");
-  check(git("log", "-1", "--format=%B", "main").includes("Spor-Task:"), "landing commit has the Spor-Task trailer");
-  check(!git("branch", "--list", "agent/*"), "task branch removed after landing");
+  check(git("log", "-1", "--format=%s", "main") === "Let greet() take an optional title", "merged as one commit on main");
+  check(git("log", "-1", "--format=%B", "main").includes("Spor-Task:"), "merge commit has the Spor-Task trailer");
+  check(!git("branch", "--list", "agent/*"), "task branch removed after merging");
   await w.until(`return [...$$(".shelf-header")].some(h => h.innerText.includes("Settled"))`, "the Settled shelf");
-  check(true, "the landed task moves to Settled");
-  await w.shot("5-landed");
+  check(true, "the merged task moves to Settled");
+  await w.shot("5-merged");
 
   console.log("Undo");
   await w.clickText(".toast .link", "Undo");

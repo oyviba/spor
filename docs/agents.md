@@ -1,6 +1,6 @@
 # Spor for parallel coding agents
 
-A design for making spor the place where you run, watch, review and land
+A design for making spor the place where you run, watch, review and merge
 the work of several coding agents at once. **Phases 1 and 2 are built**,
 with most of 3 and the conflict radar from 4 (see the README); the rest is
 the plan.
@@ -19,7 +19,7 @@ Running one coding agent is easy. Running four is a mess:
   read it. Reading a diff, saying "not like that, like this", and getting a
   second attempt is slow when the diff, the conversation and the terminal
   are in three places.
-- **Landing is manual.** Rebasing each branch on a moving main, resolving
+- **Merging is manual.** Rebasing each branch on a moving main, resolving
   conflicts between two agents' work, running the tests after each merge.
 - **The why gets lost.** A month later, `git blame` points at a commit an
   agent made. The conversation that explains it is gone.
@@ -46,12 +46,12 @@ The groundwork this needs is now in the core (`src/git.rs`):
 
 - **Every git call runs in its own repository.** `git::Repo` carries a
   root, so a worktree is just another `Repo`. A job started for one task
-  can't land in another, which was impossible while git ran in the
+  can't merge in another, which was impossible while git ran in the
   process's working directory.
 - **Worktrees.** `worktrees()`, `add_worktree(path, branch, base)` and
   `remove_worktree(path, force)`, and the branch list shows linked
   worktrees.
-- **Landing.** `merge`, `rebase`, `cherry_pick` and `rebase_interactive`
+- **Merging.** `merge`, `rebase`, `cherry_pick` and `rebase_interactive`
   return an `Outcome`: done, or stopped on conflicts. `operation()`,
   `conflicts()`, `continue_operation()` and `abort_operation()` handle the
   stopped case, and the app has a banner and a resolver for it.
@@ -158,11 +158,11 @@ Two other questions come the same way, and get their own answers:
     (the diff component already supports line annotations) are gathered
     into it as `file:line — comment`, so review reads like a PR review and
     goes back as one message
-  - **Land**: squash or merge into the base (rebasing first when the base
+  - **Merge**: squash or merge into the base (rebasing first when the base
     moved), or **Open Pull Request**, or **Discard**, which removes the
     worktree and branch and can be undone while spor is open
 
-### Landing many at once
+### Merging many at once
 
 - **Collision radar.** In the background, spor does a trial merge of each
   active agent branch against the base and against every other agent
@@ -178,21 +178,21 @@ Two other questions come the same way, and get their own answers:
 - **Don't undo the base.** A merge that doesn't conflict can still take
   work back out: an agent that rebases or merges the base in, then writes
   files back from the copy it started with, reverts everything that came
-  in meanwhile (that's how landing #81 undid the Inbox and five other
+  in meanwhile (that's how merging #81 undid the Inbox and five other
   changes). `Tasks::undoes` finds it: the lines the trial merge would drop
   from the base, blamed on the base, that came from commits made after the
   branch was created (its reflog's first entry), leaving out lines that
   moved elsewhere. The task's card says "Would undo 109 lines that reached
   main after it started, in App.tsx…", with *Ask agent to put them back*,
-  and landing or opening a pull request asks first.
-- **Land in order.** Pick the tasks that are ready and spor lands them one
+  and merging or opening a pull request asks first.
+- **Merge in order.** Pick the tasks that are ready and spor merges them one
   at a time: rebase, run the checks, merge, next. It stops at the first
   failure and says which. It's a small local merge queue.
 
 ### Remembering why
 
 Each task keeps its transcript (in `.git/spor/tasks/<id>/`) and the commits
-it produced. When a task lands, the squash commit's message gets a
+it produced. When a task merges, the squash commit's message gets a
 `Spor-Task: <id>` trailer. Commit details in History, and later blame, can
 then open the conversation behind a line. "Why does this exist?" gets an
 answer from the agent's own reasoning, not just a name and a date.
@@ -200,7 +200,7 @@ answer from the agent's own reasoning, not just a name and a date.
 ### Safety
 
 - Agents never push. Publishing is always a human click: Open Pull Request
-  or Land. The Claude Code adapter starts agents with `git push` denied in
+  or Merge. The Claude Code adapter starts agents with `git push` denied in
   their permissions.
 - Worktrees share the repository's refs, so an agent could still move or
   delete another branch. Spor notices when a task's branch moves in a way
@@ -217,9 +217,9 @@ Each phase is useful on its own.
 1. **Tasks without agents** — *done*. New Task… creates a branch and a worktree from
    a base. The Agents panel lists tasks with state taken from git (dirty,
    commits ahead, last change). A task page shows the diff against the base,
-   with Land, Open Pull Request and Discard. That's already a better way to
+   with Merge, Open Pull Request and Discard. That's already a better way to
    run agents by hand: start a task, run your agent in its folder, review
-   and land in spor.
+   and merge in spor.
 2. **Launch and watch** — *done*. The generic command adapter and the Claude Code
    adapter: spawn in the worktree, stream the transcript, states from the
    process and the stream, a notification when a task finishes or fails.
@@ -229,7 +229,7 @@ Each phase is useful on its own.
    permissions are set when it starts.
 4. **Many at once** — *collision radar done*, with *Ask Agent to Rebase*
    for conflicts with the base. Still to do: Rebase All with conflicts handed back
-   to the agent, and landing in order with checks.
+   to the agent, and merging in order with checks.
 
    **From issues** (#47): a task can start from a GitHub issue (the
    issue is its prompt), opens its pull request with `Closes #n`, follows
@@ -260,7 +260,7 @@ Claude Code doesn't prompt for any tool.
   logs). Some people want to watch the agent's own terminal UI. That needs
   a terminal emulator in the app (xterm.js in the web view, over a pty in
   the backend), which is a project of its own.
-- **Squash or merge by default** when landing. Squash keeps main readable
+- **Squash or merge by default** when merging. Squash keeps main readable
   and puts the trailer in one place. Merge keeps the agent's individual
   commits.
 - **Where task state lives.** `.git/spor/` is per-clone and invisible to
@@ -289,7 +289,7 @@ When the latest Claude run's context is 80% full or more, the composer offers *S
 
 ## Finding the conversation behind a line (#108)
 
-A commit landed by a task carries a `Spor-Task: <id>` trailer. History's commit card says which task made it, with *Open conversation*; Blame shows *Why?* by the first line of each group whose commit has one. Landed tasks keep their transcripts (clean-up only deletes the transcripts of discarded tasks). ⌘K also searches what was said across all of a repository's tasks, landed ones included: prompts, follow-ups, the agent's words, steering and debriefs. A result opens the task; it doesn't yet scroll to the run it was found in.
+A commit merged by a task carries a `Spor-Task: <id>` trailer. History's commit card says which task made it, with *Open conversation*; Blame shows *Why?* by the first line of each group whose commit has one. Merged tasks keep their transcripts (clean-up only deletes the transcripts of discarded tasks). ⌘K also searches what was said across all of a repository's tasks, merged ones included: prompts, follow-ups, the agent's words, steering and debriefs. A result opens the task; it doesn't yet scroll to the run it was found in.
 
 ## Agents at once
 
