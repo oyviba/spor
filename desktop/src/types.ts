@@ -107,6 +107,15 @@ export interface TaskDetail {
   asks: Ask[];
   /** The running agent can be answered, steered and interrupted. */
   listening: boolean;
+  /** What the agent put in the panel with its `surface` tool. */
+  surfaced: Surfaced[];
+}
+
+export interface Surfaced {
+  kind: "link" | "file" | "note";
+  title: string;
+  /** The https URL, the path in the task's folder, or the note. */
+  value: string;
 }
 
 export interface RunPatch {

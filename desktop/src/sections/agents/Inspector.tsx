@@ -5,6 +5,7 @@ import { checksLabel, duration, latestChecks, runs as toRuns, tokens } from "./t
 import { useShell } from "../../shared/app";
 import { Button } from "../../shared/Button";
 import { Debrief } from "./Debrief";
+import { SurfacedItems } from "./SurfacedItems";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromTask } from "../../shared/work";
 import {
@@ -180,6 +181,7 @@ export function Inspector({ detail, ...p }: Props) {
   return (
     <aside className="inspector">
       <WorkCard item={item} from="work" actions={false} />
+      <SurfacedItems items={detail.surfaced} folder={t.worktree} onCopy={p.onCopy} />
       <div className="inspector-section">
         <button className="inspector-row action" onClick={() => p.onCopy(t.command, "Agent command")}>
           <Copy size={13} />

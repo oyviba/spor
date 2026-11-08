@@ -472,6 +472,17 @@ pub(crate) struct TaskDetail {
     debrief: Option<DebriefInfo>,
     /// The latest run ended and should get a debrief (`debrief_task`).
     wants_debrief: bool,
+    /// What the agent put in the panel with its `surface` tool.
+    surfaced: Vec<SurfacedInfo>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SurfacedInfo {
+    /// "link", "file" or "note".
+    kind: &'static str,
+    title: String,
+    /// The https URL, the path in the task's folder, or the note.
+    value: String,
 }
 
 #[derive(Serialize)]
@@ -731,6 +742,15 @@ pub(crate) fn task_detail(app: State<App>, id: String) -> Result<TaskDetail, Str
             .and_then(|r| runs.debrief(r.index).map(|d| debrief_info(r.index, d))),
         wants_debrief: spor::debrief::enabled(&task)
             && runs.latest().is_some_and(|r| runs.wants_debrief(&r)),
+        surfaced: runs
+            .surfaced()
+            .into_iter()
+            .map(|s| SurfacedInfo {
+                kind: s.kind.name(),
+                title: s.title,
+                value: s.value,
+            })
+            .collect(),
         runs: runs.list().into_iter().map(RunInfo::from).collect(),
         undoes: if conflicts.is_empty() {
             tasks

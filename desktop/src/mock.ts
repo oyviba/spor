@@ -478,6 +478,14 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           undoable: last && !last.undone && last.state !== "running" ? last.index : null,
           asks: t.asks ?? [],
           listening: t.summary.run?.state === "running",
+          surfaced:
+            t.summary.id === "dark-mode-dashboard"
+              ? [
+                  { kind: "link", title: "Preview", value: "https://example.com/preview" },
+                  { kind: "file", title: "Migration notes", value: "docs/theme-migration.md" },
+                  { kind: "note", title: "Heads up", value: "Two charts still hardcode their colours." },
+                ]
+              : [],
         };
         return structuredClone(detail);
       }
