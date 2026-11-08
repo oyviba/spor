@@ -13,10 +13,10 @@ sections, ordered by the questions you come with (#83): **Work** (what's in
 flight?), **Changes** (what's in my checkout?) and **History** (what
 happened?). Below a divider, **Issues**, **Pull requests** and **Actions**
 are browsers for what belongs to no work item yet. Each section is built from the same four pieces: a list
-in the sidebar, a page, a details card on the right, and a bar or composer
+in the sidebar, a page, a details pane fixed on the right, and a bar or composer
 at the bottom.
 
-| Section | ⌘ | Sidebar | Page | Details card | Bottom |
+| Section | ⌘ | Sidebar | Page | Details pane | Bottom |
 |---|---|---|---|---|---|
 | **Inbox** | 1 | What needs you in every workspace: answers, finished runs, failed CI, review requests | | | |
 | **Agents** | ⇧A | Every agent task in every workspace, by status or by repository | Counts per repository (click one for its Work) | | |
@@ -169,7 +169,7 @@ src-tauri/src/
 src/
   App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–7, ⌘Z, ⌘K,
                 background fetch, credential prompts, recent repositories
-  shared/       DiffView, details card, menus and dialogs, palette, status pills, CI status, icons, hooks
+  shared/       DiffView, details pane, menus and dialogs, palette, status pills, CI status, icons, hooks
   sections/     inbox/ work/ changes/ history/ issues/ pulls/ actions/ (and agents/, a task's page)
 ```
 
