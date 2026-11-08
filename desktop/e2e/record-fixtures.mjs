@@ -13,7 +13,7 @@ const call = (cmd, args = {}) =>
   w.js(`return window.__TAURI_INTERNALS__.invoke(arguments[0], arguments[1])`, cmd, args);
 
 try {
-  await w.waitFor(".rail-item");
+  await w.waitFor(".nav-section");
   const graph = await call("graph", { limit: 2000 });
   const fixtures = {
     recordedAt: Math.floor(Date.now() / 1000),

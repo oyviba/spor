@@ -71,9 +71,13 @@ interface Toast {
 }
 
 /**
- * The rail (#83), in the order of the questions you come with: what needs
+ * The sections (#83), in the order of the questions you come with: what needs
  * me, what's in flight, my checkout, the graph. Then, after a divider, the
  * browsers: GitHub's lists, for what belongs to no work item yet.
+ *
+ * Left to right is workspace → repository → section: the Inbox spans every
+ * repository, so it sits on the rail with the workspaces; the rest belong to
+ * one repository and are listed under the open one in the repository column.
  */
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: string; browser?: boolean }[] = [
   { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "Mod+1" },
@@ -130,9 +134,10 @@ function repoCommands(shell: Shell): AppCommand[] {
   ];
 }
 
-/** The rail's layout, so the move to it (#83) happens once. */
+/** The rail's layout, so each move of it (#83, then the sections under the
+ * open repository) is announced once. */
 const RAIL_KEY = "spor.rail";
-const RAIL = "2";
+const RAIL = "3";
 
 /** How often the open repository is fetched in the background. */
 const AUTO_FETCH_MS = 5 * 60 * 1000;
@@ -588,18 +593,26 @@ export function App() {
   // The rail's order and shortcuts moved (#83). Once: keep the shortcuts the
   // user chose working, and say where the defaults went.
   useEffect(() => {
+    let was: string | null;
     try {
-      if (localStorage.getItem(RAIL_KEY) === RAIL) return;
+      was = localStorage.getItem(RAIL_KEY);
+      if (was === RAIL) return;
       localStorage.setItem(RAIL_KEY, RAIL);
     } catch {
       return;
     }
     // Nothing to move for someone opening spor for the first time.
     if (firstRun) return;
+    const under = "Work, Changes, History and the browsers now sit under the open repository; the Inbox stays on the rail.";
+    // Only the layout moved since #83; the shortcuts are as they were.
+    if (was === "2") {
+      toast(under);
+      return;
+    }
     const kept = keepChanges(appCommands, getSettings().keymap);
     if (JSON.stringify(kept) !== JSON.stringify(getSettings().keymap)) setSettings({ keymap: kept });
     const keys = keyLabel("shortcuts");
-    const moved = `The rail is now Inbox, Work, Changes and History, then the browsers. Its shortcuts moved${keys ? ` (${keys} lists them)` : ""}.`;
+    const moved = `${under} The sections' shortcuts moved${keys ? ` (${keys} lists them)` : ""}.`;
     toast(moved, "ok", false, { label: "Show shortcuts", run: () => setSettingsPage("shortcuts") });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -745,6 +758,36 @@ export function App() {
     </button>
   );
 
+  /** A section's link: on the rail (the Inbox), in the repository column
+   * under the open repository (named), or in the strip that stands in for
+   * the column while it's hidden (icons). */
+  const sectionLink = (s: (typeof SECTIONS)[number], where: "rail" | "panel" | "strip") => {
+    // One number on the rail: how many things need you.
+    const count = s.id === "inbox" ? inbox.items.length : 0;
+    const keys = keyLabel(`go:${s.id}`);
+    return (
+      <button
+        key={s.id}
+        className={`nav-section ${where === "panel" ? "repo-section" : "rail-item"}${s.browser ? " browser" : ""}${section === s.id ? " active" : ""}`}
+        onClick={() => setSection(s.id)}
+        title={where === "panel" ? keys || undefined : keys ? `${s.label} (${keys})` : s.label}
+        aria-label={s.label}
+        aria-current={section === s.id ? "page" : undefined}
+      >
+        {s.icon}
+        {where === "panel" && <span className="repo-section-label">{s.label}</span>}
+        {count > 0 && <span className="rail-badge num asking">{count}</span>}
+      </button>
+    );
+  };
+  const repoSections = (where: "panel" | "strip") =>
+    SECTIONS.slice(1).map((s, i, all) => (
+      <Fragment key={s.id}>
+        {s.browser && !all[i - 1]?.browser && <span className={where === "panel" ? "repo-sections-divider" : "rail-divider"} />}
+        {sectionLink(s, where)}
+      </Fragment>
+    ));
+
   if (repo === undefined) return <div className="boot" />;
   if (repo === null || !shell)
     return (
@@ -767,32 +810,30 @@ export function App() {
 
   return (
     <ShellContext.Provider value={shell}>
-      <div className={`app${reposShown ? " with-repos" : ""}`}>
-        <nav className="rail" aria-label="Sections">
+      <div className={`app ${reposShown ? "with-repos" : "with-strip"}`}>
+        <nav className="rail" aria-label="Workspaces">
           {workspaceRail}
-          {SECTIONS.map((s, i) => {
-            // One number on the rail: how many things need you.
-            const count = s.id === "inbox" ? inbox.items.length : 0;
-            return (
-              <Fragment key={s.id}>
-                {s.browser && !SECTIONS[i - 1]?.browser && <span className="rail-divider" />}
-                <button
-                  className={`rail-item${s.browser ? " browser" : ""}${section === s.id ? " active" : ""}`}
-                  onClick={() => setSection(s.id)}
-                  title={keyLabel(`go:${s.id}`) ? `${s.label} (${keyLabel(`go:${s.id}`)})` : s.label}
-                  aria-label={s.label}
-                  aria-current={section === s.id ? "page" : undefined}
-                >
-                  {s.icon}
-                  {count > 0 && <span className="rail-badge num asking">{count}</span>}
-                </button>
-              </Fragment>
-            );
-          })}
+          {sectionLink(SECTIONS[0], "rail")}
           <span className="flex-1" />
           {settingsButton}
         </nav>
-        {reposShown && <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed} />}
+        {reposShown ? (
+          <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed}>
+            {repoSections("panel")}
+          </RepoPanel>
+        ) : (
+          <nav className="section-strip" aria-label={`${repo.name}: sections`} style={{ "--ws": WORKSPACE_COLORS[ws.color] } as React.CSSProperties}>
+            <button
+              className="section-strip-repo"
+              onClick={() => setReposShown(true)}
+              title={`${repo.name} — show the repositories${keyLabel("repos") ? ` (${keyLabel("repos")})` : ""}`}
+              aria-label="Show repositories"
+            >
+              {repo.name.slice(0, 2)}
+            </button>
+            {repoSections("strip")}
+          </nav>
+        )}
         <div className="section">
           {state && <BranchBar state={state} />}
           {state?.operation && <OperationBanner state={state} />}

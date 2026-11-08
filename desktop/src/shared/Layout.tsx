@@ -145,10 +145,11 @@ function repoMenu(shell: Shell, path: string) {
 }
 
 /** The workspace's repositories in a column beside the rail, the open one
- * marked, so which one you're in is plain from any section (⌘⇧E hides it).
+ * marked with its sections listed under it: workspace, then repository,
+ * then section, left to right and top to bottom (⌘⇧E hides the column).
  * The open one is live; the others are read on opening, when a ref moves
  * here, on coming back to the window and every 30 s. */
-export function RepoPanel({ color, changed }: { color: string; changed: number }) {
+export function RepoPanel({ color, changed, children }: { color: string; changed: number; children?: React.ReactNode }) {
   const shell = useShell();
   const { repo, state, recent, openRepo, menu, workspaceName } = shell;
   const [heads, setHeads] = useState<Map<string, RepoHead>>(new Map());
@@ -186,7 +187,7 @@ export function RepoPanel({ color, changed }: { color: string; changed: number }
               }
             : heads.get(path);
           const missing = h?.exists === false;
-          return (
+          const row = (
             <button
               key={path}
               className={`repo-panel-row${here ? " current" : ""}${missing ? " missing" : ""}`}
@@ -216,6 +217,15 @@ export function RepoPanel({ color, changed }: { color: string; changed: number }
                 </span>
               )}
             </button>
+          );
+          if (!here) return row;
+          return (
+            <div key={path} className="repo-panel-open">
+              {row}
+              <nav className="repo-sections" aria-label={`${path.split("/").pop()}: sections`}>
+                {children}
+              </nav>
+            </div>
           );
         })}
       </div>

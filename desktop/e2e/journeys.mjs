@@ -30,7 +30,7 @@ const w = await open(app, out);
 const must = (ok, what) => {
   if (!ok) throw new Error(what);
 };
-const section = (label) => w.js(`$(\`.rail-item[aria-label="\${arguments[0]}"]\`).click()`, label);
+const section = (label) => w.js(`$(\`.nav-section[aria-label="\${arguments[0]}"]\`).click()`, label);
 const toastGone = () => w.js(`$$(".toast .icon-button").forEach(b => b.click())`);
 const answer = async (text) => {
   await w.waitFor(".dialog input");
@@ -43,14 +43,14 @@ const button = (css, text) => w.js(`return [...$$(arguments[0])].some(b => b.tex
 // watched as it changes.
 const watchSections = () =>
   w.js(`
-    const now = () => document.querySelector('.rail-item[aria-current="page"]')?.getAttribute("aria-label");
+    const now = () => document.querySelector('.nav-section[aria-current="page"]')?.getAttribute("aria-label");
     window.__sections = [now()];
     if (!window.__watching) {
       window.__watching = new MutationObserver(() => {
         const s = now();
         if (s && window.__sections.at(-1) !== s) window.__sections.push(s);
       });
-      window.__watching.observe(document.querySelector(".rail"), { subtree: true, attributes: true, attributeFilter: ["aria-current"] });
+      window.__watching.observe(document.querySelector(".app"), { subtree: true, attributes: true, attributeFilter: ["aria-current"] });
     }`);
 const sectionsSeen = () => w.js(`return window.__sections`);
 
@@ -66,7 +66,7 @@ async function journey(name, start, budget, run) {
   console.log(`\n${name}`);
   await toastGone();
   await section(start);
-  await w.waitFor(`.rail-item[aria-label="${start}"][aria-current="page"]`);
+  await w.waitFor(`.nav-section[aria-label="${start}"][aria-current="page"]`);
   await sleep(500);
   await watchSections();
   let stopped = false;

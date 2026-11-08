@@ -2,11 +2,14 @@
 
 Spor's app: a web UI on Tauri over the Rust core in the repository root
 (`spor::git`, `spor::graph`, `spor::github`, `spor::tasks`, `spor::agent`,
-`spor::askpass`). The rail is ordered by the questions you come with (#83):
-**Inbox** (what needs me?), **Work** (what's in flight?), **Changes** (what's
-in my checkout?) and **History** (what happened?). Below a divider,
-**Issues**, **Pull requests** and **Actions** are browsers for what belongs
-to no work item yet. Each section is built from the same four pieces: a list
+`spor::askpass`). The layout reads left to right from the general to the
+particular: workspace → repository → section. The rail holds the workspaces
+and the **Inbox** (what needs me?, across every repository); the column
+beside it lists the workspace's repositories, and under the open one its
+sections, ordered by the questions you come with (#83): **Work** (what's in
+flight?), **Changes** (what's in my checkout?) and **History** (what
+happened?). Below a divider, **Issues**, **Pull requests** and **Actions**
+are browsers for what belongs to no work item yet. Each section is built from the same four pieces: a list
 in the sidebar, a page, a details card on the right, and a bar or composer
 at the bottom.
 
@@ -74,9 +77,10 @@ What one app makes possible:
   changes it shows, and every 30 s anyway in case an event went missing.
 - **⌘K palette and workspaces.** Commands, sections, branches and every
   workspace's repositories by typing. Workspaces sit at the top of the rail;
-  beside it, the workspace's repositories, the open one marked, with their
-  branch, changed files and what there is to pull or push (⌘⇧E hides the
-  column; the repository name at the top of every sidebar lists them too).
+  beside it, the workspace's repositories, the open one marked and its
+  sections under it, with their branch, changed files and what there is to
+  pull or push (⌘⇧E folds the column to a strip of the open repository's
+  sections; the repository name at the top of every sidebar lists them too).
   The first launch imports the old native (GPUI) app's
   workspaces (`shared/workspaces.ts`).
 - **Settings (⌘,).** Appearance and themes (`shared/theme.ts`, with the
@@ -86,7 +90,8 @@ What one app makes possible:
   by the key handler, the palette and the Shortcuts page (`shared/keys.ts`
   resolves them). When the rail's defaults moved (#83), the shortcuts you
   had changed were kept, and the first launch after says so once, pointing
-  to ⌘/.
+  to ⌘/; the move of the sections under the open repository is announced
+  once the same way.
 
 The graph's lanes are laid out by `spor::graph::assign_lanes`, and the
 segments for each row are worked out in Rust (`src-tauri/src/history.rs`).
