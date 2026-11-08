@@ -6,11 +6,12 @@ import { createContext, useContext } from "react";
 import type { RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "../types";
 import type { MenuItem } from "./Overlay";
 
-export type SectionId = "inbox" | "changes" | "history" | "issues" | "pulls" | "actions" | "work";
+export type SectionId = "inbox" | "agents" | "changes" | "history" | "issues" | "pulls" | "actions" | "work";
 
 /** Where to go: a section, and what to open there. */
 export type Target =
   | { section: "inbox" }
+  | { section: "agents" }
   | { section: "changes"; path?: string }
   | { section: "history"; hash?: string; branch?: string; blame?: { path: string; rev: string | null } }
   | { section: "issues"; number?: number }

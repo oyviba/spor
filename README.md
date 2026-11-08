@@ -48,6 +48,12 @@ section, run as end-to-end tests.
   looked at, a failed CI run on your branch, a pull request waiting for
   your review. Each row opens where you deal with it, and goes once you
   have. Its count is the rail's only badge
+- **Agents** (⌘⇧A) — every agent task in every repository of every
+  workspace, by status (needs you, working, ready for review, failed or
+  stopped, idle) or by repository, with a table of counts per repository.
+  A row opens the task's conversation in its repository's Work. It sits on
+  the rail beside the Inbox, since it spans repositories, and reads nothing
+  of its own: it's built on the Inbox's poll of the tasks
 - **Work** (⌘2) — every piece of work in flight, in one list: agents'
   tasks, your own branches with commits ahead of the base, and open pull
   requests from anyone, in shelves (needs you, in progress, in review,
