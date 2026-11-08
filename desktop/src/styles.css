@@ -1881,6 +1881,7 @@ button.busy::after {
 .branch-row,
 .inspector-row.action,
 .rail-item,
+.repo-section,
 .segmented button,
 .chip-toggle,
 .chip-select,
@@ -3536,6 +3537,37 @@ body.resizing * {
 .app.with-repos {
   grid-template-columns: 52px var(--repos-w) 1fr;
 }
+/* The repository column hidden (⌘⇧E): its open repository's sections, as
+   icons, in a strip where it was. */
+.app.with-strip {
+  grid-template-columns: 52px 48px 1fr;
+}
+.section-strip {
+  --ws: var(--accent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 0;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+}
+.section-strip-repo {
+  width: 32px;
+  height: 32px;
+  margin-bottom: 4px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1.5px var(--ws);
+}
+.section-strip-repo:hover {
+  background: var(--hover);
+}
 .repo-panel {
   --ws: var(--accent);
   display: flex;
@@ -3640,6 +3672,78 @@ body.resizing * {
 .repo-panel-counts .behind {
   color: var(--sky);
   font-weight: 600;
+}
+/* The open repository and its sections, hung under it like a tree. */
+.repo-panel-open {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 2px 0 6px;
+}
+.repo-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 3px 0 0 15px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.repo-section {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--muted);
+}
+.repo-section > svg {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+}
+.repo-section:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.repo-section.active {
+  background: var(--selected);
+  color: var(--fg);
+  font-weight: 500;
+  box-shadow: 0 0 0 1px var(--border);
+}
+.repo-section.active > svg {
+  color: var(--ws);
+}
+/* The browsers (Issues, Pull requests, Actions): quieter than the sections
+   you work in. */
+.repo-section.browser {
+  height: 27px;
+  font-size: 12.5px;
+}
+.repo-section.browser > svg {
+  width: 14px;
+  height: 14px;
+}
+.repo-section .rail-badge {
+  position: static;
+  box-shadow: none;
+}
+.repo-section-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repo-sections-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
 }
 
 /* Context, compaction and cost (#98) */

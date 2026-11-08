@@ -31,8 +31,11 @@ backend), the end-to-end tests and the app's layout.
 
 ## What it does
 
-You come to spor with a few questions, and the rail is ordered by them:
-what needs me, what's in flight, what's in my checkout, what happened. Each
+Left to right, spor goes from the general to the particular: workspaces and
+the Inbox on the rail, then the workspace's repositories, with the open
+one's sections listed under it. The sections are ordered by the questions
+you come with: what needs me, what's in flight, what's in my checkout, what
+happened. Each
 is a list in the sidebar, a page, and a details card. What you follow is a
 **work item** (a branch with its issue, task folder, agent, pull request and
 checks) moving from *Planned* to *Landed*, and every section uses the same
@@ -111,9 +114,9 @@ Across the app:
   new-host question from git or ssh opens a dialog (an askpass bridge)
 - **Workspaces** — named, colored groups of repositories on the rail, like
   Slack's (⌘⌥1–9), each reopening the repository last open in it. Beside
-  the rail, a column lists the workspace's repositories with the open one
-  marked, their branch, changed files and what there is to pull (⌘⇧E hides
-  it). The old native
+  the rail, a column lists the workspace's repositories with their branch,
+  changed files and what there is to pull, and the open one's sections
+  under it (⌘⇧E folds the column to a strip of those sections' icons). The old native
   app's workspaces are imported on the first run
 - **⌘K** — a palette for every command, section, work item, branch and repository
 - **Settings** (⌘,) — System, Light or Dark, themes (Spor, Nord, Dracula,
