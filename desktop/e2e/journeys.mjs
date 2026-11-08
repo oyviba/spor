@@ -30,7 +30,16 @@ const w = await open(app, out);
 const must = (ok, what) => {
   if (!ok) throw new Error(what);
 };
-const section = (label) => w.js(`$(\`.nav-section[aria-label="\${arguments[0]}"]\`).click()`, label);
+// A repository's sections aren't shown in the Inbox or Agents: the
+// workspace's badge goes back into the repository first.
+const section = async (label) => {
+  const sel = `.nav-section[aria-label="${label}"]`;
+  if (!(await w.js(`return !!$(arguments[0])`, sel))) {
+    await w.js(`$('.workspace-badge[data-current]').click()`);
+    await w.waitFor(sel);
+  }
+  await w.js(`$(arguments[0]).click()`, sel);
+};
 const toastGone = () => w.js(`$$(".toast .icon-button").forEach(b => b.click())`);
 const answer = async (text) => {
   await w.waitFor(".dialog input");

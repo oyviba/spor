@@ -2,7 +2,7 @@
 // what each is doing, and a click away from its conversation. Built on the
 // Inbox's poll of the tasks, so it reads nothing of its own.
 
-import { EmptyState, PageHeader, SidebarHeader } from "../../shared/Layout";
+import { EmptyState, PageHeader, ScopeHeader } from "../../shared/Layout";
 import { useStored } from "../../shared/hooks";
 import { StatusPill } from "../../shared/StatusPill";
 import { Folder } from "../../shared/Icons";
@@ -39,7 +39,7 @@ export function AgentsSection({
   return (
     <>
       <aside className="sidebar">
-        <SidebarHeader />
+        <ScopeHeader title="Agents" scope="Every repository, every workspace" />
         <div className="segmented">
           {BY.map((b) => (
             <button key={b.id} aria-pressed={by === b.id} onClick={() => setBy(b.id)}>

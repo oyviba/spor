@@ -33,7 +33,10 @@ backend), the end-to-end tests and the app's layout.
 
 Left to right, spor goes from the general to the particular: workspaces and
 the Inbox on the rail, then the workspace's repositories, with the open
-one's sections listed under it. The sections are ordered by the questions
+one's sections listed under it. The Inbox and Agents span every
+repository, so while one is open no repository is shown (no repository
+column or branch bar); a workspace's badge goes back into its repository,
+to the section you were last in there. The sections are ordered by the questions
 you come with: what needs me, what's in flight, what's in my checkout, what
 happened. Each
 is a list in the sidebar, a page, and a details card. What you follow is a

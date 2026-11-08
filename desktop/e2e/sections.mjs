@@ -20,7 +20,14 @@ const w = await open(app, out);
 
 // Sections by their rail label, so adding one doesn't shift the rest.
 const section = async (label, ready) => {
-  await w.js(`$(\`.nav-section[aria-label="\${arguments[0]}"]\`).click()`, label);
+  const sel = `.nav-section[aria-label="${label}"]`;
+  // A repository's sections aren't shown in the Inbox or Agents: the
+  // workspace's badge goes back into the repository first.
+  if (!(await w.js(`return !!$(arguments[0])`, sel))) {
+    await w.js(`$('.workspace-badge[data-current]').click()`);
+    await w.waitFor(sel);
+  }
+  await w.js(`$(arguments[0]).click()`, sel);
   await w.waitFor(ready);
 };
 // Right-click the first element matching `css` whose text has `text`.

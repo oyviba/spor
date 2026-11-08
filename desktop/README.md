@@ -5,7 +5,9 @@ Spor's app: a web UI on Tauri over the Rust core in the repository root
 `spor::askpass`). The layout reads left to right from the general to the
 particular: workspace → repository → section. The rail holds the workspaces,
 the **Inbox** (what needs me?) and **Agents** (what are my agents doing?),
-both across every repository; the column
+both across every repository, so while one is open the app shows no
+repository (no repository column, branch bar or repository header; a
+workspace's badge goes back in, to the section last open there); the column
 beside it lists the workspace's repositories, and under the open one its
 sections, ordered by the questions you come with (#83): **Work** (what's in
 flight?), **Changes** (what's in my checkout?) and **History** (what

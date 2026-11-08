@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import type { InboxGithub, InboxTask } from "../../types";
 import { usePoll } from "../../shared/hooks";
-import { EmptyState, PageHeader, SidebarHeader } from "../../shared/Layout";
+import { EmptyState, PageHeader, ScopeHeader } from "../../shared/Layout";
 import { Bot, CircleX, PullRequest, Refresh } from "../../shared/Icons";
 import { ago } from "../agents/transcript";
 import { GROUPS, inboxItems, type InboxItem, type InboxKind } from "./inbox";
@@ -78,7 +78,7 @@ export function InboxSection({ inbox, onOpen }: { inbox: Inbox; onOpen: (item: I
   return (
     <>
       <aside className="sidebar">
-        <SidebarHeader />
+        <ScopeHeader title="Inbox" scope="Every repository, every workspace" />
         <div className="task-list">
           {items.length === 0 && <div className="sidebar-empty">Nothing needs you.</div>}
           {GROUPS.map((g) => {

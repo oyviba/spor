@@ -168,6 +168,14 @@ export function App() {
   );
   const [state, setState] = useState<RepoState | null>(null);
   const [section, setSection] = useStored<SectionId>("section", "inbox");
+  // The Inbox and Agents span every repository: open, they show no
+  // repository (no column, branch bar or repository header), and a
+  // workspace's badge goes back to the section last open in its repository.
+  const global = !!SECTIONS.find((s) => s.id === section)?.global;
+  const [repoSection, setRepoSection] = useStored<SectionId>("section.repo", "work");
+  useEffect(() => {
+    if (!global) setRepoSection(section);
+  }, [section]); // eslint-disable-line react-hooks/exhaustive-deps
   const [reposShown, setReposShown] = useStored("repos.shown", true);
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "work", seq: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -457,6 +465,7 @@ export function App() {
     const target = workspaces.list.find((w) => w.id === id);
     if (!target) return;
     switchTo(id);
+    if (global) setSection(repoSection);
     const path = landing(target);
     if (path && path !== repo?.root) openRepo(path);
     else if (!path) {
@@ -730,7 +739,7 @@ export function App() {
       {workspaces.list.map((w, i) => (
         <button
           key={w.id}
-          className={`workspace-badge${w.id === ws.id ? " active" : ""}`}
+          className={`workspace-badge${w.id === ws.id && !global ? " active" : ""}`}
           style={{ "--ws": WORKSPACE_COLORS[w.color] } as React.CSSProperties}
           onClick={() => goToWorkspace(w.id)}
           onContextMenu={(e) => {
@@ -739,7 +748,8 @@ export function App() {
           }}
           title={`${w.name}${keyLabel(`workspace:${i + 1}`) ? ` (${keyLabel(`workspace:${i + 1}`)})` : ""} — right-click to rename, recolor or delete`}
           aria-label={`Workspace ${w.name}`}
-          aria-current={w.id === ws.id ? "true" : undefined}
+          aria-current={w.id === ws.id && !global ? "true" : undefined}
+          data-current={w.id === ws.id || undefined}
         >
           {initials(w.name)}
         </button>
@@ -813,14 +823,14 @@ export function App() {
 
   return (
     <ShellContext.Provider value={shell}>
-      <div className={`app ${reposShown ? "with-repos" : "with-strip"}`}>
+      <div className={`app ${global ? "global-view" : reposShown ? "with-repos" : "with-strip"}`}>
         <nav className="rail" aria-label="Workspaces">
           {workspaceRail}
           {SECTIONS.filter((s) => s.global).map((s) => sectionLink(s, "rail"))}
           <span className="flex-1" />
           {settingsButton}
         </nav>
-        {reposShown ? (
+        {global ? null : reposShown ? (
           <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed}>
             {repoSections("panel")}
           </RepoPanel>
@@ -838,8 +848,8 @@ export function App() {
           </nav>
         )}
         <div className="section">
-          {state && <BranchBar state={state} />}
-          {state?.operation && <OperationBanner state={state} />}
+          {state && !global && <BranchBar state={state} />}
+          {state?.operation && !global && <OperationBanner state={state} />}
           <div className="section-body">
             <Sections
               key={repo.root}

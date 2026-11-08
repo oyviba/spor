@@ -3539,6 +3539,18 @@ body.resizing * {
 }
 /* The repository column hidden (⌘⇧E): its open repository's sections, as
    icons, in a strip where it was. */
+/* The Inbox or Agents: across every repository, so no repository column. */
+.app.global-view {
+  grid-template-columns: 52px 1fr;
+}
+.scope-header {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px;
+  line-height: 1.25;
+}
 .app.with-strip {
   grid-template-columns: 52px 48px 1fr;
 }
