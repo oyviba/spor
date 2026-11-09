@@ -66,7 +66,10 @@ fn wants_escape_flag(err: &str) -> bool {
 /// or the secondary "abuse" one), rather than the call being wrong.
 pub fn is_rate_limited(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
-    e.contains("rate limit") || e.contains("abuse detection") || e.contains("http 429") || e.contains("retry-after")
+    e.contains("rate limit")
+        || e.contains("abuse detection")
+        || e.contains("http 429")
+        || e.contains("retry-after")
 }
 
 /// Run `gh` against `repo` and return its output, or its first error line.
