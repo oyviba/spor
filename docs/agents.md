@@ -242,12 +242,14 @@ Each phase is useful on its own.
 **Spor as an MCP server** (#106): each Claude Code run gets a stdio MCP
 server (`--mcp-config` names a file in the run directory; the server is
 the app's executable started with `__spor-mcp`). Tools: `ask` (a question
-for the Inbox, answered inside the turn), `report_progress`,
+for the Inbox, answered inside the turn), `report_progress`, `surface`
+(a link, a file or a note for the task's panel while the agent works),
 `other_tasks` (with the files you share), `pr_comments` (unresolved
 threads), `ci_log` (failing jobs, folded to the failure) and `why` (blame
 a line; if the commit has a `Spor-Task` trailer, that task's prompt and
 what its agent did to the file). Everything but `ask` is pre-approved and
-read-only, apart from `report_progress` writing to the run's log. Still to
+read-only, apart from `report_progress` and `surface` writing to the
+run's log. Still to
 do: `checks()` (#43). `ask` isn't asked in `bypassPermissions` mode, where
 Claude Code doesn't prompt for any tool.
 

@@ -205,6 +205,8 @@ export interface TaskDetail {
   debrief: Debrief | null;
   /** The latest run ended and should get one (`debriefTask`). */
   wants_debrief: boolean;
+  /** What the agent put in the panel with its `surface` tool. */
+  surfaced: Surfaced[];
 }
 
 /** What a run says about itself, in a fixed shape (#104). */
@@ -222,6 +224,13 @@ export interface SetupInfo {
   /** null: it hasn't run. "due": it worked, and runs again before the next agent. */
   state: "running" | "worked" | "failed" | "skipped" | "due" | null;
   code: number | null;
+}
+
+export interface Surfaced {
+  kind: "link" | "file" | "note";
+  title: string;
+  /** The https URL, the path in the task's folder, or the note. */
+  value: string;
 }
 
 export interface RunPatch {
