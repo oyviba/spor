@@ -180,87 +180,190 @@ pub(crate) fn last_message(app: State<App>) -> Result<String, String> {
     app.repo()?.head_message()
 }
 
-/// Fetch, pull (rebasing) or push. A passphrase or password git or ssh asks
-/// for comes up in the app (the askpass bridge); where it can't, git fails
-/// with its own message instead of hanging.
+/// Fetch, pull, push, force-push, or pull and push ("sync"). A passphrase
+/// or password git or ssh asks for comes up in the app (the askpass
+/// bridge); where it can't, git fails with its own message instead of
+/// hanging.
+///
+/// - Fetch also brings local branches that are only behind their upstream
+///   (`main`, while you're on a feature branch) up to it.
+/// - Pull rebases, stashing uncommitted changes around it, and links a
+///   branch with no upstream to its namesake on the remote first.
+/// - A push the remote refuses because it has commits we don't says so in
+///   words the window recognises ([`spor::askpass::is_push_behind`]), and
+///   offers Pull and push.
+/// - Force push is for a branch rewritten after it was pushed (amend,
+///   rebase, rewrite): it refuses if someone else pushed meanwhile.
 #[tauri::command(async)]
 pub(crate) fn sync(app: State<App>, action: String) -> Result<String, String> {
     let repo = app.repo()?;
-    let args: Vec<String> = match action.as_str() {
-        "fetch" => vec!["fetch".into(), "--all".into(), "--prune".into()],
-        "pull" => vec!["pull".into(), "--rebase".into()],
-        "push" => repo.push_args()?,
-        other => return Err(format!("Unknown sync action {other}")),
-    };
-    let tracking = repo.tracking()?;
-    let branch = tracking.branch.clone();
-    let before = repo.head_sha().ok();
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    spor::askpass::git_network(repo.root(), &args)?;
     match action.as_str() {
+        "fetch" => {
+            if repo.remotes().is_empty() {
+                return Err("This repository has no remote to fetch from".into());
+            }
+            spor::askpass::git_network(repo.root(), &["fetch", "--all", "--prune"])?;
+            Ok(with_fast_forwards("Fetched", &repo))
+        }
         "pull" => {
-            if let (Some(before), Ok(after)) = (before, repo.head_sha()) {
-                if before != after {
-                    app.undo.push(
-                        "Pull",
-                        Undo::Moved {
-                            branch,
-                            before,
-                            after,
-                            mode: ResetMode::Keep,
-                        },
-                    );
+            let pulled = pull(&app, &repo)?;
+            Ok(with_fast_forwards(&pulled, &repo))
+        }
+        "push" => push(&app, &repo, false),
+        "force-push" => push(&app, &repo, true),
+        "sync" => {
+            let tracking = repo.tracking()?;
+            if let Some(branch) = &tracking.branch {
+                if tracking.upstream.is_none() && repo.unlinked_remote_branch(branch).is_none() {
+                    // Nothing on the remote to pull: publishing is all there is.
+                    return push(&app, &repo, false);
                 }
             }
-            Ok(match tracking.behind {
-                0 => "Pulled".into(),
-                1 => "Pulled 1 commit".into(),
-                n => format!("Pulled {n} commits"),
-            })
+            let pulled = pull(&app, &repo)?;
+            let tracking = repo.tracking()?;
+            let pushed = if tracking.ahead > 0 || tracking.upstream.is_none() {
+                push(&app, &repo, false)?
+            } else {
+                "nothing to push".into()
+            };
+            Ok(with_fast_forwards(
+                &format!("{pulled}, {}", lower_first(&pushed)),
+                &repo,
+            ))
         }
-        "push" => {
-            app.undo.forget_history();
-            // A new branch's pull request, or new checks on it.
-            app.github.clear(repo.root());
-            Ok(match (&tracking.upstream, tracking.ahead) {
-                (None, _) => format!("Published {}", branch.as_deref().unwrap_or("the branch")),
-                (_, 1) => "Pushed 1 commit".into(),
-                (_, 0) => "Pushed".into(),
-                (_, n) => format!("Pushed {n} commits"),
-            })
-        }
-        _ => Ok("Fetched".into()),
+        other => Err(format!("Unknown sync action {other}")),
     }
 }
 
-/// Make the branch match its upstream exactly, dropping the commits only it
-/// has. For a branch that has diverged and the person just wants origin's
-/// version, instead of replaying its commits (and resolving each conflict).
-/// Uncommitted changes stay; if they touch what moves, git refuses.
-#[tauri::command(async)]
-pub(crate) fn match_upstream(app: State<App>) -> Result<String, String> {
-    let repo = app.repo()?;
+fn lower_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_lowercase().chain(c).collect(),
+        None => String::new(),
+    }
+}
+
+/// `message`, and which other branches fetching brought up to date.
+fn with_fast_forwards(message: &str, repo: &spor::git::Repo) -> String {
+    let moved = repo.fast_forward_branches();
+    if moved.is_empty() {
+        return message.to_string();
+    }
+    let names: Vec<String> = moved
+        .iter()
+        .map(|m| format!("{} (+{})", m.branch, m.commits))
+        .collect();
+    format!("{message} — brought {} up to date", names.join(", "))
+}
+
+/// Pull the checked-out branch, rebasing. Undoable.
+fn pull(app: &App, repo: &spor::git::Repo) -> Result<String, String> {
     let tracking = repo.tracking()?;
-    let (Some(branch), Some(upstream)) = (tracking.branch.clone(), tracking.upstream.clone())
-    else {
-        return Err("This branch has no upstream to match".into());
+    let branch = tracking
+        .branch
+        .clone()
+        .ok_or("You're not on a branch (detached HEAD) — there's nothing to pull into")?;
+    let mut linked = None;
+    if tracking.upstream.is_none() {
+        match repo.unlinked_remote_branch(&branch) {
+            Some(remote_branch) => {
+                repo.set_upstream(&branch, &remote_branch)?;
+                linked = Some(remote_branch);
+            }
+            None => {
+                return Err(format!(
+                "{branch} isn't on the remote yet, so there's nothing to pull — publish it instead"
+            ))
+            }
+        }
+    }
+    let before = repo.head_sha().ok();
+    let stashes = repo.stashes().len();
+    let args = repo.pull_args();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    if let Err(e) = spor::askpass::git_network(repo.root(), &args) {
+        if repo.operation().is_some() {
+            return Err(format!(
+                "The pull stopped on a conflict between your commits and what came in — resolve it in Changes, or abort ({e})"
+            ));
+        }
+        return Err(e);
+    }
+    let after = repo.head_sha().ok();
+    if let (Some(before), Some(after)) = (&before, &after) {
+        if before != after {
+            app.undo.push(
+                "Pull",
+                Undo::Moved {
+                    branch: Some(branch.clone()),
+                    before: before.clone(),
+                    after: after.clone(),
+                    mode: ResetMode::Keep,
+                },
+            );
+        }
+    }
+    let upstream = repo.tracking()?.upstream.unwrap_or_default();
+    let n = before
+        .map(|b| repo.count_commits(&format!("{b}..{upstream}")))
+        .unwrap_or(0);
+    let mut message = match n {
+        0 => "Already up to date".to_string(),
+        1 => "Pulled 1 commit".into(),
+        n => format!("Pulled {n} commits"),
     };
-    let before = repo.head_sha()?;
-    repo.reset(&upstream, ResetMode::Keep)
-        .map_err(|e| first_line(&e))?;
-    let after = repo.head_sha()?;
-    if before != after {
-        app.undo.push(
-            format!("Match {upstream}"),
-            Undo::Moved {
-                branch: Some(branch.clone()),
-                before,
-                after,
-                mode: ResetMode::Keep,
-            },
+    if let Some(remote_branch) = linked {
+        message = format!("Linked {branch} to {remote_branch}. {message}");
+    }
+    if repo.stashes().len() > stashes {
+        // git put the changes back with conflict markers where they clash,
+        // and kept a copy in the stash list.
+        message.push_str(
+            ". Your uncommitted changes clash with what came in: resolve the conflicts in Changes, \
+             then drop the \"autostash\" stash (a copy, kept in case)",
         );
     }
-    Ok(format!("{branch} now matches {upstream}"))
+    Ok(message)
+}
+
+/// Push (or publish) the checked-out branch. Pushing makes its commits
+/// final: their undos go.
+fn push(app: &App, repo: &spor::git::Repo, force: bool) -> Result<String, String> {
+    let tracking = repo.tracking()?;
+    let branch = tracking
+        .branch
+        .clone()
+        .ok_or("You're not on a branch (detached HEAD) — create one to push")?;
+    let args = repo.push_args_for(&branch, force)?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    spor::askpass::git_network(repo.root(), &args)?;
+    app.undo.forget_history();
+    // A new branch's pull request, or new checks on it.
+    app.github.clear(repo.root());
+    Ok(match (&tracking.upstream, tracking.ahead) {
+        (None, _) => format!("Published {branch}"),
+        _ if force => format!("Force-pushed {branch}"),
+        (_, 1) => "Pushed 1 commit".into(),
+        (_, 0) => "Pushed".into(),
+        (_, n) => format!("Pushed {n} commits"),
+    })
+}
+
+/// Push a branch that isn't checked out (publishing it if it's new).
+#[tauri::command(async)]
+pub(crate) fn push_branch(app: State<App>, name: String) -> Result<String, String> {
+    let repo = app.repo()?;
+    let published = repo.resolve(&format!("{name}@{{upstream}}")).is_err();
+    let args = repo.push_args_for(&name, false)?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    spor::askpass::git_network(repo.root(), &args)?;
+    app.undo.forget_history();
+    app.github.clear(repo.root());
+    Ok(if published {
+        format!("Published {name}")
+    } else {
+        format!("Pushed {name}")
+    })
 }
 
 /// The background fetch: never asks for anything, and says nothing when it

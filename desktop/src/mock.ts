@@ -2,9 +2,17 @@
 // It keeps a few tasks in memory, one of which is "working" and grows its
 // transcript over time, and answers the same commands as src-tauri.
 
-import type { AgentChoice, Ask, Issue, IssueDetail, Item, Mode, Pull, RepoInfo, RunInfo, TaskDetail, TaskPull, TaskSummary } from "./types";
+import type { AgentChoice, Ask, Issue, IssueDetail, Item, Mode, Pull, RepoInfo, RunInfo, TaskDetail, TaskPull, TaskSummary, WorkBranch, WorkItemInfo } from "./types";
 
 const now = () => Math.floor(Date.now() / 1000);
+
+/** What the backend's `Ask::gist` says, roughly. */
+const gist = (a: Ask) =>
+  a.ask === "questions"
+    ? `asks: ${a.detail}`
+    : a.ask === "plan"
+      ? `has a plan for you to review: ${a.detail}`
+      : `wants to ${a.tool === "Bash" ? "run" : `use ${a.tool}`} \`${a.detail}\``;
 const t0 = now();
 
 interface MockTask {
@@ -24,6 +32,7 @@ const repo: RepoInfo = {
   branch: "main",
   branches: ["main", "release/1.4", "feat/share-links"],
   default_base: "main",
+  default_start: "origin/main",
   claude: true,
 };
 
@@ -49,17 +58,27 @@ const run = (over: Partial<RunInfo>): RunInfo => ({
   started: t0 - 600,
   ended: t0 - 300,
   cost_usd: 0.42,
+  tokens_in: 184_000,
+  tokens_out: 6_200,
+  context: 38,
+  model: null,
+  mcp_failed: [],
   resumable: true,
   prompt: "",
   undone: false,
   ...over,
 });
 
+/** A task's base and where it started, as the backend has them: one
+ * started from `origin/main` lands on `main`. */
+const startOf = (base: string) => (base.startsWith("origin/") ? { base: base.slice("origin/".length), from: base } : { base, from: null });
+
 const summary = (id: string, prompt: string, created: number, over: Partial<TaskSummary> = {}): TaskSummary => ({
   id,
   title: prompt.split("\n")[0],
   prompt,
   base: "main",
+  from: "origin/main",
   branch: `agent/${id}`,
   worktree: `/Users/you/code/postplan.spor/${id}`,
   created,
@@ -70,9 +89,15 @@ const summary = (id: string, prompt: string, created: number, over: Partial<Task
   runs: 0,
   command: `cd /Users/you/code/postplan.spor/${id} && claude '${prompt}'`,
   asks: 0,
+  ask: null,
+  progress: null,
   mode: "acceptEdits",
   issue: null,
   pull: null,
+  queued: [],
+  waiting: null,
+  spent: 0.42,
+  tokens: 190_200,
   ...over,
 });
 
@@ -142,6 +167,49 @@ const LOGIN_PATCH = `diff --git a/src/auth/session.ts b/src/auth/session.ts
  }
 `;
 
+/** The mock agent's plan at step `at` (steps before it done). */
+const sharePlan = (at: number): Item => ({
+  kind: "todos",
+  todos: [
+    ["Find how drafts are stored", "Finding how drafts are stored"],
+    ["Add the shareLinks table", "Adding the shareLinks table"],
+    ["Add the share routes", "Adding the share routes"],
+    ["Check types and tests", "Checking types and tests"],
+    ["Test link expiry", "Testing link expiry"],
+  ].map(([content, active], i) => ({
+    content,
+    active,
+    status: i < at ? "completed" : i === at ? "in_progress" : "pending",
+  })),
+});
+
+/** What the backend's `Runs::progress` reads from a running task. */
+function progressOf(t: MockTask): TaskSummary["progress"] {
+  if (t.summary.run?.state !== "running") return null;
+  const plan = t.transcript.findLast((i) => i.kind === "todos");
+  const tool = t.transcript.findLast((i) => i.kind === "tool" && i.name !== "TodoWrite");
+  const todos = plan?.kind === "todos" ? plan.todos : [];
+  return {
+    done: todos.filter((x) => x.status === "completed").length,
+    total: todos.length,
+    step: todos.find((x) => x.status === "in_progress")?.active ?? null,
+    tool: tool?.kind === "tool" ? tool.name : null,
+    detail: tool?.kind === "tool" ? tool.detail : null,
+  };
+}
+
+const PLAN = `# Rename drafts to posts
+
+The app says "draft" for what people now call a post. Rename it everywhere it's visible, and keep the old API working for a release.
+
+1. Rename the \`drafts\` table to \`posts\` in a migration, with a view named \`drafts\` so old queries keep working
+2. Rename \`src/drafts/\` to \`src/posts/\` and update the imports (14 files)
+3. Add \`/posts/*\` routes; keep \`/drafts/*\` as redirects, marked deprecated
+4. Update the UI strings in \`src/ui/strings.ts\`
+5. Run \`pnpm test\` and \`pnpm tsc --noEmit\`
+
+Not in this change: renaming the share-link tokens' prefix.`;
+
 const tasks: MockTask[] = [
   {
     summary: summary("expiring-share-links", "Add expiring share links to drafts", t0 - 95, {
@@ -152,6 +220,8 @@ const tasks: MockTask[] = [
     transcript: [
       { kind: "prompt", text: "Add expiring share links to drafts" },
       { kind: "text", text: "I'll look at how drafts are stored and routed first." },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(0),
       { kind: "tool", name: "Glob", detail: "src/**/*.ts" },
       { kind: "tool", name: "Read", detail: "src/routes/drafts.ts" },
       { kind: "tool", name: "Read", detail: "src/db/index.ts" },
@@ -160,18 +230,87 @@ const tasks: MockTask[] = [
         kind: "text",
         text: "Drafts live in `db.drafts` and there's no sharing table yet. Plan:\n\n1. A `shareLinks` table with a token and an expiry\n2. `POST /drafts/:id/share` to create one\n3. `GET /s/:token` to open it until it expires",
       },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(1),
       { kind: "tool", name: "Write", detail: "src/drafts/share.ts" },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(2),
       { kind: "tool", name: "Edit", detail: "src/routes/drafts.ts" },
     ],
     script: [
-      { kind: "ask", id: "req-1", tool: "Bash", detail: "pnpm tsc --noEmit", session: "`pnpm tsc` commands" },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(3),
+      {
+        kind: "ask",
+        ask: "permission",
+        id: "req-1",
+        tool: "Bash",
+        detail: "pnpm tsc --noEmit",
+        session: "`pnpm tsc` commands",
+      },
       { kind: "tool", name: "Bash", detail: "pnpm tsc --noEmit" },
       { kind: "tool", name: "Bash", detail: "pnpm test drafts" },
+      {
+        kind: "ask",
+        ask: "questions",
+        id: "req-2",
+        tool: "AskUserQuestion",
+        detail: "How long should a share link last by default?",
+        session: null,
+        questions: [
+          {
+            question: "How long should a share link last by default?",
+            header: "Expiry",
+            options: [
+              { label: "7 days", description: "Long enough for a review round" },
+              { label: "24 hours", description: "Safer for drafts with private details" },
+              { label: "Until revoked", description: "No expiry; the owner removes it" },
+            ],
+            multi: false,
+          },
+          {
+            question: "Who can open a link?",
+            header: "Access",
+            options: [
+              { label: "Anyone with it", description: "" },
+              { label: "Signed-in people", description: "" },
+              { label: "The team", description: "" },
+            ],
+            multi: true,
+          },
+        ],
+      },
       { kind: "text", text: "Types check and the draft tests pass. Adding a test for expiry next." },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(4),
       { kind: "tool", name: "Write", detail: "src/drafts/share.test.ts" },
+      { kind: "tool", name: "TodoWrite", detail: "" },
+      sharePlan(5),
     ],
     runs: [run({ state: "running", exit_code: null, started: t0 - 52, ended: null, cost_usd: null })],
     patch: SHARE_PATCH,
+  },
+  {
+    summary: summary("rename-drafts", "Rename drafts to posts", t0 - 400, {
+      run: run({ state: "running", exit_code: null, started: t0 - 380, ended: null, cost_usd: null }),
+      runs: 1,
+      asks: 1,
+      ask: "has a plan for you to review: Rename drafts to posts",
+      mode: "plan",
+    }),
+    transcript: [
+      { kind: "prompt", text: "Rename drafts to posts" },
+      { kind: "text", text: "I'll find everywhere drafts are named before proposing a plan." },
+      { kind: "tool", name: "Grep", detail: "draft" },
+      { kind: "tool", name: "Read", detail: "src/db/schema.ts" },
+      { kind: "tool", name: "Read", detail: "src/routes/drafts.ts" },
+      { kind: "tool", name: "Read", detail: "src/ui/strings.ts" },
+      { kind: "ask", ask: "plan", id: "plan-1", tool: "ExitPlanMode", detail: "Rename drafts to posts", session: null, plan: PLAN },
+    ],
+    script: [],
+    asks: [{ ask: "plan", id: "plan-1", tool: "ExitPlanMode", detail: "Rename drafts to posts", session: null, plan: PLAN }],
+    runs: [run({ state: "running", exit_code: null, started: t0 - 380, ended: null, cost_usd: null })],
+    patch: "",
   },
   {
     summary: summary("login-redirect", "Send people back where they were after logging in", t0 - 3600 * 2, {
@@ -324,14 +463,35 @@ export async function listen(event: string, fn: () => void): Promise<() => void>
   listeners.get(event)!.add(fn);
   return () => listeners.get(event)!.delete(fn);
 }
-const tasksChanged = () => listeners.get("tasks-changed")?.forEach((fn) => fn());
-const CHANGES_TASKS = new Set(["create_task", "send_to_agent", "stop_agent", "land_task", "discard_task", "undo", "answer_ask", "steer", "set_mode"]);
+const tasksChanged = () =>
+  ["tasks-changed", "work-changed"].forEach((e) => listeners.get(e)?.forEach((fn) => fn()));
+const CHANGES_TASKS = new Set([
+  "create_task",
+  "hand_to_agent",
+  "send_to_agent",
+  "stop_agent",
+  "land_task",
+  "discard_task",
+  "undo",
+  "answer_ask",
+  "answer_questions",
+  "approve_plan",
+  "steer",
+  "set_mode",
+  "undo_run",
+  "queue_follow_up",
+  "unqueue",
+  "send_queued",
+]);
+
+for (const t of tasks) t.summary.progress = progressOf(t);
 
 // The working task makes progress every few seconds, then finishes.
 setInterval(() => {
   const t = tasks.find((x) => x.summary.run?.state === "running");
   if (!t || t.asks?.length) return;
   progress(t);
+  t.summary.progress = progressOf(t);
   tasksChanged();
 }, 4000);
 
@@ -340,8 +500,10 @@ function progress(t: MockTask) {
   if (next) {
     t.transcript.push(next);
     if (next.kind === "ask") {
-      t.asks = [{ id: next.id, tool: next.tool, detail: next.detail, session: next.session }];
+      const { kind: _, ...ask } = next;
+      t.asks = [ask];
       t.summary.asks = 1;
+      t.summary.ask = gist(ask);
     }
     return;
   }
@@ -457,6 +619,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
             id: t.summary.id,
             title: t.summary.title,
             asks: t.summary.asks,
+            ask: t.summary.ask,
             run: t.summary.run?.state ?? null,
             started: t.summary.run?.started ?? null,
             ended: t.summary.run?.ended ?? null,
@@ -475,9 +638,15 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           transcript: t.transcript,
           runs: t.runs.map((r, i) => ({ ...r, prompt: r.prompt || promptOf(t, i) })),
           conflicts: t.summary.id === "dark-mode-dashboard" ? ["src/styles/theme.css"] : [],
+          undoes: [],
           undoable: last && !last.undone && last.state !== "running" ? last.index : null,
+          undoable_from:
+            t.summary.run?.state === "running" ? [] : t.runs.filter((r) => !r.undone).map((r) => r.index),
+          setup: t.summary.id === "login-redirect" ? { script: ".spor/setup", state: "worked", code: null } : null,
           asks: t.asks ?? [],
           listening: t.summary.run?.state === "running",
+          debrief: null,
+          wants_debrief: false,
           surfaced:
             t.summary.id === "dark-mode-dashboard"
               ? [
@@ -496,7 +665,26 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         if (!prompt) throw "Describe the task first";
         const sid = slug(prompt);
         const t: MockTask = {
-          summary: summary(sid, prompt, now(), { base: args.base as string }),
+          summary: summary(sid, prompt, now(), startOf(args.base as string)),
+          transcript: [],
+          runs: [],
+          patch: "",
+          script: [],
+        };
+        tasks.unshift(t);
+        const agent = args.agent as AgentChoice;
+        if (agent.kind !== "none") start(t, prompt, agent);
+        return t.summary;
+      }
+      case "hand_to_agent": {
+        // Your branch, in its own folder with an agent (#80, #82).
+        const prompt = (args.prompt as string).trim();
+        if (!prompt) throw "Say what the agent should do first";
+        const branch = args.branch as string;
+        if (tasks.some((x) => x.summary.branch === branch && !x.summary.landed && !x.summary.closed)) throw `${branch} is already a task`;
+        const sid = slug(branch.split("/").pop() ?? branch);
+        const t: MockTask = {
+          summary: { ...summary(sid, prompt, now(), startOf(args.base as string)), branch },
           transcript: [],
           runs: [],
           patch: "",
@@ -551,6 +739,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         if (!ask) throw "That question was already answered";
         t.asks = t.asks!.filter((a) => a !== ask);
         t.summary.asks = t.asks.length;
+        t.summary.ask = t.asks[0] ? gist(t.asks[0]) : null;
         t.transcript.push({
           kind: "answer",
           id: ask.id,
@@ -559,6 +748,30 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           always: !!args.allow && !!args.always,
         });
         if (!args.allow) t.script = t.script.filter((x) => !(x.kind === "tool" && x.detail === ask.detail));
+        return null;
+      }
+      case "answer_questions": {
+        const t = find(id);
+        const ask = t.asks?.find((a) => a.id === args.requestId);
+        if (!ask || ask.ask !== "questions") throw "That question was already answered";
+        const answers = (args.answers as string[][]).map((a) => a.join(", ")).filter((a) => a.trim());
+        if (answers.length === 0) throw "Pick an answer first";
+        t.asks = t.asks!.filter((a) => a !== ask);
+        t.summary.asks = t.asks.length;
+        t.summary.ask = t.asks[0] ? gist(t.asks[0]) : null;
+        t.transcript.push({ kind: "answer", id: ask.id, allow: true, message: answers.join(" · "), always: false });
+        return null;
+      }
+      case "approve_plan": {
+        const t = find(id);
+        const ask = t.asks?.find((a) => a.id === args.requestId);
+        if (!ask || ask.ask !== "plan") throw "That plan was already answered";
+        t.asks = t.asks!.filter((a) => a !== ask);
+        t.summary.asks = t.asks.length;
+        t.summary.ask = t.asks[0] ? gist(t.asks[0]) : null;
+        t.summary.mode = args.mode as Mode;
+        t.transcript.push({ kind: "answer", id: ask.id, allow: true, message: "", always: false });
+        t.transcript.push({ kind: "text", text: "Starting on the plan." });
         return null;
       }
       case "steer": {
@@ -601,7 +814,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         const prompt = (args.prompt as string).trim();
         const sid = `${n}-${slug(d.issue.title)}`;
         const t: MockTask = {
-          summary: summary(sid, prompt, now(), { base: args.base as string, issue: n }),
+          summary: summary(sid, prompt, now(), { ...startOf(args.base as string), issue: n }),
           transcript: [],
           runs: [],
           patch: "",
@@ -626,12 +839,12 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           taskPulls[id].pull = { ...taskPulls[id].pull, state: "merged", review: "approved" };
           taskPulls[id].merge_commit = "c0ffee1d2e3f";
         }, 20000);
-        return `Opened ${args.draft ? "draft " : ""}pull request #${n}`;
+        return `Published ${id} as ${args.draft ? "a draft " : ""}pull request #${n}`;
       }
       case "push_task": {
         const t = find(id);
-        const k = t.summary.stats.unpushed;
-        t.summary.stats = { ...t.summary.stats, unpushed: 0 };
+        const k = t.summary.stats.unpushed + (args.commitUncommitted && t.summary.stats.uncommitted > 0 ? 1 : 0);
+        t.summary.stats = { ...t.summary.stats, unpushed: 0, ...(args.commitUncommitted ? { uncommitted: 0 } : {}) };
         return k ? `Pushed ${k} commits to #${t.summary.pull}` : `${t.summary.branch} is up to date`;
       }
       case "task_pulls":
@@ -664,11 +877,60 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
       }
       case "undo_run": {
         const t = find(id);
+        if (args.from != null) {
+          const from = args.from as number;
+          const taken = t.runs.filter((r) => r.index >= from && !r.undone);
+          if (taken.length === 0 || t.summary.run?.state === "running") throw "That run can't be undone";
+          for (const r of taken) r.undone = true;
+          return taken.length === 1 ? `Undid run ${from + 1}` : `Undid ${taken.length} runs`;
+        }
         const last = t.runs.at(-1);
         if (!last || last.undone || last.state === "running") throw "There's no run to undo";
         last.undone = true;
         return `Undid run ${last.index + 1}`;
       }
+      case "queue_follow_up":
+        find(id).summary.queued.push((args.text as string).trim());
+        return null;
+      case "unqueue": {
+        const q = find(id).summary.queued;
+        if ((args.index as number) >= q.length) throw "That follow-up was already sent";
+        q.splice(args.index as number, 1);
+        return null;
+      }
+      case "send_queued": {
+        const t = find(id);
+        if (t.summary.run?.state === "running" || t.summary.queued.length === 0) return false;
+        start(t, t.summary.queued.shift()!, args.agent as AgentChoice);
+        return true;
+      }
+      case "rerun_setup":
+        return null;
+      case "clean_up_tasks":
+        return "Nothing to clean up";
+      case "get_max_agents":
+        return null;
+      case "set_max_agents":
+      case "start_waiting":
+        return cmd === "start_waiting" ? 0 : null;
+      case "search_transcripts": {
+        const q = String(args.query ?? "").toLowerCase().trim();
+        if (!q) return [];
+        return tasks
+          .filter((t) => t.summary.prompt.toLowerCase().includes(q))
+          .map((t) => ({ task: t.summary.id, title: t.summary.title, run: 0, kind: "prompt", snippet: t.summary.prompt }));
+      }
+      case "suggest_rules":
+        return [
+          { rule: "Use pnpm, not npm.", tasks: ["fix-login", "add-readme"] },
+          { rule: "Tests go beside the file they test.", tasks: ["fix-login", "add-readme", "rename-greet"] },
+        ];
+      case "add_rule":
+        return "Added to CLAUDE.md. It's an uncommitted change";
+      case "decline_rule":
+        return null;
+      case "notify_os":
+        return null;
       default:
         throw `Unknown command ${cmd}`;
     }
@@ -679,8 +941,8 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
 
 // ---- Git and GitHub, from recordings ----------------------------------------
 //
-// src/fixtures.json is what the real backend answered on a demo repository
-// (e2e/record-fixtures.mjs). Times are moved up to now; changes to the
+// src/fixtures.json is what the real backend answered on a demo repository.
+// Times are moved up to now; changes to the
 // working tree are applied to an in-memory copy so the Changes section can
 // be clicked through.
 
@@ -703,6 +965,143 @@ async function load(): Promise<Fixtures> {
   };
   fixtures = walk(data) as Fixtures;
   return fixtures;
+}
+
+/** Your branches ahead of main, made up from the recorded graph's subjects. */
+function mockBranches(): WorkBranch[] {
+  const at = Math.floor(Date.now() / 1000);
+  const commit = (subject: string, ago: number) => ({ hash: `${subject.length}`.padEnd(40, "0"), short: "0000000", subject, author: "you", time: at - ago });
+  return [
+    { name: "feat/farewell", base: "main", current: false, commits: [commit("Add farewell()", 5400)], files: 1, additions: 6, deletions: 0, updated: at - 5400 },
+    { name: "docs/contributing", base: "main", current: false, commits: [commit("Add a CONTRIBUTING guide", 9000)], files: 1, additions: 48, deletions: 0, updated: at - 9000 },
+  ];
+}
+
+/** What `work_items` would say about the tasks kept here, the made-up
+ * branches and the recorded pull requests: a rough copy of
+ * `spor::work::items`, enough to work on the UI with. */
+function mockWorkItems(pulls: Pull[], review: Set<number>, seen: Record<string, number>): WorkItemInfo[] {
+  const me = "you";
+  const summary = (p: Pull): NonNullable<WorkItemInfo["pull"]> => ({
+    number: p.number,
+    title: p.title,
+    state: p.state as NonNullable<WorkItemInfo["pull"]>["state"],
+    review: p.review as NonNullable<WorkItemInfo["pull"]>["review"],
+    author: p.author,
+    url: p.url,
+  });
+  const checks = (p?: Pull): WorkItemInfo["checks"] =>
+    p?.checks === "passing" ? "passed" : p?.checks === "failing" ? "failed" : p?.checks === "pending" ? "running" : null;
+  const pullWaiting = (p: Pull, theirs: boolean): WorkItemInfo["waiting_on"] => {
+    if (p.state === "open" && review.has(p.number)) return { who: "you", why: "review" };
+    if (theirs) return { who: "teammate", why: null };
+    if (p.checks === "failing") return { who: "you", why: "checksfailed" };
+    if (p.checks === "pending") return { who: "ci", why: null };
+    if (p.state !== "open") return null;
+    if (p.review === "changesrequested") return { who: "you", why: "changesrequested" };
+    if (p.review === "approved") return { who: "you", why: "ready" };
+    return { who: "teammate", why: null };
+  };
+  const out: WorkItemInfo[] = [];
+  const claimed = new Set<string>();
+  for (const { summary: t } of tasks) {
+    const pull = pulls.find((p) => p.number === t.pull || p.head === t.branch);
+    const at = t.run?.ended ?? t.run?.started ?? t.created;
+    const unseen = (seen[t.id] ?? 0) < at && t.run != null && t.run.state !== "running";
+    const stage: WorkItemInfo["stage"] = t.landed
+      ? "landed"
+      : t.closed
+        ? "closed"
+        : pull?.state === "open" || unseen
+          ? "inreview"
+          : "inprogress";
+    const settled = stage === "landed" || stage === "closed";
+    claimed.add(t.branch);
+    out.push({
+      key: `branch:${t.branch}`,
+      title: t.title,
+      branch: t.branch,
+      base: t.base,
+      worktree: settled ? null : t.worktree,
+      task: t.id,
+      issue: t.issue,
+      pull: pull ? summary(pull) : null,
+      checks: checks(pull),
+      owner: t.run ? { kind: "agent", name: "Claude Code" } : { kind: "you" },
+      stage,
+      waiting_on: settled
+        ? null
+        : t.asks > 0
+          ? { who: "you", why: "question" }
+          : t.run?.state === "running"
+            ? { who: "agent", why: null }
+            : unseen
+              ? { who: "you", why: "unseen" }
+              : pull
+                ? pullWaiting(pull, false)
+                : null,
+      updated: Math.max(at, pull?.updated ?? 0),
+    });
+  }
+  for (const b of mockBranches()) {
+    if (claimed.has(b.name)) continue;
+    claimed.add(b.name);
+    const pull = pulls.find((p) => p.head === b.name);
+    const theirs = pull != null && pull.author !== me;
+    out.push({
+      key: `branch:${b.name}`,
+      title: pull?.title ?? b.commits.at(-1)?.subject ?? b.name,
+      branch: b.name,
+      base: b.base,
+      worktree: b.current ? repo.root : null,
+      task: null,
+      issue: null,
+      pull: pull ? summary(pull) : null,
+      checks: checks(pull),
+      owner: theirs ? { kind: "teammate", login: pull!.author } : { kind: "you" },
+      stage: pull?.state === "open" ? "inreview" : "inprogress",
+      waiting_on: pull ? pullWaiting(pull, theirs) : null,
+      updated: Math.max(b.updated, pull?.updated ?? 0),
+    });
+  }
+  for (const p of pulls) {
+    if (claimed.has(p.head)) continue;
+    const theirs = p.author !== me;
+    out.push({
+      key: `branch:${p.head}`,
+      title: p.title,
+      branch: p.head,
+      base: p.base,
+      worktree: null,
+      task: null,
+      issue: null,
+      pull: summary(p),
+      checks: checks(p),
+      owner: theirs ? { kind: "teammate", login: p.author } : { kind: "you" },
+      stage: p.state === "open" ? "inreview" : "inprogress",
+      waiting_on: pullWaiting(p, theirs),
+      updated: p.updated,
+    });
+  }
+  for (const { issue: i } of issues.filter(({ issue: i }) => i.open && i.assignees.includes(me))) {
+    if (out.some((w) => w.issue === i.number)) continue;
+    out.push({
+      key: `issue:${i.number}`,
+      title: i.title,
+      branch: null,
+      base: null,
+      worktree: null,
+      task: null,
+      issue: i.number,
+      pull: null,
+      checks: null,
+      owner: { kind: "you" },
+      stage: "planned",
+      waiting_on: null,
+      updated: i.updated,
+    });
+  }
+  return out.sort((a, b) => b.updated - a.updated || a.key.localeCompare(b.key));
 }
 
 async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise<unknown> {
@@ -777,10 +1176,16 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       return done(`Commit “${String(args.message).split("\n")[0]}”`, "Committed a1b2c3d");
     case "last_message":
       return f.graph.rows.find((r: { head: boolean }) => r.head)?.subject ?? "";
-    case "match_upstream":
-      return done("Match origin/main", "main now matches origin/main");
     case "sync":
-      return { fetch: "Fetched", pull: "Pulled", push: "Pushed" }[args.action as string];
+      return {
+        fetch: "Fetched",
+        pull: "Pulled",
+        push: "Pushed",
+        "force-push": "Force-pushed",
+        sync: "Pulled, pushed",
+      }[args.action as string];
+    case "push_branch":
+      return `Pushed ${args.name}`;
     case "stashes":
       return f.stashes;
     case "stash":
@@ -793,15 +1198,10 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       return "Done";
     case "pulls":
       return f.pulls[args.filter as string] ?? [];
-    case "work_branches": {
-      // Your branches ahead of main, made up from the recorded graph's subjects.
-      const at = Math.floor(Date.now() / 1000);
-      const commit = (subject: string, ago: number) => ({ hash: `${subject.length}`.padEnd(40, "0"), short: "0000000", subject, author: "you", time: at - ago });
-      return [
-        { name: "feat/farewell", base: "main", current: false, commits: [commit("Add farewell()", 5400)], files: 1, additions: 6, deletions: 0, updated: at - 5400 },
-        { name: "docs/contributing", base: "main", current: false, commits: [commit("Add a CONTRIBUTING guide", 9000)], files: 1, additions: 48, deletions: 0, updated: at - 9000 },
-      ];
-    }
+    case "work_branches":
+      return mockBranches();
+    case "work_items":
+      return mockWorkItems(f.pulls.open ?? [], new Set((f.pulls.review ?? []).map((p: Pull) => p.number)), (args.seen ?? {}) as Record<string, number>);
     case "branch_patch":
       return `diff --git a/greet.py b/greet.py\n--- a/greet.py\n+++ b/greet.py\n@@ -3,0 +4,6 @@\n+\n+\n+def farewell(name):\n+    \"\"\"Say goodbye.\"\"\"\n+    return f\"Goodbye, {name}!\"\n+\n`;
     case "pull_detail":

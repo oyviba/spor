@@ -1,4 +1,5 @@
 import type {
+  Debrief,
   AgentChoice,
   BlameRow,
   BranchInfo,
@@ -31,8 +32,13 @@ import type {
   TaskPull,
   WorktreeInfo,
   WorkBranch,
+  WorkItemInfo,
+  RuleSuggestion,
+  TranscriptHit,
 } from "./types";
 import type { Place } from "./shared/DiffView";
+import type { SyncAction } from "./shared/sync";
+export type { SyncAction };
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown> | Uint8Array) => Promise<T>;
 
@@ -40,6 +46,7 @@ type Invoke = <T>(cmd: string, args?: Record<string, unknown> | Uint8Array) => P
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 let invokeImpl: Invoke | null = null;
+
 
 async function call<T>(cmd: string, args?: Record<string, unknown> | Uint8Array): Promise<T> {
   if (!invokeImpl) {
@@ -52,7 +59,9 @@ async function call<T>(cmd: string, args?: Record<string, unknown> | Uint8Array)
 
 /** What the backend's watcher says changed (`src-tauri/src/watch.rs`):
  * refs (HEAD, branches, tags), the index, the working tree, or agent tasks. */
-export type RepoChange = "refs" | "index" | "worktree" | "tasks";
+/** `work`: a branch moved or a task did something, so a work item may have
+ * changed (sent after `refs` and `tasks`). */
+export type RepoChange = "refs" | "index" | "worktree" | "tasks" | "work";
 
 type Listen = (event: string, fn: () => void) => Promise<() => void>;
 let listenImpl: Listen | null = null;
@@ -150,9 +159,9 @@ export const api = {
   discard: (paths: string[]) => call<void>("discard", { paths }),
   commit: (message: string, amend: boolean) => call<string>("commit", { message, amend }),
   lastMessage: () => call<string>("last_message"),
-  sync: (action: "fetch" | "pull" | "push") => call<string>("sync", { action }),
-  /** Make the branch match its upstream, dropping the commits only it has. */
-  matchUpstream: () => call<string>("match_upstream"),
+  sync: (action: SyncAction) => call<string>("sync", { action }),
+  /** Push (or publish) a branch that isn't checked out. */
+  pushBranch: (name: string) => call<string>("push_branch", { name }),
   stashes: () => call<StashInfo[]>("stashes"),
   stash: (message: string | null) => call<string>("stash", { message }),
   stashPop: (index: number) => call<string>("stash_pop", { index }),
@@ -189,17 +198,23 @@ export const api = {
   // Agents
   listTasks: () => call<TaskSummary[]>("list_tasks"),
   taskDetail: (id: string) => call<TaskDetail>("task_detail", { id }),
+  /** Write the latest run's debrief if it wants one (#104); null when the repository opted out. */
+  debriefTask: (id: string) => call<Debrief | null>("debrief_task", { id }),
   taskPatch: (id: string) => call<string>("task_patch", { id }),
   createTask: (prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
     call<TaskSummary>("create_task", { prompt, base, agent, mode }),
   /** A task on a GitHub issue; `prompt` is the issue's (editable) prompt. */
+  /** Hand one of your branches to an agent (#80, #82); ⌘Z takes it back. */
+  handToAgent: (branch: string, prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
+    call<TaskSummary>("hand_to_agent", { branch, prompt, base, agent, mode }),
   createIssueTask: (number: number, prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
     call<TaskSummary>("create_issue_task", { number, prompt, base, agent, mode }),
   /** Push the task's branch and open a pull request for it. */
   publishTask: (id: string, draft: boolean, commitUncommitted: boolean) =>
     call<string>("publish_task", { id, draft, commitUncommitted }),
-  /** Push the agent's new commits to the task's pull request. */
-  pushTask: (id: string) => call<string>("push_task", { id }),
+  /** Push the agent's new commits to the task's pull request; with
+   * `commitUncommitted`, what it left uncommitted is committed and goes too. */
+  pushTask: (id: string, commitUncommitted = false) => call<string>("push_task", { id, commitUncommitted }),
   /** Every open task's pull request (one `gh` call). */
   taskPulls: () => call<TaskPull[]>("task_pulls"),
   /** New review on the task's PR, written as a follow-up for its agent. */
@@ -211,14 +226,43 @@ export const api = {
   /** Its PR merged: mark it landed and remove its folder and branch (⌘Z undoes). */
   settleTask: (id: string, commit: string) => call<string>("settle_task", { id, commit }),
   /** `message` null starts the task's own prompt; otherwise it's a follow-up. */
-  sendToAgent: (id: string, message: string | null, agent: AgentChoice, mode: Mode) =>
-    call<void>("send_to_agent", { id, message, agent, mode }),
+  /** `fresh`: start a new session from the task's prompt and the last debrief, not the full context (#98). */
+  sendToAgent: (id: string, message: string | null, agent: AgentChoice, mode: Mode, fresh?: boolean) =>
+    call<void>("send_to_agent", { id, message, agent, mode, fresh: fresh ?? null }),
   /** Answer a question the agent asked; `message` says what to do instead,
    * `always` allows it for the rest of the session (#40). */
   answerAsk: (id: string, requestId: string, allow: boolean, message = "", always = false) =>
     call<void>("answer_ask", { id, requestId, allow, message, always }),
+  /** Answer `AskUserQuestion` (#102): the labels picked, or words of your
+   * own, for each question in order. */
+  answerQuestions: (id: string, requestId: string, answers: string[][]) =>
+    call<void>("answer_questions", { id, requestId, answers }),
+  /** Approve the agent's plan (#101): it starts, in `mode` from here on. */
+  approvePlan: (id: string, requestId: string, mode: Mode) => call<void>("approve_plan", { id, requestId, mode }),
   /** Start the next agent without the folder's setup script (#23). */
   skipSetup: (id: string) => call<void>("skip_setup", { id }),
+  /** Run the setup script again, before the next agent. */
+  rerunSetup: (id: string) => call<void>("rerun_setup", { id }),
+  /** Follow-ups for when the agent finishes, kept with the task (#22). */
+  queueFollowUp: (id: string, text: string) => call<void>("queue_follow_up", { id, text }),
+  unqueue: (id: string, index: number) => call<void>("unqueue", { id, index }),
+  /** Send the oldest queued follow-up if the agent is idle; true if one went. */
+  sendQueued: (id: string, agent: AgentChoice, mode: Mode) => call<boolean>("send_queued", { id, agent, mode }),
+  /** Delete the run checkpoints of tasks that are done, and discarded tasks' transcripts. */
+  cleanUpTasks: () => call<string>("clean_up_tasks"),
+  /** Repeated corrections across tasks, as candidate lines for CLAUDE.md (#107). Slow: it asks Claude. */
+  /** Search what was said across every task's conversation, landed ones included (#108). */
+  searchTranscripts: (query: string) => call<TranscriptHit[]>("search_transcripts", { query }),
+  /** How many agents may run at once in this repository; null: no limit. Starts past it wait. */
+  maxAgents: () => call<number | null>("get_max_agents"),
+  setMaxAgents: (limit: number | null) => call<void>("set_max_agents", { limit }),
+  /** Start tasks waiting for a free slot, while there are some. */
+  startWaiting: () => call<number>("start_waiting"),
+  suggestRules: () => call<RuleSuggestion[]>("suggest_rules"),
+  addRule: (rule: string) => call<string>("add_rule", { rule }),
+  declineRule: (rule: string) => call<void>("decline_rule", { rule }),
+  /** A notification from the operating system, for when the window is in the background. */
+  notify: (title: string, body: string) => call<void>("notify_os", { title, body }),
   /** Keep an image for a prompt; returns the path the prompt names it by.
    * The bytes go as the request's raw body. */
   attachImage: (data: Uint8Array) => call<string>("attach_image", data),
@@ -234,13 +278,17 @@ export const api = {
   /** One run's changes, between its checkpoints. */
   runPatch: (id: string, index: number) => call<RunPatch>("run_patch", { id, index }),
   /** Take back the task's last run (⌘Z brings it back). */
-  undoRun: (id: string) => call<string>("undo_run", { id }),
+  undoRun: (id: string, from: number | null = null) => call<string>("undo_run", { id, from }),
 
   // Work
   /** Your own branches with work on them (not agents'). */
   workBranches: () => call<WorkBranch[]>("work_branches"),
   /** A branch's changes since it left the base. */
   branchPatch: (branch: string) => call<string>("branch_patch", { branch }),
+  /** Every work item in the repository, most recently changed first (#78).
+   * GitHub's part is cached in the backend, so call it on every `work`
+   * change. `seen`: when you last looked at each task, by task id. */
+  workItems: (seen: Record<string, number> = {}) => call<WorkItemInfo[]>("work_items", { seen }),
 };
 
 export function errorText(e: unknown): string {

@@ -1,19 +1,19 @@
 import { useState } from "react";
-import { useChanged } from "../../shared/hooks";
+import { useChanged, useStored } from "../../shared/hooks";
 import type { SetupInfo, TaskDetail, TaskPull } from "../../types";
-import { checksLabel, duration, latestChecks, runs as toRuns, tokens } from "./transcript";
 import { useShell } from "../../shared/app";
 import { Button } from "../../shared/Button";
+import { DetailsCard } from "../../shared/Layout";
 import { Debrief } from "./Debrief";
+import { DEFAULT_PANE, runFacts, type PaneOptions } from "./panel";
+import { RunDetails } from "./RunDetails";
 import { SurfacedItems } from "./SurfacedItems";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromTask } from "../../shared/work";
 import {
-  AgentIcon,
   Alert,
   ArrowUp,
   ChevronDown,
-  Copy,
   Merge,
   MessageSquare,
   PullRequest,
@@ -58,18 +58,23 @@ interface Props extends GithubActions {
   onStartTask: (prompt: string) => unknown;
 }
 
-/** The task's details and landing actions, in a small floating card, under
- * the work card that links its issue, branch, folder, PR and checks. */
+/** The task's details pane, fixed beside the page. By default it has the work
+ * card (issue, branch, folder, PR, checks), what needs you (conflicts, work
+ * its PR lacks), the changes, the agent's debrief and the next step: landing
+ * or publishing. The rest of the runs is under ⋯ → Run details, and a few
+ * lines are the user's to turn on or off. */
 export function Inspector({ detail, ...p }: Props) {
   const shell = useShell();
   const t = detail.task;
   const item = findWork(shell.work, { task: t.id }) ?? itemFromTask(t, p.pull?.pull);
   const s = t.stats;
   const running = t.run?.state === "running";
+  const [options, setOptions] = useStored<PaneOptions>("pane", DEFAULT_PANE);
+  const show = { ...DEFAULT_PANE, ...options };
+  const [dialog, setDialog] = useState<"details" | "panel" | null>(null);
   const [includeUncommitted, setIncludeUncommitted] = useState(true);
   const [landMenu, setLandMenu] = useState(false);
   const [prMenu, setPrMenu] = useState(false);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
   // What it's doing (publishing, landing…): that button spins, the others
   // that would change the task wait.
   const [working, setWorking] = useState<"publish" | "land" | "discard" | "merge" | null>(null);
@@ -80,10 +85,10 @@ export function Inspector({ detail, ...p }: Props) {
     return Promise.resolve(run()).finally(() => setWorking(null));
   };
   useChanged(() => {
-    setConfirmDiscard(false);
     setConfirmMerge(false);
     setLandMenu(false);
     setPrMenu(false);
+    setDialog(null);
   }, [t.id]);
   const pr = p.pull?.pull;
   const prOpen = pr && (pr.state === "open" || pr.state === "draft");
@@ -103,14 +108,7 @@ export function Inspector({ detail, ...p }: Props) {
           ? "It has uncommitted changes"
           : null;
   const undoneLines = detail.undoes.reduce((n, u) => n + u.lines, 0);
-  const lastRun = detail.runs.at(-1);
-  const spent = detail.runs.reduce((n, r) => n + (r.cost_usd ?? 0), 0);
-  const views = toRuns(detail.transcript, running);
-  const checks = checksLabel(
-    latestChecks(views),
-    views.some((r) => r.edited),
-  );
-  const spentTokens = detail.runs.reduce((n, r) => n + r.tokens_in + r.tokens_out, 0);
+  const facts = runFacts(detail, running);
 
   // What merging its PR from here waits for. GitHub has the final say
   // (required reviews and checks); this is what would lose work.
@@ -134,35 +132,100 @@ export function Inspector({ detail, ...p }: Props) {
         ? "It has uncommitted changes"
         : null;
 
-  // Work the agent did that its pull request doesn't have yet.
-  const unpushed = prOpen && (s.unpushed > 0 || s.uncommitted > 0) && (
+  const discard = async () => {
+    if (working) return;
+    const ok = await shell.confirm({
+      title: "Discard this task?",
+      detail: `Removes its folder and branch ${t.branch}. ⌘Z brings them back.`,
+      action: "Discard",
+      danger: true,
+    });
+    if (ok) work("discard", p.onDiscard);
+  };
+
+  // The rest of the details, and what the pane shows, behind the ⋯.
+  const setupRerun = detail.setup && (detail.setup.state === "worked" || detail.setup.state === "skipped");
+  const menu = (e: React.MouseEvent) =>
+    shell.menu(e, [
+      { label: "Run details…", run: () => setDialog("details") },
+      { label: "Copy agent command", run: () => p.onCopy(t.command, "Agent command") },
+      ...(setupRerun ? [{ label: "Re-run setup before the next agent", run: p.onRerunSetup, disabled: running }] : []),
+      { label: "Choose what the panel shows…", run: () => setDialog("panel"), separator: true },
+      ...(done ? [] : [{ label: "Discard task…", run: discard, danger: true, disabled: running, separator: true }]),
+    ]);
+  const dialogs = dialog && (
+    <RunDetails
+      detail={detail}
+      options={show}
+      onOptions={setOptions}
+      focus={dialog}
+      onClose={() => setDialog(null)}
+      setup={detail.setup && <SetupRow setup={detail.setup} running={running} onRerun={p.onRerunSetup} />}
+    />
+  );
+
+  // What needs you: shown when it's so, and not at all when it isn't.
+  const needsYou =
+    !done &&
+    (detail.conflicts.length > 0 || detail.undoes.length > 0 || (prOpen && (s.unpushed > 0 || s.uncommitted > 0)));
+  const attention = needsYou && (
     <div className="inspector-section">
-      <div className="inspector-row warn">
-        <ArrowUp size={13} />
-        <span>
-          {[
-            s.unpushed > 0 && `${s.unpushed} ${s.unpushed === 1 ? "commit" : "commits"}`,
-            s.uncommitted > 0 && `${s.uncommitted} uncommitted ${s.uncommitted === 1 ? "file" : "files"}`,
-          ]
-            .filter(Boolean)
-            .join(" and ")}{" "}
-          not on #{pr.number} yet
-          <Button
-            className="link"
-            onClick={() => p.onPush(s.uncommitted > 0)}
-            disabled={running}
-            title={s.uncommitted > 0 ? "Commit what it left uncommitted, and push" : undefined}
-          >
-            {s.uncommitted > 0 ? "Commit and push" : "Push"}
-          </Button>
-        </span>
-      </div>
+      {detail.conflicts.length > 0 && (
+        <div className="inspector-row bad">
+          <Alert size={13} />
+          <span>
+            Conflicts with {t.base} in {detail.conflicts.join(", ")}
+            <button className="link" onClick={p.onAskRebase} disabled={running}>
+              {t.pull != null ? `Ask agent to merge ${t.base} in` : "Ask agent to rebase"}
+            </button>
+          </span>
+        </div>
+      )}
+      {detail.undoes.length > 0 && (
+        <div className="inspector-row bad" title={detail.undoes.map((u) => `${u.path}: ${u.lines}`).join("\n")}>
+          <Alert size={13} />
+          <span>
+            Would undo {undoneLines} {undoneLines === 1 ? "line" : "lines"} that reached {t.base} after it started, in{" "}
+            {detail.undoes
+              .slice(0, 2)
+              .map((u) => u.path.split("/").pop())
+              .join(", ")}
+            {detail.undoes.length > 2 && ` and ${detail.undoes.length - 2} more`}
+            <button className="link" onClick={p.onAskRestore} disabled={running}>
+              Ask agent to put them back
+            </button>
+          </span>
+        </div>
+      )}
+      {/* Work the agent did that its pull request doesn't have yet. */}
+      {prOpen && (s.unpushed > 0 || s.uncommitted > 0) && (
+        <div className="inspector-row warn">
+          <ArrowUp size={13} />
+          <span>
+            {[
+              s.unpushed > 0 && `${s.unpushed} ${s.unpushed === 1 ? "commit" : "commits"}`,
+              s.uncommitted > 0 && `${s.uncommitted} uncommitted ${s.uncommitted === 1 ? "file" : "files"}`,
+            ]
+              .filter(Boolean)
+              .join(" and ")}{" "}
+            not on #{pr.number} yet
+            <Button
+              className="link"
+              onClick={() => p.onPush(s.uncommitted > 0)}
+              disabled={running}
+              title={s.uncommitted > 0 ? "Commit what it left uncommitted, and push" : undefined}
+            >
+              {s.uncommitted > 0 ? "Commit and push" : "Push"}
+            </Button>
+          </span>
+        </div>
+      )}
     </div>
   );
 
   if (t.landed || t.closed) {
     return (
-      <aside className="inspector">
+      <DetailsCard>
         <div className="inspector-row">
           <Merge size={13} />
           {t.landed ? (
@@ -174,111 +237,12 @@ export function Inspector({ detail, ...p }: Props) {
           )}
         </div>
         <WorkCard item={item} from="work" actions={false} />
-      </aside>
+      </DetailsCard>
     );
   }
 
-  return (
-    <aside className="inspector">
-      <WorkCard item={item} from="work" actions={false} />
-      <SurfacedItems items={detail.surfaced} folder={t.worktree} onCopy={p.onCopy} />
-      <div className="inspector-section">
-        <button className="inspector-row action" onClick={() => p.onCopy(t.command, "Agent command")}>
-          <Copy size={13} />
-          <span>Copy agent command</span>
-        </button>
-        {detail.setup && <SetupRow setup={detail.setup} running={running} onRerun={p.onRerunSetup} />}
-      </div>
-      <div className="inspector-section">
-        {t.from && (
-          <div className="inspector-row muted">
-            <span className="truncate">Started from {t.from}</span>
-          </div>
-        )}
-        {s.base_moved && !done && (
-          <div className="inspector-row warn">
-            <Alert size={13} />
-            <span>{t.from ?? t.base} has moved on — landing rebases first</span>
-          </div>
-        )}
-        {detail.conflicts.length > 0 && !done && (
-          <div className="inspector-row bad">
-            <Alert size={13} />
-            <span>
-              Conflicts with {t.base} in {detail.conflicts.join(", ")}
-              <button className="link" onClick={p.onAskRebase} disabled={running}>
-                {t.pull != null ? `Ask agent to merge ${t.base} in` : "Ask agent to rebase"}
-              </button>
-            </span>
-          </div>
-        )}
-        {detail.undoes.length > 0 && !done && (
-          <div className="inspector-row bad" title={detail.undoes.map((u) => `${u.path}: ${u.lines}`).join("\n")}>
-            <Alert size={13} />
-            <span>
-              Would undo {undoneLines} {undoneLines === 1 ? "line" : "lines"} that reached {t.base} after it started, in{" "}
-              {detail.undoes
-                .slice(0, 2)
-                .map((u) => u.path.split("/").pop())
-                .join(", ")}
-              {detail.undoes.length > 2 && ` and ${detail.undoes.length - 2} more`}
-              <button className="link" onClick={p.onAskRestore} disabled={running}>
-                Ask agent to put them back
-              </button>
-            </span>
-          </div>
-        )}
-        <button className="inspector-row action" onClick={p.onShowChanges}>
-          <span className="diffstat num">
-            <span className="add">+{s.additions}</span> <span className="del">−{s.deletions}</span>
-          </span>
-          <span>
-            {s.files} {s.files === 1 ? "file" : "files"}
-            <span className="muted">
-              {" "}
-              · {s.commits} {s.commits === 1 ? "commit" : "commits"}
-              {s.uncommitted > 0 && ` · ${s.uncommitted} uncommitted`}
-            </span>
-          </span>
-        </button>
-      </div>
-      {unpushed}
-      {lastRun && (
-        <div className="inspector-section">
-          <div className="inspector-row">
-            <AgentIcon agent={lastRun.agent} />
-            <span className="num">
-              {lastRun.label} · {detail.runs.length} {detail.runs.length === 1 ? "run" : "runs"}
-              {lastRun.ended && ` · last ${duration(lastRun.ended - lastRun.started)}`}
-              {spent > 0 && ` · $${spent.toFixed(2)}`}
-              {spentTokens > 0 && ` · ${tokens(spentTokens)} tokens`}
-            </span>
-          </div>
-          {checks && (
-            <div className="inspector-row">
-              <span className="num small-text" title="Read from the commands the agent ran">
-                {checks}
-              </span>
-            </div>
-          )}
-          {lastRun.model && (
-            <div className="inspector-row">
-              <span className="num small-text muted" title="The model that actually ran, from Claude Code's start-up message">
-                Ran on {lastRun.model}
-              </span>
-            </div>
-          )}
-          {lastRun.mcp_failed.length > 0 && (
-            <div className="inspector-row">
-              <Alert size={12} />
-              <span className="small-text">
-                {lastRun.mcp_failed.join(", ")} didn't connect
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-      {!running && <Debrief detail={detail} onSend={p.onSend} onStartTask={p.onStartTask} />}
+  const footer = (
+    <>
       {merged && (
         <div className="inspector-actions">
           <div className="inspector-note">Its pull request landed. Its folder and branch can go.</div>
@@ -348,98 +312,130 @@ export function Inspector({ detail, ...p }: Props) {
         </div>
       )}
       {!done && (
-      <div className="inspector-actions">
-        {s.uncommitted > 0 && !running && !prOpen && (
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={includeUncommitted}
-              onChange={(e) => setIncludeUncommitted(e.target.checked)}
-            />
-            Commit its uncommitted changes when landing or publishing
-          </label>
-        )}
-        {!pr && (
-          <div className="split">
-            <Button
-              className="ghost"
-              disabled={publishBlocked != null || (working != null && working !== "publish")}
-              busy={working === "publish"}
-              title={publishBlocked ?? `Push ${t.branch} and open a pull request into ${t.base}`}
-              onClick={() => work("publish", () => p.onPublish(false, includeUncommitted))}
-            >
-              <PullRequest size={12} /> Publish
-            </Button>
-            <button
-              className="ghost split-more"
-              disabled={publishBlocked != null || working != null}
-              aria-label="More ways to publish"
-              onClick={() => setPrMenu((v) => !v)}
-            >
-              <ChevronDown size={12} />
-            </button>
-            {prMenu && (
-              <div className="menu" onMouseLeave={() => setPrMenu(false)}>
-                <button
-                  onClick={() => {
-                    setPrMenu(false);
-                    work("publish", () => p.onPublish(true, includeUncommitted));
-                  }}
-                >
-                  Publish as a draft
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-        {!prOpen && (
-        <div className="split">
-          <Button
-            className="primary"
-            disabled={landBlocked != null || (working != null && working !== "land")}
-            busy={working === "land"}
-            title={landBlocked ?? "One commit with the task as its message (⌘Z undoes)"}
-            onClick={() => work("land", () => p.onLand(false, includeUncommitted))}
-          >
-            Land on {t.base}
-          </Button>
-          <button
-            className="primary split-more"
-            disabled={landBlocked != null || working != null}
-            aria-label="More ways to land"
-            onClick={() => setLandMenu((v) => !v)}
-          >
-            <ChevronDown size={12} />
-          </button>
-          {landMenu && (
-            <div className="menu" onMouseLeave={() => setLandMenu(false)}>
-              <button
-                onClick={() => {
-                  setLandMenu(false);
-                  work("land", () => p.onLand(true, includeUncommitted));
-                }}
+        <div className="inspector-actions">
+          {s.uncommitted > 0 && !running && !prOpen && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={includeUncommitted}
+                onChange={(e) => setIncludeUncommitted(e.target.checked)}
+              />
+              Commit its uncommitted changes when landing or publishing
+            </label>
+          )}
+          {!pr && (
+            <div className="split">
+              <Button
+                className="ghost"
+                disabled={publishBlocked != null || (working != null && working !== "publish")}
+                busy={working === "publish"}
+                title={publishBlocked ?? `Push ${t.branch} and open a pull request into ${t.base}`}
+                onClick={() => work("publish", () => p.onPublish(false, includeUncommitted))}
               >
-                Land with a merge commit
+                <PullRequest size={12} /> Publish
+              </Button>
+              <button
+                className="ghost split-more"
+                disabled={publishBlocked != null || working != null}
+                aria-label="More ways to publish"
+                onClick={() => setPrMenu((v) => !v)}
+              >
+                <ChevronDown size={12} />
               </button>
+              {prMenu && (
+                <div className="menu up" onMouseLeave={() => setPrMenu(false)}>
+                  <button
+                    onClick={() => {
+                      setPrMenu(false);
+                      work("publish", () => p.onPublish(true, includeUncommitted));
+                    }}
+                  >
+                    Publish as a draft
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {!prOpen && (
+            <div className="split">
+              <Button
+                className="primary"
+                disabled={landBlocked != null || (working != null && working !== "land")}
+                busy={working === "land"}
+                title={
+                  landBlocked ??
+                  (s.base_moved
+                    ? `${t.from ?? t.base} has moved on, so it rebases first. One commit with the task as its message (⌘Z undoes)`
+                    : "One commit with the task as its message (⌘Z undoes)")
+                }
+                onClick={() => work("land", () => p.onLand(false, includeUncommitted))}
+              >
+                Land on {t.base}
+              </Button>
+              <button
+                className="primary split-more"
+                disabled={landBlocked != null || working != null}
+                aria-label="More ways to land"
+                onClick={() => setLandMenu((v) => !v)}
+              >
+                <ChevronDown size={12} />
+              </button>
+              {landMenu && (
+                <div className="menu up" onMouseLeave={() => setLandMenu(false)}>
+                  <button
+                    onClick={() => {
+                      setLandMenu(false);
+                      work("land", () => p.onLand(true, includeUncommitted));
+                    }}
+                  >
+                    Land with a merge commit
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
-        )}
-        <Button
-          className={confirmDiscard ? "danger" : "ghost"}
-          disabled={running || (working != null && working !== "discard")}
-          busy={working === "discard"}
-          title={running ? "Stop the agent first" : "Remove its folder and branch (⌘Z undoes)"}
-          onClick={() => (confirmDiscard ? work("discard", p.onDiscard) : setConfirmDiscard(true))}
-          onBlur={() => setConfirmDiscard(false)}
-        >
-          <Trash size={12} /> {confirmDiscard ? "Discard?" : "Discard"}
-        </Button>
-      </div>
       )}
       {!done && !prOpen && landBlocked && hasWork && !running && <div className="inspector-note">{landBlocked}</div>}
       {mergeBlocked && !running && <div className="inspector-note">{mergeBlocked}</div>}
-    </aside>
+    </>
+  );
+
+  return (
+    <DetailsCard menu={menu} footer={footer}>
+      <WorkCard item={item} from="work" actions={false} />
+      <SurfacedItems items={detail.surfaced} folder={t.worktree} onCopy={p.onCopy} />
+      {attention}
+      <div className="inspector-section">
+        <button className="inspector-row action" onClick={p.onShowChanges}>
+          <span className="diffstat num">
+            <span className="add">+{s.additions}</span> <span className="del">−{s.deletions}</span>
+          </span>
+          <span>
+            {s.files} {s.files === 1 ? "file" : "files"}
+            <span className="muted">
+              {" "}
+              · {s.commits} {s.commits === 1 ? "commit" : "commits"}
+              {s.uncommitted > 0 && ` · ${s.uncommitted} uncommitted`}
+            </span>
+          </span>
+        </button>
+        {show.checks && facts.checks && (
+          <div className="inspector-row">
+            <span className="num small-text" title="Read from the commands the agent ran">
+              {facts.checks}
+            </span>
+          </div>
+        )}
+        {show.summary && facts.summary && (
+          <div className="inspector-row">
+            <span className="num small-text muted">{facts.summary}</span>
+          </div>
+        )}
+      </div>
+      {show.debrief && !running && <Debrief detail={detail} onSend={p.onSend} onStartTask={p.onStartTask} />}
+      {dialogs}
+    </DetailsCard>
   );
 }
 
