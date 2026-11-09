@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""A stand-in for the GitHub CLI, for the end-to-end suites.
+"""A stand-in for the GitHub CLI, for the work-item tests in src-tauri/src/work.rs.
 
 It answers the `gh` calls spor makes (pull requests, Actions runs, job
-logs) from `e2e/fixtures/gh.json`, and runs each `--jq` expression through
+logs) from `tests/fake/fixtures/gh.json`, and runs each `--jq` expression through
 the real `jq`, so its output is exactly what `gh … --jq` prints. What's
 done (comments, merges, approvals, re-runs, cancels) is recorded in the
-JSON file $FAKE_GH_STATE, which the suites read to check it happened,
+JSON file $FAKE_GH_STATE, which a test can read to check it happened,
 and which later calls read back: a merged PR reads as merged. With
 $FAKE_GH_LOG set, each call's arguments are appended to that file, one
 call per line, so a test can count how often spor asked.
