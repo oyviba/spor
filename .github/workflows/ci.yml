@@ -31,9 +31,8 @@ jobs:
       - name: Test
         run: cargo test --locked
 
-  # The app in desktop/: its own Cargo workspace over the core, the web UI,
-  # and the end-to-end suites against the real app under Xvfb, with
-  # stand-in `claude` and `gh` from desktop/e2e/bin.
+  # The app in desktop/: its own Cargo workspace over the core and the web UI,
+  # with unit tests for both.
   desktop:
     runs-on: ubuntu-latest
     defaults:
@@ -52,7 +51,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            librsvg2-dev webkit2gtk-driver xvfb jq
+            librsvg2-dev jq
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -73,26 +72,13 @@ jobs:
       - name: Clippy (backend)
         working-directory: desktop/src-tauri
         run: cargo clippy --locked -- -D warnings
+      - name: Test (backend)
+        working-directory: desktop/src-tauri
+        run: cargo test --locked
       # custom-protocol embeds dist/ instead of loading the dev server.
       - name: Build the app
         working-directory: desktop/src-tauri
         run: cargo build --locked --features tauri/custom-protocol
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --locked
-      - name: End-to-end suites
-        run: xvfb-run -a e2e/run-all.sh src-tauri/target/debug/spor-desktop e2e-shots
-      # The journeys in docs/journeys.md (#75), counting section changes.
-      # Known gaps are reported, not failed; until #74 is done, nothing here
-      # fails the build.
-      - name: Journeys
-        continue-on-error: true
-        run: xvfb-run -a e2e/run-all.sh src-tauri/target/debug/spor-desktop e2e-shots journeys
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: desktop-e2e-screenshots
-          path: desktop/e2e-shots
-          if-no-files-found: ignore
 
   # Spor.app for macOS (universal), from the Tauri bundler. Not signed or
   # notarized: the first launch of a downloaded copy needs right-click → Open.

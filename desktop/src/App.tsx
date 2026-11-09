@@ -1,12 +1,12 @@
 import { Activity, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, errorText } from "./api";
+import { api, errorText, type SyncAction } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "./types";
 import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, Sparkle, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
 import { RepoPanel } from "./shared/Layout";
-import { BranchBar } from "./shared/BranchBar";
+import { BranchBar, runSync } from "./shared/BranchBar";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { AgentLimit } from "./sections/agents/AgentLimit";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
@@ -97,7 +97,9 @@ function viewing(taskId: string): boolean {
   try {
     const section = JSON.parse(localStorage.getItem("spor.section") ?? "null");
     const view = JSON.parse(localStorage.getItem("spor.work.view") ?? "null");
-    return section === "work" && view?.kind === "task" && view.id === taskId && document.hasFocus();
+    const agents = JSON.parse(localStorage.getItem("spor.agents.open") ?? "null");
+    const open = (section === "work" && view?.kind === "task" && view.id === taskId) || (section === "agents" && agents?.taskId === taskId);
+    return open && document.hasFocus();
   } catch {
     return false;
   }
@@ -118,15 +120,19 @@ interface AppCommand {
 
 /** What can be done to the open repository, for the palette and shortcuts. */
 function repoCommands(shell: Shell): AppCommand[] {
-  const sync = (what: "fetch" | "pull" | "push") => () =>
-    shell.act(() => api.sync(what), {
-      undo: what === "pull",
-      pending: { fetch: "Fetching…", pull: "Pulling…", push: shell.state?.upstream ? "Pushing…" : "Publishing…" }[what],
-    });
+  const sync = (what: SyncAction) => () => void runSync(shell, what);
   return [
-    { id: "fetch", label: "Fetch", hint: "all remotes", group: "Git", run: sync("fetch") },
-    { id: "pull", label: "Pull", hint: "with rebase", group: "Git", run: sync("pull") },
+    { id: "fetch", label: "Fetch", hint: "all remotes, and fast-forward branches behind", group: "Git", run: sync("fetch") },
+    { id: "pull", label: "Pull", hint: "with rebase, stashing changes around it", group: "Git", run: sync("pull") },
     { id: "push", label: shell.state?.upstream ? "Push" : "Publish branch", group: "Git", run: sync("push") },
+    { id: "sync", label: "Pull and push", hint: "rebase onto the remote, then push", group: "Git", run: sync("sync") },
+    {
+      id: "force-push",
+      label: "Force push",
+      hint: "after amend or rebase — refused if someone else pushed",
+      group: "Git",
+      run: sync("force-push"),
+    },
     { id: "stash", label: "Stash changes", group: "Git", run: () => shell.act(() => api.stash(null), { undo: false, pending: "Stashing…" }) },
     {
       id: "pr",
@@ -167,6 +173,9 @@ export function App() {
     [], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const [state, setState] = useState<RepoState | null>(null);
+  /** The open repository, for callbacks that outlive a render. */
+  const here = useRef<string | undefined>(undefined);
+  here.current = repo?.root;
   const [section, setSection] = useStored<SectionId>("section", "inbox");
   // The Inbox and Agents span every repository: open, they show no
   // repository (no column, branch bar or repository header), and a
@@ -322,6 +331,8 @@ export function App() {
         toast(`${t.title} is waiting for you`, "ok", false, {
           label: "Answer",
           run: () => {
+            // From Agents, answer there, not in the repository's Work.
+            if (localStorage.getItem("spor.section") === '"agents"' && here.current) return setAgentOpen({ repo: here.current, taskId: t.id });
             setSection("work");
             setTarget((old) => ({ section: "work", taskId: t.id, seq: old.seq + 1 }));
           },
@@ -387,6 +398,18 @@ export function App() {
     setSection(to.section);
     setTarget((old) => ({ ...to, seq: old.seq + 1 }));
   };
+
+  // The task open in Agents. Its repository is opened for it, behind the
+  // view, so answering needs no trip to the repository.
+  const [agentOpen, setAgentOpen] = useStored<{ repo: string; taskId: string } | null>("agents.open", null);
+  useEffect(() => {
+    if (section !== "agents" || !agentOpen || !repo || repo.root === agentOpen.repo) return;
+    openRepo(agentOpen.repo).then((ok) => {
+      if (!ok) return setAgentOpen(null);
+      const owner = workspaces.list.find((w) => w.repos.includes(agentOpen.repo));
+      if (owner && owner.id !== workspaces.active) switchTo(owner.id);
+    });
+  }, [section, agentOpen?.repo, repo?.root]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const shell: Shell | null = useMemo(
     () =>
@@ -859,7 +882,18 @@ export function App() {
                 agents: (
                   <AgentsSection
                     inbox={inbox}
-                    onOpen={(r, taskId) => openItem({ repo: r, target: { section: "work", taskId } })}
+                    selected={agentOpen}
+                    page={
+                      agentOpen && agentOpen.repo === repo.root ? (
+                        <WorkSection key={agentOpen.taskId} embedded={{ taskId: agentOpen.taskId, onGone: () => setAgentOpen(null) }} />
+                      ) : (
+                        <main className="main">
+                          <div className="boot" />
+                        </main>
+                      )
+                    }
+                    onOpen={(r, taskId) => setAgentOpen({ repo: r, taskId })}
+                    onClose={() => setAgentOpen(null)}
                     onOpenRepo={(r) => openItem({ repo: r, target: { section: "work" } })}
                   />
                 ),

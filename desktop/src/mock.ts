@@ -933,8 +933,8 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
 
 // ---- Git and GitHub, from recordings ----------------------------------------
 //
-// src/fixtures.json is what the real backend answered on a demo repository
-// (e2e/record-fixtures.mjs). Times are moved up to now; changes to the
+// src/fixtures.json is what the real backend answered on a demo repository.
+// Times are moved up to now; changes to the
 // working tree are applied to an in-memory copy so the Changes section can
 // be clicked through.
 
@@ -1169,7 +1169,15 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
     case "last_message":
       return f.graph.rows.find((r: { head: boolean }) => r.head)?.subject ?? "";
     case "sync":
-      return { fetch: "Fetched", pull: "Pulled", push: "Pushed" }[args.action as string];
+      return {
+        fetch: "Fetched",
+        pull: "Pulled",
+        push: "Pushed",
+        "force-push": "Force-pushed",
+        sync: "Pulled, pushed",
+      }[args.action as string];
+    case "push_branch":
+      return `Pushed ${args.name}`;
     case "stashes":
       return f.stashes;
     case "stash":

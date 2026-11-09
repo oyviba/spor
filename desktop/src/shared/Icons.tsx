@@ -67,6 +67,7 @@ export const Merge = (p: P) => (
 export const PanelRight = (p: P) => (
   <Svg {...p}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M15 3v18" /></Svg>
 );
+export const More = (p: P) => <Svg {...p}><path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth={3} /></Svg>;
 export const Trash = (p: P) => (
   <Svg {...p}><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></Svg>
 );

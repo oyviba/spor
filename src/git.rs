@@ -1378,18 +1378,204 @@ impl Repo {
 
     // ── Remotes ──────────────────────────────────────────────────────────
 
-    pub fn push_args(&self) -> Result<Vec<String>, String> {
-        if self.succeeds(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]) {
-            return Ok(vec!["push".into()]);
-        }
-        let branch = self.run_ok(&["rev-parse", "--abbrev-ref", "HEAD"])?;
-        Ok(vec![
-            "push".into(),
-            "--set-upstream".into(),
-            "origin".into(),
-            branch.trim().to_string(),
-        ])
+    /// A config value, if it's set.
+    fn config(&self, key: &str) -> Option<String> {
+        self.run_ok(&["config", "--get", key])
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     }
+
+    /// The remote `branch` pushes to: its `pushRemote`, the repository's
+    /// `remote.pushDefault`, the remote it tracks, then `origin`, then the
+    /// only remote there is. None when there's no remote at all.
+    pub fn push_remote(&self, branch: &str) -> Option<String> {
+        let remotes = self.remotes();
+        let known = |r: String| remotes.contains(&r).then_some(r);
+        self.config(&format!("branch.{branch}.pushRemote"))
+            .and_then(known)
+            .or_else(|| self.config("remote.pushDefault").and_then(known))
+            .or_else(|| {
+                self.config(&format!("branch.{branch}.remote"))
+                    .and_then(known)
+            })
+            .or_else(|| known("origin".into()))
+            .or_else(|| (remotes.len() == 1).then(|| remotes[0].clone()))
+    }
+
+    /// The branch on the remote that `branch` pulls from (`refs/heads/x`),
+    /// when it tracks one on a remote rather than a local branch.
+    fn upstream_merge(&self, branch: &str) -> Option<(String, String)> {
+        let remote = self.config(&format!("branch.{branch}.remote"))?;
+        let merge = self.config(&format!("branch.{branch}.merge"))?;
+        (remote != ".").then_some((remote, merge))
+    }
+
+    /// Push the checked-out branch: `git push` arguments for it.
+    pub fn push_args(&self) -> Result<Vec<String>, String> {
+        let branch = self
+            .tracking()?
+            .branch
+            .ok_or("You're not on a branch (detached HEAD) — create one to push")?;
+        self.push_args_for(&branch, false)
+    }
+
+    /// `git push` arguments for `branch`: to the branch it tracks when that's
+    /// on the remote it pushes to, otherwise publishing it under its own name
+    /// and tracking that. `force` replaces what's on the remote, but only if
+    /// it's what this repository last saw there and that was once on the
+    /// branch here (`--force-with-lease --force-if-includes`), so a
+    /// background fetch can't make it overwrite someone else's commits.
+    pub fn push_args_for(&self, branch: &str, force: bool) -> Result<Vec<String>, String> {
+        let remote = self
+            .push_remote(branch)
+            .ok_or("This repository has no remote to push to — add one first")?;
+        let mut args = vec!["push".to_string()];
+        if force {
+            args.push("--force-with-lease".into());
+            args.push("--force-if-includes".into());
+        }
+        let local = format!("refs/heads/{branch}");
+        match self.upstream_merge(branch) {
+            Some((up_remote, merge)) if up_remote == remote => {
+                args.extend([remote, format!("{local}:{merge}")]);
+            }
+            _ => {
+                args.extend([
+                    "--set-upstream".into(),
+                    remote,
+                    format!("{local}:refs/heads/{branch}"),
+                ]);
+            }
+        }
+        Ok(args)
+    }
+
+    /// A branch with no upstream whose namesake is on the remote it would
+    /// push to (`origin/x`): it was published elsewhere, or by an agent, or
+    /// its upstream was unset. Pull links the two.
+    pub fn unlinked_remote_branch(&self, branch: &str) -> Option<String> {
+        if self.upstream_merge(branch).is_some()
+            || self.config(&format!("branch.{branch}.merge")).is_some()
+        {
+            return None;
+        }
+        let remote = self.push_remote(branch)?;
+        let name = format!("{remote}/{branch}");
+        self.succeeds(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/{name}"),
+        ])
+        .then_some(name)
+    }
+
+    /// Make `branch` track `upstream` (`origin/x`).
+    pub fn set_upstream(&self, branch: &str, upstream: &str) -> Result<(), String> {
+        let flag = format!("--set-upstream-to={upstream}");
+        self.run_ok(&["branch", "--quiet", &flag, branch])
+            .map(|_| ())
+    }
+
+    /// `git pull` arguments for the checked-out branch: rebasing, and
+    /// stashing uncommitted changes around it so they don't stop the pull.
+    pub fn pull_args(&self) -> Vec<String> {
+        ["pull", "--rebase", "--autostash"]
+            .map(String::from)
+            .to_vec()
+    }
+
+    /// Has `branch` been rewritten (amended, rebased, reset) since it was
+    /// last in step with `upstream`? True when what the upstream points at
+    /// was once on the branch here — then the commits only the upstream has
+    /// are this branch's own old versions, and a force push is what puts
+    /// them right, not a pull.
+    pub fn rewrote_upstream(&self, branch: &str, upstream: &str) -> bool {
+        let Ok(up) = self.resolve(upstream) else {
+            return false;
+        };
+        let reflog = format!("refs/heads/{branch}");
+        let Ok(entries) = self.run_ok(&["log", "-g", "-n", "200", "--format=%H", &reflog]) else {
+            return false;
+        };
+        let mut seen = std::collections::HashSet::new();
+        let entries: Vec<&str> = entries
+            .lines()
+            .filter(|h| !h.is_empty() && seen.insert(*h))
+            .collect();
+        if entries.is_empty() {
+            return false;
+        }
+        if entries.contains(&up.as_str()) {
+            return true;
+        }
+        // Reachable from anything the branch was: nothing left when it is.
+        let mut args = vec!["rev-list", "-n1", up.as_str(), "--not"];
+        args.extend(entries);
+        self.run_ok(&args)
+            .map(|out| out.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Bring every local branch that's only behind its upstream up to it,
+    /// as `git fetch origin main:main` would — those not checked out in any
+    /// worktree, so no files change. What moved, oldest name first.
+    pub fn fast_forward_branches(&self) -> Vec<FastForward> {
+        let Ok(out) = self.run_ok(&[
+            "for-each-ref",
+            "--format=%(refname:short)%00%(objectname)%00%(upstream)%00%(worktreepath)",
+            "refs/heads",
+        ]) else {
+            return Vec::new();
+        };
+        let tips: std::collections::HashMap<String, String> = self
+            .run_ok(&["for-each-ref", "--format=%(refname) %(objectname)"])
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.split_once(' '))
+            .map(|(r, h)| (r.to_string(), h.to_string()))
+            .collect();
+        let mut moved = Vec::new();
+        for line in out.lines() {
+            let f: Vec<&str> = line.split('\0').collect();
+            let [name, from, upstream, worktree] = f[..] else {
+                continue;
+            };
+            if upstream.is_empty() || !worktree.is_empty() {
+                continue;
+            }
+            let Some(to) = tips.get(upstream) else {
+                continue;
+            };
+            if to == from || !self.is_ancestor(from, to) {
+                continue;
+            }
+            let reference = format!("refs/heads/{name}");
+            let note = format!("spor: fast-forward {name} to {upstream}");
+            if self
+                .run_ok(&["update-ref", "-m", &note, &reference, to, from])
+                .is_ok()
+            {
+                moved.push(FastForward {
+                    branch: name.to_string(),
+                    from: from.to_string(),
+                    to: to.clone(),
+                    commits: self.count_commits(&format!("{from}..{to}")),
+                });
+            }
+        }
+        moved
+    }
+}
+
+/// A branch [`Repo::fast_forward_branches`] moved up to its upstream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FastForward {
+    pub branch: String,
+    pub from: String,
+    pub to: String,
+    pub commits: usize,
 }
 
 /// A patch [`Repo::apply_lines`] applied, kept so it can be taken back.

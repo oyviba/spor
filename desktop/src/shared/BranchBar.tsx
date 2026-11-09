@@ -1,42 +1,116 @@
 // Across the top of every section: the branch you're on, and whether it's
 // in step with its upstream, with the one button that fixes it when not.
-// Behind is the loud case: pull before you build on stale work.
+// Behind is the loud case: pull before you build on stale work. Diverged
+// gets one button too: Pull & push when the remote has someone else's
+// commits, Force push when they're this branch's own, rewritten since.
 
 import { useState } from "react";
-import { api } from "../api";
+import { api, errorText } from "../api";
 import type { RepoState } from "../types";
-import { useShell } from "./app";
+import { branchStatus, syncButtons, type SyncAction } from "./sync";
+import { useShell, type Shell } from "./app";
 import { Button } from "./Button";
 import { Alert, ArrowDown, ArrowUp, Branch, Refresh } from "./Icons";
 
-type Sync = "fetch" | "pull" | "push";
-
 const commits = (n: number) => `${n} ${n === 1 ? "commit" : "commits"}`;
 
-/** What the bar says, and how loudly. */
-export function branchStatus(state: RepoState): { tone: "ok" | "behind" | "ahead" | "warn"; text: string } {
-  const { branch, upstream, ahead, behind } = state;
-  if (!branch) return { tone: "warn", text: "Not on a branch (detached HEAD) — commits here belong to no branch" };
-  if (!upstream) return { tone: "ahead", text: "Not published — only on this computer" };
-  if (ahead > 0 && behind > 0)
-    return { tone: "behind", text: `Diverged from ${upstream}: ${commits(behind)} to pull, ${commits(ahead)} to push` };
-  if (behind > 0) return { tone: "behind", text: `${commits(behind)} behind ${upstream} — pull to get them` };
-  if (ahead > 0) return { tone: "ahead", text: `${commits(ahead)} ahead of ${upstream} — not pushed yet` };
-  return { tone: "ok", text: `Up to date with ${upstream}` };
+const pendingText = (what: SyncAction, state: RepoState | null) =>
+  ({
+    fetch: "Fetching…",
+    pull: "Pulling…",
+    push: state?.upstream ? "Pushing…" : "Publishing…",
+    "force-push": "Force-pushing…",
+    sync: "Pulling, then pushing…",
+  })[what];
+
+/**
+ * Fetch, pull, push, force-push or pull-and-push, toasting the result. A
+ * push the remote refuses because it has commits this branch doesn't
+ * offers to pull them and push again, rather than sending you to a
+ * terminal.
+ */
+export function runSync(shell: Shell, what: SyncAction): Promise<boolean> {
+  return shell.act(
+    async () => {
+      try {
+        return await api.sync(what);
+      } catch (e) {
+        const text = errorText(e);
+        if ((what === "push" || what === "force-push") && text.includes("has commits you don't have")) {
+          shell.toast(text, "error", false, { label: "Pull and push", run: () => void runSync(shell, "sync") });
+          return;
+        }
+        throw e;
+      }
+    },
+    { undo: what === "pull" || what === "sync", pending: pendingText(what, shell.state) },
+  );
 }
 
 export function BranchBar({ state }: { state: RepoState }) {
   const shell = useShell();
-  const [busy, setBusy] = useState<Sync | null>(null);
-  const run = (what: Sync) => {
+  const [busy, setBusy] = useState<SyncAction | null>(null);
+  const run = (what: SyncAction) => {
     setBusy(what);
-    const pending = { fetch: "Fetching…", pull: "Pulling…", push: state.upstream ? "Pushing…" : "Publishing…" }[what];
-    return shell.act(() => api.sync(what), { undo: what === "pull", pending }).finally(() => setBusy(null));
+    return runSync(shell, what).finally(() => setBusy(null));
   };
-  // One sync at a time: the others wait (dimmed) while one runs.
-  const sync = (what: Sync) => ({ busy: busy === what, disabled: busy != null && busy !== what, onClick: () => run(what) });
   const { tone, text } = branchStatus(state);
-  const { branch, upstream, ahead, behind } = state;
+  const { branch, upstream, ahead, behind, unlinked, remote } = state;
+  const shown = syncButtons(state);
+  // One sync at a time: the others wait (dimmed) while one runs.
+  const button = (what: SyncAction, i: number) => {
+    const loud = i === 0;
+    const props = { busy: busy === what, disabled: busy != null && busy !== what, onClick: () => run(what) };
+    switch (what) {
+      case "pull":
+        return (
+          <Button
+            key={what}
+            className={`${loud ? "primary" : "ghost"} small`}
+            {...props}
+            title={upstream ? `Pull from ${upstream}, rebasing your commits on top` : `Link ${branch} to ${unlinked} and pull from it`}
+          >
+            <ArrowDown size={12} /> {upstream ? `Pull ${behind}` : "Pull"}
+          </Button>
+        );
+      case "push":
+        return (
+          <Button
+            key={what}
+            className="primary small"
+            {...props}
+            title={upstream ? `Push to ${upstream}` : `Publish ${branch} to ${remote ?? "the remote"}`}
+          >
+            <ArrowUp size={12} /> {upstream ? `Push ${ahead}` : "Publish"}
+          </Button>
+        );
+      case "sync":
+        return (
+          <Button
+            key={what}
+            className="primary small"
+            {...props}
+            title={`Pull ${commits(behind)} from ${upstream}, rebasing your ${commits(ahead)} on top, then push`}
+          >
+            <ArrowDown size={12} />
+            <ArrowUp size={12} /> Pull &amp; push
+          </Button>
+        );
+      case "force-push":
+        return (
+          <Button
+            key={what}
+            className="danger small"
+            {...props}
+            title={`Replace ${upstream} with ${branch}. Refused if someone else pushed to it since you last pulled.`}
+          >
+            <ArrowUp size={12} /> Force push
+          </Button>
+        );
+      default:
+        return null;
+    }
+  };
   return (
     <div className={`branch-bar ${tone}`} role="status" aria-label="Current branch">
       <span className="branch-bar-name" title={branch ? `You're on ${branch}` : "Detached HEAD"}>
@@ -45,24 +119,18 @@ export function BranchBar({ state }: { state: RepoState }) {
       </span>
       <span className="branch-bar-text truncate">{text}</span>
       <span className="flex-1" />
-      <Button className="ghost small" {...sync("fetch")} title="Fetch from all remotes, to see what's new">
-        <Refresh size={12} /> Fetch
-      </Button>
-      {branch && upstream && behind > 0 && (
-        <Button className="primary small" {...sync("pull")} title={`Pull from ${upstream}, with rebase`}>
-          <ArrowDown size={12} /> Pull {behind}
-        </Button>
-      )}
-      {branch && (!upstream || ahead > 0) && (
+      {remote !== null && (
         <Button
-          className={`${behind > 0 ? "ghost" : "primary"} small`}
-          {...sync("push")}
-          disabled={(busy != null && busy !== "push") || behind > 0}
-          title={!upstream ? "Publish the branch to origin" : behind > 0 ? "Pull first" : `Push to ${upstream}`}
+          className="ghost small"
+          busy={busy === "fetch"}
+          disabled={busy != null && busy !== "fetch"}
+          onClick={() => run("fetch")}
+          title="Fetch from all remotes, and bring branches that are only behind (like main) up to date"
         >
-          <ArrowUp size={12} /> {upstream ? `Push ${ahead}` : "Publish"}
+          <Refresh size={12} /> Fetch
         </Button>
       )}
+      {shown.map(button)}
     </div>
   );
 }

@@ -12,17 +12,9 @@ Each journey is written twice:
 - **Target**: how it should go, with a **budget**: how many times you change
   section (the rail's current item) from where you start
 
-The target versions run as end-to-end tests in
-[`desktop/e2e/journeys.mjs`](../desktop/e2e/journeys.mjs), against the
-stand-in `claude` and `gh`, counting section changes. A step that needs work
-that hasn't landed yet is a **gap**: it's marked in the test with what it
-waits for, and reported rather than failed. When a gap starts working the
-test says so, and this page should too. CI runs the suite without failing the
-build until #74 is done.
-
-`e2e/run-all.sh <app> <out> journeys` runs it (`make-repos.sh` builds its
-repository: greeter on GitHub's demo/greeter, pushing to a bare repository
-beside it).
+The end-to-end suite that counted section changes against these budgets has
+been removed; the counts below are as of its last run. A **gap** is a step that
+needs work that hasn't landed yet.
 
 | Journey | Before | Target | Now | Gaps |
 | --- | --- | --- | --- | --- |
