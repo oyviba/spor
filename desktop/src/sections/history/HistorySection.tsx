@@ -4,6 +4,7 @@ import type { BranchInfo, CommitDetail, Graph as GraphData, PrBadge, TagInfo, Wo
 import { useShell } from "../../shared/app";
 import { useChanged, useNow, usePoll, useStored, GITHUB_POLL_MS } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
+import { runSync } from "../../shared/BranchBar";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
 import { parsePatch } from "../../shared/diff";
@@ -120,7 +121,17 @@ export function HistorySection() {
     setRewriteBase(hash);
     setTab("rewrite");
   };
-  const commitMenu = (hash: string): MenuItem[] => commitActions(shell, hash, current, startRewrite);
+  const commitMenu = (hash: string): MenuItem[] => {
+    // Branches pointing at this commit come first, so a right-click on a
+    // branch tip can check it out directly.
+    const here = (graph?.rows.find((r) => r.hash === hash)?.refs ?? []).filter((r) => !r.startsWith("tag:") && r !== current);
+    const checkouts: MenuItem[] = here.map((name, i) => ({
+      label: remotes.has(name) ? `Check out ${name} as a local branch` : `Check out ${name}`,
+      separator: i === here.length - 1,
+      run: () => shell.switchBranch((stash) => api.checkout(name, stash)),
+    }));
+    return [...checkouts, ...commitActions(shell, hash, current, startRewrite)];
+  };
 
   const nextHit = () => {
     if (!hits || !graph) return;
@@ -157,6 +168,14 @@ export function HistorySection() {
           if (r && r.value !== b.name) shell.act(() => api.renameBranch(b.name, r.value));
         },
       });
+      items.push(
+        b.current
+          ? { label: state?.upstream ? `Push ${b.name}` : `Publish ${b.name}`, run: () => void runSync(shell, "push") }
+          : {
+              label: `Push ${b.name}`,
+              run: () => shell.act(() => api.pushBranch(b.name), { undo: false, pending: `Pushing ${b.name}…` }),
+            },
+      );
       if (!b.current) items.push({ label: `Delete ${b.name}`, danger: true, run: () => shell.act(() => api.deleteBranch(b.name)) });
     } else {
       items.push({

@@ -2,17 +2,24 @@
 
 Spor's app: a web UI on Tauri over the Rust core in the repository root
 (`spor::git`, `spor::graph`, `spor::github`, `spor::tasks`, `spor::agent`,
-`spor::askpass`). The rail is ordered by the questions you come with (#83):
-**Inbox** (what needs me?), **Work** (what's in flight?), **Changes** (what's
-in my checkout?) and **History** (what happened?). Below a divider,
-**Issues**, **Pull requests** and **Actions** are browsers for what belongs
-to no work item yet. Each section is built from the same four pieces: a list
-in the sidebar, a page, a details card on the right, and a bar or composer
+`spor::askpass`). The layout reads left to right from the general to the
+particular: workspace → repository → section. The rail holds the workspaces,
+the **Inbox** (what needs me?) and **Agents** (what are my agents doing?),
+both across every repository, so while one is open the app shows no
+repository (no repository column, branch bar or repository header; a
+workspace's badge goes back in, to the section last open there); the column
+beside it lists the workspace's repositories, and under the open one its
+sections, ordered by the questions you come with (#83): **Work** (what's in
+flight?), **Changes** (what's in my checkout?) and **History** (what
+happened?). Below a divider, **Issues**, **Pull requests** and **Actions**
+are browsers for what belongs to no work item yet. Each section is built from the same four pieces: a list
+in the sidebar, a page, a details pane fixed on the right, and a bar or composer
 at the bottom.
 
-| Section | ⌘ | Sidebar | Page | Details card | Bottom |
+| Section | ⌘ | Sidebar | Page | Details pane | Bottom |
 |---|---|---|---|---|---|
 | **Inbox** | 1 | What needs you in every workspace: answers, finished runs, failed CI, review requests | | | |
+| **Agents** | ⇧A | Every agent task in every workspace, by status or by repository | Counts per repository (click one for its Work); a task's conversation, to answer and follow up on without going to its repository | | |
 | **Work** | 2 | Every work item: agents' tasks, your branches with commits ahead of the base, and open PRs from anyone. Shelves: Needs you, In progress, In review, Settled (folded); filters Mine / Agents / Teammates; right-click to move one up or down. *New…* (⌘N): a branch, an agent task, or from an issue | The work page, for a task, a PR or a branch: the stage track and who it waits on, and the tabs with something in them: Agent · Discussion · Changes · Checks. *Take over* opens a task's folder; *Start an agent on this* hands a branch to one | The work card (issue → branch · folder → PR → checks, and the next step). A task: conflicts, publish, land, discard. A PR: land, check out, close. A branch: open a PR, switch to it | A task's composer, or a PR's comment box |
 | **Changes** | 3 | Conflicts, staged and unstaged files | The file's diff (unified or side by side): click lines, shift-click to extend, then stage, unstage or discard them; a conflicted file's regions, a side picked for each | The checked-out branch's work header (*Hand to an agent*: it moves to a task folder with your uncommitted work, ⌘Z brings it back) and work card, Fetch / Pull / Push (Publish the first time), stashes (pop, apply, drop) | Commit box (⌘↩), amend |
 | **History** | 4 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
@@ -74,9 +81,10 @@ What one app makes possible:
   changes it shows, and every 30 s anyway in case an event went missing.
 - **⌘K palette and workspaces.** Commands, sections, branches and every
   workspace's repositories by typing. Workspaces sit at the top of the rail;
-  beside it, the workspace's repositories, the open one marked, with their
-  branch, changed files and what there is to pull or push (⌘⇧E hides the
-  column; the repository name at the top of every sidebar lists them too).
+  beside it, the workspace's repositories, the open one marked and its
+  sections under it, with their branch, changed files and what there is to
+  pull or push (⌘⇧E folds the column to a strip of the open repository's
+  sections; the repository name at the top of every sidebar lists them too).
   The first launch imports the old native (GPUI) app's
   workspaces (`shared/workspaces.ts`).
 - **Settings (⌘,).** Appearance and themes (`shared/theme.ts`, with the
@@ -86,7 +94,8 @@ What one app makes possible:
   by the key handler, the palette and the Shortcuts page (`shared/keys.ts`
   resolves them). When the rail's defaults moved (#83), the shortcuts you
   had changed were kept, and the first launch after says so once, pointing
-  to ⌘/.
+  to ⌘/; the move of the sections under the open repository is announced
+  once the same way.
 
 The graph's lanes are laid out by `spor::graph::assign_lanes`, and the
 segments for each row are worked out in Rust (`src-tauri/src/history.rs`).
@@ -107,8 +116,7 @@ SPOR_REPO=/path/to/a/repo pnpm tauri dev   # or start it inside a repo; click th
 
 **UI only.** `pnpm dev` serves the UI at http://localhost:1420 with no Rust:
 a mock backend (`src/mock.ts`). It plays back answers recorded from the real
-backend on a demo repository (`src/fixtures.json`, made by
-`e2e/record-fixtures.mjs`), and has a few agent tasks, one of which works and
+backend on a demo repository (`src/fixtures.json`), and has a few agent tasks, one of which works and
 finishes while you watch.
 
 ## Tests
@@ -117,31 +125,9 @@ finishes while you watch.
   keeping your shortcuts when the defaults move, how reloads coalesce, the
   Inbox's rows, and which links open a work item.
 - `cargo test` in `src-tauri`: the watcher, on scratch repositories.
-- `e2e/run.mjs` (agent tasks), `e2e/setup.mjs` (setup scripts) and
-  `e2e/sections.mjs` (Changes, History, renaming and tagging, a conflicting
-  merge, stashes, pull requests, the Inbox and Actions) drive the real app through WebDriver and check the
-  repository with git at every step. CI runs all three on Linux under Xvfb.
-- `e2e/journeys.mjs` drives the five journeys in `docs/journeys.md`, counting
-  how often each changes section against its budget. Steps waiting on work
-  that hasn't landed are known gaps, reported but not failed; CI runs it
-  without failing the build. `e2e/run-all.sh <app> <out> journeys` runs it.
-
-  They need no real agent or GitHub: `e2e/bin` has stand-ins. `claude` is a
-  Python script that speaks Claude Code's stream-json both ways (it edits,
-  asks before running the tests, takes steering), and `gh` answers from
-  `e2e/fixtures/gh.json`, running spor's own `--jq` expressions through
-  `jq` and recording what's done in `$FAKE_GH_STATE`. Spor's parsers treat
-  them exactly like the real tools. `e2e/make-repos.sh` builds the scratch
-  repositories each suite expects, and `e2e/run-all.sh` puts it together:
-
-  ```sh
-  cargo install tauri-driver   # Linux also needs WebKitWebDriver (webkit2gtk-driver)
-  pnpm build && (cd src-tauri && cargo build --features tauri/custom-protocol)
-  xvfb-run -a e2e/run-all.sh src-tauri/target/debug/spor-desktop e2e-shots   # or: … e2e-shots sections
-  ```
-
-  `custom-protocol` builds the UI into the app; without it a debug build
-  loads it from `pnpm dev`. Screenshots of each step land in `e2e-shots/`.
+  `src-tauri/tests/fake/bin/gh` is a stand-in `gh` that answers from
+  `tests/fake/fixtures/gh.json`, running spor's own `--jq` expressions through
+  `jq` (so `cargo test` needs `jq`), for the work-item tests.
 
 ## Layout
 
@@ -160,7 +146,7 @@ src-tauri/src/
 src/
   App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–7, ⌘Z, ⌘K,
                 background fetch, credential prompts, recent repositories
-  shared/       DiffView, details card, menus and dialogs, palette, status pills, CI status, icons, hooks
+  shared/       DiffView, details pane, menus and dialogs, palette, status pills, CI status, icons, hooks
   sections/     inbox/ work/ changes/ history/ issues/ pulls/ actions/ (and agents/, a task's page)
 ```
 

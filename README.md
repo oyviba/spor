@@ -31,9 +31,15 @@ backend), the end-to-end tests and the app's layout.
 
 ## What it does
 
-You come to spor with a few questions, and the rail is ordered by them:
-what needs me, what's in flight, what's in my checkout, what happened. Each
-is a list in the sidebar, a page, and a details card. What you follow is a
+Left to right, spor goes from the general to the particular: workspaces and
+the Inbox on the rail, then the workspace's repositories, with the open
+one's sections listed under it. The Inbox and Agents span every
+repository, so while one is open no repository is shown (no repository
+column or branch bar); a workspace's badge goes back into its repository,
+to the section you were last in there. The sections are ordered by the questions
+you come with: what needs me, what's in flight, what's in my checkout, what
+happened. Each
+is a list in the sidebar, a page, and a details pane. What you follow is a
 **work item** (a branch with its issue, task folder, agent, pull request and
 checks) moving from *Planned* to *Landed*, and every section uses the same
 words for it: [docs/concepts.md](docs/concepts.md). [docs/journeys.md](docs/journeys.md)
@@ -45,6 +51,13 @@ section, run as end-to-end tests.
   looked at, a failed CI run on your branch, a pull request waiting for
   your review. Each row opens where you deal with it, and goes once you
   have. Its count is the rail's only badge
+- **Agents** (⌘⇧A) — every agent task in every repository of every
+  workspace, by status (needs you, working, ready for review, failed or
+  stopped, idle) or by repository, with a table of counts per repository.
+  A row opens the task's conversation right there, to answer or follow
+  up on, whichever repository it's in. It sits on
+  the rail beside the Inbox, since it spans repositories, and reads nothing
+  of its own: it's built on the Inbox's poll of the tasks
 - **Work** (⌘2) — every piece of work in flight, in one list: agents'
   tasks, your own branches with commits ahead of the base, and open pull
   requests from anyone, in shelves (needs you, in progress, in review,
@@ -63,16 +76,16 @@ section, run as end-to-end tests.
   design
 - **Changes** (⌘3) — staged and unstaged files; click lines in a diff (shift-click
   to extend) to stage, unstage or discard just those. Commit with ⌘↩, or
-  amend. Fetch, Pull (rebasing) and Push or Publish, the branch's pull
-  request on GitHub, and stashes: stash (right-click for a message), pop,
+  amend. Fetch, Pull (rebasing) and Push or Publish (see *Pulling and
+  pushing* below), the branch's pull request on GitHub, and stashes: stash (right-click for a message), pop,
   apply and keep, drop
 - **History** (⌘4) — the commit graph with `main` / `master` / `trunk` pinned to
   the leftmost lane and branches colored by prefix (all `feat/*` share a
   hue). Search by message, author or hash, or `path:src/main.rs` for the
   commits that touched a file. The sidebar has local, agent and remote
   branches, tags and linked worktrees. Right-click a branch to check it out,
-  merge it, rebase onto it, rename or delete it, or delete it from the
-  remote, or drag it onto another branch to merge it there or open a pull
+  merge it, rebase onto it, push or publish it (without checking it out),
+  rename or delete it, or delete it from the remote, or drag it onto another branch to merge it there or open a pull
   request between the two. Right-click a commit to branch or tag it, check
   it out detached, cherry-pick, revert, rebase onto it, reset to it (soft,
   mixed, or hard after asking), or **Rewrite after here** — an interactive
@@ -107,13 +120,35 @@ Across the app:
 - **Knowing when to pull.** The repository is fetched quietly every five
   minutes; when the upstream gains commits, a notification says so with a
   Pull button
+- **Pulling and pushing without a terminal.** The branch bar above every
+  section shows the one button that puts the branch in step:
+  - *Pull* rebases, stashing uncommitted changes around it (if they clash
+    with what came in, the conflicts are left in Changes and a copy stays
+    in the stash list). A branch with no upstream whose namesake is on the
+    remote gets linked to it first
+  - *Push* goes to the branch it tracks; *Publish* pushes a new branch
+    under its own name and tracks it. The remote is the branch's
+    `pushRemote`, `remote.pushDefault`, the remote it tracks, `origin`, or
+    the only remote — not always `origin`
+  - *Pull & push* when the branch and the remote have both moved on
+  - *Force push* when they've diverged only because you amended, rebased
+    or rewrote commits you'd already pushed (spor tells by the branch's
+    reflog). It's `--force-with-lease --force-if-includes`, so it refuses
+    if someone else pushed meanwhile, even after a background fetch
+  - *Fetch* also brings local branches that are only behind their
+    upstream (`main`, while you're on a feature branch) up to it, as
+    `git fetch origin main:main` would — never one that's checked out or
+    has commits of its own
+  - A push the remote refuses says why in words (the remote has commits
+    you don't, a protected branch, a tag that exists), and when it's
+    behind, the toast offers *Pull and push*. All of these are in ⌘K too
 - **Credentials.** The app has no terminal, so a passphrase, password or
   new-host question from git or ssh opens a dialog (an askpass bridge)
 - **Workspaces** — named, colored groups of repositories on the rail, like
   Slack's (⌘⌥1–9), each reopening the repository last open in it. Beside
-  the rail, a column lists the workspace's repositories with the open one
-  marked, their branch, changed files and what there is to pull (⌘⇧E hides
-  it). The old native
+  the rail, a column lists the workspace's repositories with their branch,
+  changed files and what there is to pull, and the open one's sections
+  under it (⌘⇧E folds the column to a strip of those sections' icons). The old native
   app's workspaces are imported on the first run
 - **⌘K** — a palette for every command, section, work item, branch and repository
 - **Settings** (⌘,) — System, Light or Dark, themes (Spor, Nord, Dracula,

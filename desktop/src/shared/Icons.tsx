@@ -67,6 +67,7 @@ export const Merge = (p: P) => (
 export const PanelRight = (p: P) => (
   <Svg {...p}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M15 3v18" /></Svg>
 );
+export const More = (p: P) => <Svg {...p}><path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth={3} /></Svg>;
 export const Trash = (p: P) => (
   <Svg {...p}><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></Svg>
 );
@@ -171,3 +172,9 @@ export function ToolIcon({ name, size = 13 }: { name: string; size?: number }) {
       return <Bot size={size} />;
   }
 }
+export const Sparkle = (p: P) => (
+  <Svg {...p}>
+    <path d="M9.94 15.5a2 2 0 0 0-1.44-1.44l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z" />
+    <path d="M20 3v4M22 5h-4M4 17v2M5 18H3" />
+  </Svg>
+);

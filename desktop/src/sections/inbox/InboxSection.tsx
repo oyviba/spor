@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import type { InboxGithub, InboxTask } from "../../types";
 import { usePoll, GITHUB_POLL_MS } from "../../shared/hooks";
-import { EmptyState, PageHeader, SidebarHeader } from "../../shared/Layout";
+import { EmptyState, PageHeader, ScopeHeader } from "../../shared/Layout";
 import { Bot, CircleX, PullRequest, Refresh } from "../../shared/Icons";
 import { ago } from "../agents/transcript";
 import { GROUPS, inboxItems, type InboxItem, type InboxKind } from "./inbox";
@@ -14,11 +14,16 @@ export interface Inbox {
   errors: string[];
   /** Ask GitHub again now. */
   refresh: () => void;
+  /** Every open agent task in those repositories, for the Agents view;
+   * null until the first read. */
+  tasks: InboxTask[] | null;
+  /** Work's record of when each task was last looked at, by task id. */
+  seen: Record<string, number>;
 }
 
 /** Work's record of when each task was last looked at, by task id (Work
  * keys it by work item: `task:<id>`). */
-function seenTasks(): Record<string, number> {
+export function seenTasks(): Record<string, number> {
   try {
     const byItem: Record<string, number> = JSON.parse(localStorage.getItem("spor.work.seen") ?? "{}") ?? {};
     return Object.fromEntries(
@@ -34,17 +39,20 @@ function seenTasks(): Record<string, number> {
 /** What's waiting for you in every repository in `roots`. Local tasks are
  * polled often (no network); GitHub every couple of minutes. */
 export function useInbox(roots: string[], active: boolean): Inbox {
-  const [tasks, setTasks] = useState<InboxTask[]>([]);
+  const [tasks, setTasks] = useState<InboxTask[] | null>(null);
   const [github, setGithub] = useState<InboxGithub | null>(null);
   const [asked, setAsked] = useState(0);
   // Not reordered by switching repositories, so that doesn't ask GitHub again.
   const key = [...roots].sort().join("\n");
   usePoll(async () => setTasks(await api.inboxTasks(roots)), 3000, [key], active);
   usePoll(async () => setGithub(await api.inboxGithub(roots)), GITHUB_POLL_MS, [key, asked], active, true);
+  const seen = seenTasks();
   return {
-    items: inboxItems(tasks, github, seenTasks()),
+    items: inboxItems(tasks ?? [], github, seen),
     errors: github?.errors ?? [],
     refresh: useCallback(() => setAsked((n) => n + 1), []),
+    tasks,
+    seen,
   };
 }
 
@@ -69,7 +77,7 @@ export function InboxSection({ inbox, onOpen }: { inbox: Inbox; onOpen: (item: I
   return (
     <>
       <aside className="sidebar">
-        <SidebarHeader />
+        <ScopeHeader title="Inbox" scope="Every repository, every workspace" />
         <div className="task-list">
           {items.length === 0 && <div className="sidebar-empty">Nothing needs you.</div>}
           {GROUPS.map((g) => {

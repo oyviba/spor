@@ -1,12 +1,12 @@
 // The pieces every section is built from: a sidebar with the repository at
-// the top, a page header, and a details card.
+// the top, a page header, and a details pane.
 
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { RepoHead } from "../types";
 import { useRepoChanges } from "./hooks";
 import { useShell, type Shell } from "./app";
-import { Branch, Folder, Plus } from "./Icons";
+import { Branch, Folder, More, Plus, X } from "./Icons";
 
 /** The top of every sidebar: the repository (click to switch to a recent
  * one or open another) and the section's own buttons. */
@@ -54,6 +54,20 @@ export function SidebarHeader({ children }: { children?: React.ReactNode }) {
         </button>
       )}
       {switching && <RepoSwitcher onClose={() => setSwitching(false)} onOpenOther={() => setEditing(true)} />}
+      {children}
+    </div>
+  );
+}
+
+/** The top of a sidebar that spans every repository (the Inbox, Agents):
+ * what it is and its scope, in place of the repository. */
+export function ScopeHeader({ title, scope, children }: { title: string; scope: string; children?: React.ReactNode }) {
+  return (
+    <div className="sidebar-top">
+      <div className="scope-header">
+        <span className="repo-name">{title}</span>
+        <span className="repo-branch">{scope}</span>
+      </div>
       {children}
     </div>
   );
@@ -145,10 +159,11 @@ function repoMenu(shell: Shell, path: string) {
 }
 
 /** The workspace's repositories in a column beside the rail, the open one
- * marked, so which one you're in is plain from any section (⌘⇧E hides it).
+ * marked with its sections listed under it: workspace, then repository,
+ * then section, left to right and top to bottom (⌘⇧E hides the column).
  * The open one is live; the others are read on opening, when a ref moves
  * here, on coming back to the window and every 30 s. */
-export function RepoPanel({ color, changed }: { color: string; changed: number }) {
+export function RepoPanel({ color, changed, children }: { color: string; changed: number; children?: React.ReactNode }) {
   const shell = useShell();
   const { repo, state, recent, openRepo, menu, workspaceName } = shell;
   const [heads, setHeads] = useState<Map<string, RepoHead>>(new Map());
@@ -186,7 +201,7 @@ export function RepoPanel({ color, changed }: { color: string; changed: number }
               }
             : heads.get(path);
           const missing = h?.exists === false;
-          return (
+          const row = (
             <button
               key={path}
               className={`repo-panel-row${here ? " current" : ""}${missing ? " missing" : ""}`}
@@ -216,6 +231,15 @@ export function RepoPanel({ color, changed }: { color: string; changed: number }
                 </span>
               )}
             </button>
+          );
+          if (!here) return row;
+          return (
+            <div key={path} className="repo-panel-open">
+              {row}
+              <nav className="repo-sections" aria-label={`${path.split("/").pop()}: sections`}>
+                {children}
+              </nav>
+            </div>
           );
         })}
       </div>
@@ -252,9 +276,45 @@ export function Tabs<T extends string>({
   );
 }
 
-/** The floating card on the right of a page. */
-export function DetailsCard({ children }: { children: React.ReactNode }) {
-  return <aside className="inspector">{children}</aside>;
+/** How a page lets its details pane be dismissed (and brought back, from
+ * the page header). Pages that always show theirs don't provide it. */
+export const DismissPane = createContext<(() => void) | null>(null);
+
+/** The pane on the right of a page: details that stay beside the page, in a
+ * column of their own. `menu` is what's behind its ⋯ (the rest of the
+ * details, settings); `footer` stays at the bottom when the rest scrolls. */
+export function DetailsCard({
+  children,
+  menu,
+  footer,
+}: {
+  children: React.ReactNode;
+  menu?: (e: React.MouseEvent) => void;
+  footer?: React.ReactNode;
+}) {
+  const dismiss = useContext(DismissPane);
+  return (
+    <aside className="inspector">
+      {(dismiss || menu) && (
+        <div className="pane-head">
+          <span>Details</span>
+          <span className="flex-1" />
+          {menu && (
+            <button className="icon-button" onClick={menu} title="More about this" aria-label="More about this">
+              <More size={14} />
+            </button>
+          )}
+          {dismiss && (
+            <button className="icon-button" onClick={dismiss} title="Hide details (⌘.)" aria-label="Hide details">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+      )}
+      <div className="pane-body">{children}</div>
+      {footer && <div className="pane-foot">{footer}</div>}
+    </aside>
+  );
 }
 
 /** A list on its way (from GitHub, say): shown after a beat, so a quick

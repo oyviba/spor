@@ -410,7 +410,7 @@ mod tests {
 
         // The stand-in gh, ahead of any real one. Only this test asks gh
         // anything, so changing PATH for the process is safe.
-        let bin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/bin");
+        let bin = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake/bin");
         let path = std::env::var("PATH").unwrap_or_default();
         std::env::set_var(
             "PATH",
