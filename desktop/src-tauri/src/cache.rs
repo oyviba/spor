@@ -14,6 +14,9 @@
 //!   commented, opened a pull request, re-ran a job), so the next read shows
 //!   it at once.
 //!
+//! - **Left alone for [`COOLDOWN`]** once GitHub says we're rate limited:
+//!   polls, ref changes and clears all wait, and the error is what shows.
+//!
 //! A slot holds its lock while it asks, so callers that arrive meanwhile
 //! wait for that one answer instead of starting their own. Failures are
 //! kept like answers: a repository that isn't on GitHub isn't asked again
@@ -27,14 +30,19 @@ use std::time::{Duration, Instant};
 
 /// How long an answer is good for when nothing says it changed. The
 /// sections poll every 30–60 s, so each poll asks at most once.
-pub(crate) const FRESH: Duration = Duration::from_secs(30);
+pub(crate) const FRESH: Duration = Duration::from_secs(60);
 /// The least time between two asks of the same kind after a change.
-pub(crate) const FLOOR: Duration = Duration::from_secs(5);
+pub(crate) const FLOOR: Duration = Duration::from_secs(15);
+/// How long to leave GitHub alone after it says we're rate limited. Neither
+/// a poll, a ref change nor a clear asks again before this has passed.
+pub(crate) const COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 struct Entry<T> {
     at: Instant,
     value: Result<T, String>,
     stale: bool,
+    /// Rate limited: ignore `stale` and `clear` until [`COOLDOWN`] is up.
+    limited: bool,
 }
 
 /// One cached answer.
@@ -60,15 +68,24 @@ impl<T: Clone> Slot<T> {
         let mut entry = self.entry.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(e) = entry.as_ref() {
             let age = now.saturating_duration_since(e.at);
-            if age < if e.stale { FLOOR } else { FRESH } {
+            let keep = if e.limited {
+                COOLDOWN
+            } else if e.stale {
+                FLOOR
+            } else {
+                FRESH
+            };
+            if age < keep {
                 return e.value.clone();
             }
         }
         let value = fetch();
+        let limited = matches!(&value, Err(e) if gh::is_rate_limited(e));
         *entry = Some(Entry {
             at: now,
             value: value.clone(),
             stale: false,
+            limited,
         });
         value
     }
@@ -85,9 +102,13 @@ impl<T: Clone> Slot<T> {
         }
     }
 
-    /// Ask again on the next read.
+    /// Ask again on the next read (unless GitHub is limiting us: then the
+    /// cooldown stands).
     pub(crate) fn clear(&self) {
-        *self.entry.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let mut entry = self.entry.lock().unwrap_or_else(|e| e.into_inner());
+        if !entry.as_ref().is_some_and(|e| e.limited) {
+            *entry = None;
+        }
     }
 }
 
@@ -288,6 +309,25 @@ mod tests {
             slot.get_at(t0 + FLOOR, || Ok(1)),
             Err("not GitHub".to_string())
         );
+    }
+
+    #[test]
+    fn a_rate_limit_is_left_alone_for_the_cooldown() {
+        let slot: Slot<u32> = Slot::default();
+        let calls = Cell::new(0);
+        let t0 = Instant::now();
+        let limited = |calls: &Cell<u32>| {
+            calls.set(calls.get() + 1);
+            Err::<u32, String>("API rate limit exceeded for user".into())
+        };
+        assert!(slot.get_at(t0, || limited(&calls)).is_err());
+        // Past FRESH, touched and cleared: still no new ask.
+        slot.touch();
+        slot.clear();
+        assert!(slot.get_at(t0 + FRESH * 2, || limited(&calls)).is_err());
+        assert_eq!(calls.get(), 1);
+        assert_eq!(slot.get_at(t0 + COOLDOWN, counted(&calls, 5)), Ok(5));
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]

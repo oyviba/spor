@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Pull } from "../../types";
 import { useShell } from "../../shared/app";
-import { useChanged, usePoll, useStored } from "../../shared/hooks";
+import { useChanged, usePoll, useStored, GITHUB_POLL_MS } from "../../shared/hooks";
 import { EmptyState, ListLoading, SidebarHeader } from "../../shared/Layout";
 import { StatusPill } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
@@ -42,8 +42,10 @@ export function PullsSection() {
         setPulls([]);
       }
     },
-    60_000,
+    GITHUB_POLL_MS,
     [filter],
+    true,
+    true,
   );
   useChanged(() => {
     if (shell.target.section === "pulls" && shell.target.number) setSelected(shell.target.number);

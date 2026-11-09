@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api, errorText } from "../../api";
 import type { Issue, IssueDetail, TaskSummary } from "../../types";
 import { useShell } from "../../shared/app";
-import { usePoll } from "../../shared/hooks";
+import { usePoll, GITHUB_POLL_MS } from "../../shared/hooks";
 import { ListLoading, PageHeader } from "../../shared/Layout";
 import { IssueIcon } from "../../shared/Icons";
 import { StartTask } from "../issues/IssuesSection";
@@ -25,8 +25,10 @@ export function FromIssue({ onStarted, onOpenTask }: { onStarted: (t: TaskSummar
         setIssues([]);
       }
     },
-    60_000,
+    GITHUB_POLL_MS,
     [shell.repo.root],
+    true,
+    true,
   );
   const taskOn = (n: number) => shell.tasks.find((t) => t.issue === n && !t.landed);
   const pick = (issue: Issue) => {

@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import type { InboxGithub, InboxTask } from "../../types";
-import { usePoll } from "../../shared/hooks";
+import { usePoll, GITHUB_POLL_MS } from "../../shared/hooks";
 import { EmptyState, PageHeader, ScopeHeader } from "../../shared/Layout";
 import { Bot, CircleX, PullRequest, Refresh } from "../../shared/Icons";
 import { ago } from "../agents/transcript";
 import { GROUPS, inboxItems, type InboxItem, type InboxKind } from "./inbox";
 
 /** How often GitHub is asked; the Inbox asks again whenever it's opened. */
-const GITHUB_MS = 2 * 60 * 1000;
 
 export interface Inbox {
   items: InboxItem[];
@@ -46,7 +45,7 @@ export function useInbox(roots: string[], active: boolean): Inbox {
   // Not reordered by switching repositories, so that doesn't ask GitHub again.
   const key = [...roots].sort().join("\n");
   usePoll(async () => setTasks(await api.inboxTasks(roots)), 3000, [key], active);
-  usePoll(async () => setGithub(await api.inboxGithub(roots)), GITHUB_MS, [key, asked], active);
+  usePoll(async () => setGithub(await api.inboxGithub(roots)), GITHUB_POLL_MS, [key, asked], active, true);
   const seen = seenTasks();
   return {
     items: inboxItems(tasks ?? [], github, seen),
