@@ -831,7 +831,10 @@ impl Tasks {
         }
         let here = self.repo.tracking()?;
         if here.branch.as_deref() != Some(task.base.as_str()) {
-            return Err(format!("Check out {} to merge {} into it", task.base, task.id));
+            return Err(format!(
+                "Check out {} to merge {} into it",
+                task.base, task.id
+            ));
         }
         if self.repo.status()?.iter().any(|e| e.status.is_staged()) {
             return Err(format!(
