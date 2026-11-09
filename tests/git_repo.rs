@@ -537,3 +537,182 @@ fn unstaged_patch_leaves_out_conflicted_files() {
     assert!(patch.contains("other.txt"));
     assert!(!patch.contains("f.txt"));
 }
+
+// ── Pushing and pulling, against a bare remote ──────────────────────────
+
+/// A repository with `origin` (a bare repository beside it) that has `main`
+/// pushed and tracked, and a second clone of it standing in for a teammate.
+fn with_remote() -> (Fixture, PathBuf) {
+    let f = fixture();
+    f.commit_file("a.txt", "one\n", "first");
+    let bare = f.dir.join("origin.git");
+    git(
+        &f.dir,
+        &[
+            "init",
+            "--quiet",
+            "--bare",
+            "--initial-branch=main",
+            "origin.git",
+        ],
+    );
+    f.git(&["remote", "add", "origin", bare.to_str().unwrap()]);
+    f.git(&["push", "--quiet", "-u", "origin", "main"]);
+    let other = f.dir.join("other");
+    git(
+        &f.dir,
+        &["clone", "--quiet", bare.to_str().unwrap(), "other"],
+    );
+    for (k, v) in [
+        ("user.name", "Other"),
+        ("user.email", "o@example.com"),
+        ("commit.gpgsign", "false"),
+    ] {
+        git(&other, &["config", k, v]);
+    }
+    (f, other)
+}
+
+fn network(f: &Fixture, args: &[String]) -> Result<String, String> {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    spor::askpass::git_network_quiet(f.repo.root(), &args)
+}
+
+fn teammate_pushes(other: &Path, file: &str) {
+    std::fs::write(other.join(file), "theirs\n").unwrap();
+    git(other, &["add", file]);
+    git(other, &["commit", "--quiet", "-m", "theirs"]);
+    git(other, &["push", "--quiet", "origin", "HEAD"]);
+}
+
+#[test]
+fn publish_pushes_under_the_same_name_and_tracks_it() {
+    let (f, _other) = with_remote();
+    f.git(&["switch", "--quiet", "-c", "feat/x"]);
+    f.commit_file("b.txt", "b\n", "feature");
+    let args = f.repo.push_args().unwrap();
+    assert!(args.contains(&"--set-upstream".to_string()), "{args:?}");
+    network(&f, &args).unwrap();
+    let t = f.repo.tracking().unwrap();
+    assert_eq!(t.upstream.as_deref(), Some("origin/feat/x"));
+    assert_eq!(t.ahead, 0);
+    // From then on, a plain push to what it tracks.
+    f.commit_file("b.txt", "b2\n", "more");
+    let args = f.repo.push_args().unwrap();
+    assert_eq!(
+        args,
+        ["push", "origin", "refs/heads/feat/x:refs/heads/feat/x"]
+    );
+    network(&f, &args).unwrap();
+}
+
+#[test]
+fn push_remote_falls_back_to_the_only_remote() {
+    let (f, _other) = with_remote();
+    f.git(&["remote", "rename", "origin", "upstream"]);
+    f.git(&["switch", "--quiet", "-c", "feat/y"]);
+    assert_eq!(f.repo.push_remote("feat/y").as_deref(), Some("upstream"));
+    f.git(&["remote", "remove", "upstream"]);
+    assert_eq!(f.repo.push_remote("feat/y"), None);
+    assert!(f.repo.push_args().unwrap_err().contains("no remote"));
+}
+
+#[test]
+fn a_push_behind_the_remote_says_to_pull() {
+    let (f, other) = with_remote();
+    teammate_pushes(&other, "t.txt");
+    f.commit_file("a.txt", "mine\n", "mine");
+    let err = network(&f, &f.repo.push_args().unwrap()).unwrap_err();
+    assert!(spor::askpass::is_push_behind(&err), "{err}");
+    // Their commits aren't ours rewritten: pull, don't force.
+    f.git(&["fetch", "--quiet"]);
+    assert!(!f.repo.rewrote_upstream("main", "origin/main"));
+}
+
+#[test]
+fn pull_rebases_around_uncommitted_changes() {
+    let (f, other) = with_remote();
+    teammate_pushes(&other, "t.txt");
+    f.commit_file("mine.txt", "mine\n", "mine");
+    f.write("a.txt", "edited, not committed\n");
+    network(&f, &f.repo.pull_args()).unwrap();
+    let t = f.repo.tracking().unwrap();
+    assert_eq!((t.ahead, t.behind), (1, 0));
+    assert_eq!(f.read("a.txt"), "edited, not committed\n");
+    assert_eq!(f.read("t.txt"), "theirs\n");
+    assert!(f.repo.stashes().is_empty());
+}
+
+#[test]
+fn amending_a_pushed_commit_is_a_rewrite_and_force_pushes_safely() {
+    let (f, other) = with_remote();
+    f.commit_file("a.txt", "two\n", "second");
+    network(&f, &f.repo.push_args().unwrap()).unwrap();
+    f.write("a.txt", "two, fixed\n");
+    f.repo.stage("a.txt").unwrap();
+    f.repo.amend(Some("second, fixed")).unwrap();
+    let t = f.repo.tracking().unwrap();
+    assert_eq!((t.ahead, t.behind), (1, 1));
+    assert!(f.repo.rewrote_upstream("main", "origin/main"));
+    // A plain push is refused; the force push goes through.
+    assert!(network(&f, &f.repo.push_args().unwrap()).is_err());
+    network(&f, &f.repo.push_args_for("main", true).unwrap()).unwrap();
+    assert_eq!(f.repo.tracking().unwrap().behind, 0);
+
+    // Someone pushes on top, a background fetch brings it in, and we amend
+    // again: forcing now would throw their commit away, so it's refused.
+    git(&other, &["pull", "--quiet", "--rebase"]);
+    teammate_pushes(&other, "t.txt");
+    f.git(&["fetch", "--quiet"]);
+    f.repo.amend(Some("second, fixed again")).unwrap();
+    assert!(!f.repo.rewrote_upstream("main", "origin/main"));
+    let err = network(&f, &f.repo.push_args_for("main", true).unwrap()).unwrap_err();
+    assert!(err.contains("changed since you last pulled"), "{err}");
+}
+
+#[test]
+fn fetch_fast_forwards_branches_that_are_only_behind() {
+    let (f, other) = with_remote();
+    f.git(&["switch", "--quiet", "-c", "feat/z"]);
+    teammate_pushes(&other, "t.txt");
+    f.git(&["fetch", "--quiet"]);
+    let before = f.git(&["rev-parse", "main"]);
+    let moved = f.repo.fast_forward_branches();
+    assert_eq!(moved.len(), 1, "{moved:?}");
+    assert_eq!(moved[0].branch, "main");
+    assert_eq!(moved[0].commits, 1);
+    assert_eq!(moved[0].from, before.trim());
+    assert_eq!(
+        f.git(&["rev-parse", "main"]),
+        f.git(&["rev-parse", "origin/main"])
+    );
+
+    // Not one with commits of its own, nor the one checked out.
+    teammate_pushes(&other, "t2.txt");
+    f.git(&["fetch", "--quiet"]);
+    f.git(&["switch", "--quiet", "main"]);
+    assert!(f.repo.fast_forward_branches().is_empty());
+    f.git(&["switch", "--quiet", "feat/z"]);
+    f.git(&["branch", "--quiet", "-f", "main", "main"]);
+    f.git(&["switch", "--quiet", "main"]);
+    f.commit_file("own.txt", "own\n", "own");
+    f.git(&["switch", "--quiet", "feat/z"]);
+    assert!(f.repo.fast_forward_branches().is_empty());
+}
+
+#[test]
+fn an_unlinked_branch_on_the_remote_can_be_tracked() {
+    let (f, other) = with_remote();
+    git(&other, &["switch", "--quiet", "-c", "shared"]);
+    teammate_pushes(&other, "t.txt");
+    f.git(&["fetch", "--quiet"]);
+    f.git(&["switch", "--quiet", "--no-track", "-c", "shared", "main"]);
+    assert_eq!(
+        f.repo.unlinked_remote_branch("shared").as_deref(),
+        Some("origin/shared")
+    );
+    f.repo.set_upstream("shared", "origin/shared").unwrap();
+    assert_eq!(f.repo.unlinked_remote_branch("shared"), None);
+    network(&f, &f.repo.pull_args()).unwrap();
+    assert_eq!(f.read("t.txt"), "theirs\n");
+}

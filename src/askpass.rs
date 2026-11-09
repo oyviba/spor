@@ -245,6 +245,9 @@ pub fn git_error(stderr: &str) -> String {
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .collect();
+    if let Some(why) = push_rejection(&lines) {
+        return why;
+    }
     let last = lines
         .iter()
         .rposition(|l| l.starts_with("fatal:") || l.starts_with("error:"));
@@ -270,6 +273,44 @@ pub fn git_error(stderr: &str) -> String {
         return format!("{line} The remote didn't accept your SSH key.");
     }
     line.to_string()
+}
+
+/// What a push refused because the remote has commits this branch doesn't
+/// says, so the app can offer to pull them and push again.
+pub const PUSH_BEHIND: &str = "has commits you don't have";
+
+/// Did this push fail because the remote branch moved ahead of ours?
+pub fn is_push_behind(err: &str) -> bool {
+    err.contains(PUSH_BEHIND)
+}
+
+/// git reports a refused push as ` ! [rejected] main -> main (fetch first)`
+/// and then "error: failed to push some refs", which says nothing; say why.
+fn push_rejection(lines: &[&str]) -> Option<String> {
+    let line = lines.iter().find(|l| l.starts_with("! ["))?;
+    let remote = line.starts_with("! [remote rejected]");
+    let rest = line.split_once(']').map(|(_, r)| r.trim()).unwrap_or("");
+    let (refs, reason) = match rest.rfind(" (") {
+        Some(ix) if rest.ends_with(')') => (&rest[..ix], &rest[ix + 2..rest.len() - 1]),
+        _ => (rest, ""),
+    };
+    let target = refs.rsplit("-> ").next().unwrap_or(refs).trim();
+    Some(if remote {
+        format!("The remote refused {target}: {reason}")
+    } else {
+        match reason {
+            "fetch first" | "non-fast-forward" => format!(
+                "{target} on the remote {PUSH_BEHIND} — pull them, then push"
+            ),
+            "stale info" | "remote ref updated since checkout" => format!(
+                "{target} on the remote changed since you last pulled — someone else may have pushed. \
+                 Not forcing over it: fetch and look first"
+            ),
+            "already exists" => format!("{target} already exists on the remote"),
+            "" => format!("The remote rejected {target}"),
+            other => format!("The remote rejected {target} ({other})"),
+        }
+    })
 }
 
 /// What git says whenever the transport fails, whatever the cause.
@@ -352,6 +393,29 @@ mod error_tests {
                       Please make sure you have the correct access rights\n\
                       and the repository exists.\n";
         assert_eq!(git_error(stderr), "Host key verification failed.");
+    }
+
+    #[test]
+    fn git_error_says_why_a_push_was_refused() {
+        let stderr = "To github.com:o/r.git\n ! [rejected]        main -> main (fetch first)\n\
+                      error: failed to push some refs to 'github.com:o/r.git'\n\
+                      hint: Updates were rejected because the remote contains work that you do\n";
+        let err = git_error(stderr);
+        assert_eq!(
+            err,
+            "main on the remote has commits you don't have — pull them, then push"
+        );
+        assert!(super::is_push_behind(&err));
+        let stderr = " ! [rejected]        feat/x -> feat/x (stale info)\nerror: failed to push some refs to 'x'\n";
+        assert!(git_error(stderr).starts_with("feat/x on the remote changed since you last pulled"));
+        let stderr = " ! [remote rejected] main -> main (protected branch hook declined)\n\
+                      error: failed to push some refs to 'x'\n";
+        assert_eq!(
+            git_error(stderr),
+            "The remote refused main: protected branch hook declined"
+        );
+        let stderr = " ! [rejected]        v1.0 -> v1.0 (already exists)\nerror: failed to push some refs to 'x'\n";
+        assert_eq!(git_error(stderr), "v1.0 already exists on the remote");
     }
 
     #[test]

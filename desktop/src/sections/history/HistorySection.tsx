@@ -4,6 +4,7 @@ import type { BranchInfo, CommitDetail, Graph as GraphData, PrBadge, TagInfo, Wo
 import { useShell } from "../../shared/app";
 import { useChanged, useNow, usePoll, useStored } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
+import { runSync } from "../../shared/BranchBar";
 import { DetailsCard, EmptyState, PageHeader, SidebarHeader, Tabs } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
 import { parsePatch } from "../../shared/diff";
@@ -155,6 +156,14 @@ export function HistorySection() {
           if (r && r.value !== b.name) shell.act(() => api.renameBranch(b.name, r.value));
         },
       });
+      items.push(
+        b.current
+          ? { label: state?.upstream ? `Push ${b.name}` : `Publish ${b.name}`, run: () => void runSync(shell, "push") }
+          : {
+              label: `Push ${b.name}`,
+              run: () => shell.act(() => api.pushBranch(b.name), { undo: false, pending: `Pushing ${b.name}…` }),
+            },
+      );
       if (!b.current) items.push({ label: `Delete ${b.name}`, danger: true, run: () => shell.act(() => api.deleteBranch(b.name)) });
     } else {
       items.push({
