@@ -1,4 +1,4 @@
-// End-to-end check of Changes, History, Pull requests and Actions in the
+// End-to-end check of History (with its uncommitted changes), Pull requests and Actions in the
 // real app, through WebDriver, checking the repository with git as it goes.
 //
 //   SPOR_REPO=<scratch repo> FAKE_GH_STATE=<file> node e2e/sections.mjs <app binary> [out dir]
@@ -30,6 +30,12 @@ const section = async (label, ready) => {
   await w.js(`$(arguments[0]).click()`, sel);
   await w.waitFor(ready);
 };
+// History with the working tree selected: its files in the panel.
+const working = async (ready = ".file-row") => {
+  await section("History", ".worktree-row");
+  await w.js(`$(".worktree-row").click()`);
+  await w.waitFor(ready);
+};
 // Right-click the first element matching `css` whose text has `text`.
 const rightClick = (css, text) =>
   w.js(
@@ -56,17 +62,17 @@ const rowClick = (css, i, shift = false) =>
   w.js(`$$(arguments[0])[arguments[1]].dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: arguments[2] }))`, css, i, shift);
 
 try {
-  await w.js("localStorage.clear(); localStorage.setItem('spor.section', JSON.stringify('changes'))");
+  await w.js("localStorage.clear(); localStorage.setItem('spor.section', JSON.stringify('history'))");
   await w.refresh();
   await w.waitFor(".nav-section");
+  await working();
   const head = git("rev-parse", "HEAD");
 
-  console.log("Changes");
-  await w.waitFor(".file-row");
+  console.log("Uncommitted changes");
   check((await w.count(".file-row")) === 3, "lists the staged, edited and untracked files");
-  check(!(await w.js(`return !!$('.nav-section[aria-label="Changes"] .rail-badge')`)), "the rail has no count per section");
+  check(!(await w.js(`return !!$('.nav-section[aria-label="History"] .rail-badge')`)), "the rail has no count per section");
   await w.clickText(".file-row-main", "greet.py");
-  await w.until(`return $("h2")?.textContent === "greet.py" && $$(".diff tr.add").length === 4`, "greet.py's diff");
+  await w.until(`return $(".tabs [aria-selected=true]")?.textContent === "greet.py" && $$(".diff tr.add").length === 4`, "greet.py's diff");
   // Pick the two lines of shout(): click one, shift-click the next.
   await rowClick(".diff tr.add", 2);
   await rowClick(".diff tr.add", 3, true);
@@ -84,8 +90,8 @@ try {
   await w.js(`[...$$(".file-row")].find(r => r.textContent.includes("NOTES.md")).querySelector(".row-actions .icon-button:last-child").click()`);
   await w.until(`return [...$$(".file-row")].filter(r => r.textContent.includes("NOTES.md")).length === 1 && $(".list-label")?.textContent.includes("2")`, "NOTES.md staged");
   check(git("status", "--porcelain", "NOTES.md").startsWith("A "), "stages a whole file from its row");
-  await w.fill(".composer-dock textarea", "Add notes and polish the README");
-  await w.key(".composer-dock textarea", "Enter", { ctrlKey: true });
+  await w.fill(".inspector-commit textarea", "Add notes and polish the README");
+  await w.key(".inspector-commit textarea", "Enter", { ctrlKey: true });
   await w.until(`return $$(".file-row").length === 1`, "the commit");
   check(git("log", "-1", "--format=%s") === "Add notes and polish the README", "commits with ⌘↩");
   check(git("status", "--porcelain").trim() === "M greet.py", "leaves the unstaged edit alone");
@@ -133,7 +139,7 @@ try {
   await undoKey();
   await sleep(1200);
   check(git("rev-parse", "--abbrev-ref", "HEAD") === "main" && !git("branch", "--list", "try/farewell"), "⌘Z twice: back on main, branch gone");
-  await section("Changes", ".stash-row");
+  await working(".stash-row");
   await w.clickText(".stash-row .link", "Pop");
   await w.until(`return $$(".file-row").length === 3`, "the stash popped");
   check(git("stash", "list") === "" && git("status", "--porcelain").includes("NOTES.md"), "Pop brings the stashed work back");
@@ -167,7 +173,7 @@ try {
   await undoKey();
   await sleep(1200);
   check(git("tag", "--list", "v0.1.0") === "", "⌘Z deletes the tag again");
-  await section("Changes", ".inspector");
+  await working(".inspector");
 
   console.log("Hand to an agent");
   await toastGone();
@@ -192,7 +198,7 @@ try {
   check(!readdirSync(`${repo}.spor`).includes("handoff"), "…and the folder goes");
   git("checkout", "--quiet", "main");
   git("branch", "--quiet", "-D", "feat/handoff");
-  await section("Changes", ".inspector");
+  await working(".inspector");
 
   console.log("A merge that conflicts");
   await toastGone();
@@ -204,9 +210,9 @@ try {
   await w.waitFor(".op-banner.bad");
   check((await w.text(".op-banner")).includes("Merge stopped on conflicts in 1 file"), "the banner says the merge stopped");
   await w.shot("conflict-1-banner");
-  await w.clickText(".op-banner button", "Resolve in Changes");
+  await w.clickText(".op-banner button", "Resolve conflicts");
   await w.waitFor(".resolve-bar");
-  check((await w.text("h2")) === "README.md", "Resolve opens the conflicted file in Changes");
+  check((await w.text(".tabs [aria-selected=true]")) === "README.md", "Resolve opens the conflicted file in History");
   await w.shot("conflict-2-resolve");
   await w.clickText(".resolve-bar button", "Take theirs");
   await w.until(`return $(".op-banner") && !$(".op-banner.bad")`, "the conflict resolved");

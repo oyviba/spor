@@ -74,12 +74,7 @@ section, run as end-to-end tests.
   and land that, or **Discard** it. A work item's issue, pull request and CI runs all open here,
   wherever you click them from. [docs/agents.md](docs/agents.md) has the
   design
-- **Changes** (⌘3) — staged and unstaged files; click lines in a diff (shift-click
-  to extend) to stage, unstage or discard just those. Commit with ⌘↩, or
-  amend. Fetch, Pull (rebasing) and Push or Publish (see *Pulling and
-  pushing* below), the branch's pull request on GitHub, and stashes: stash (right-click for a message), pop,
-  apply and keep, drop
-- **History** (⌘4) — the commit graph with `main` / `master` / `trunk` pinned to
+- **History** (⌘3) — the commit graph with `main` / `master` / `trunk` pinned to
   the leftmost lane and branches colored by prefix (all `feat/*` share a
   hue). Search by message, author or hash, or `path:src/main.rs` for the
   commits that touched a file. The sidebar has local, agent and remote
@@ -91,12 +86,19 @@ section, run as end-to-end tests.
   mixed, or hard after asking), or **Rewrite after here** — an interactive
   rebase on screen: reorder, reword, squash, fix up or drop, then Rewrite
   history. **Blame** any file, at a commit or in the working tree. The ⚙
-  picks the graph's columns, row height and lane width
+  picks the graph's columns, row height and lane width.
+  The top row, **Uncommitted changes**, is your checkout: select it and the
+  panel on the right lists conflicts, staged and unstaged files, with the
+  commit box (⌘↩, or amend), Fetch, Pull (rebasing) and Push or Publish (see
+  *Pulling and pushing* below), the branch's pull request on GitHub, and
+  stashes: stash (right-click for a message), pop, apply and keep, drop.
+  Pick a file and its diff takes the page: click lines (shift-click to
+  extend) to stage, unstage or discard just those
 
 Below a divider, three browsers for GitHub, for what doesn't belong to a
 piece of work yet (an issue nobody has started, a run on `main`):
 
-- **Issues**, **Pull requests**, **Actions** (⌘5–⌘7) — through `gh`: an
+- **Issues**, **Pull requests**, **Actions** (⌘4–⌘6) — through `gh`: an
   issue and its comments (and *Start with agent* from it); a PR's
   conversation, files and checks, with comments, line comments, approve,
   land, check out; a run's jobs and its log folded by step, re-run and
@@ -112,7 +114,7 @@ Across the app:
   toast's Undo. Pushing makes commits final: their undos go. Only what git
   can't take back asks first (a hard reset, deleting on the remote)
 - **One conflict banner.** A merge, rebase, cherry-pick or revert that stops
-  shows on every section, with *Resolve in Changes* — pick a side (or both)
+  shows on every section, with *Resolve conflicts* — pick a side (or both)
   for each conflict in a file, take one side for all of it, or edit it and
   mark it resolved — *Continue*, *Skip commit* and *Abort*
 - **Stash and switch.** A switch that uncommitted changes would block says
@@ -123,7 +125,7 @@ Across the app:
 - **Pulling and pushing without a terminal.** The branch bar above every
   section shows the one button that puts the branch in step:
   - *Pull* rebases, stashing uncommitted changes around it (if they clash
-    with what came in, the conflicts are left in Changes and a copy stays
+    with what came in, the conflicts are left in History's uncommitted changes and a copy stays
     in the stash list). A branch with no upstream whose namesake is on the
     remote gets linked to it first
   - *Push* goes to the branch it tracks; *Publish* pushes a new branch

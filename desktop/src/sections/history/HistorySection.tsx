@@ -15,6 +15,7 @@ import { BRANCH_DRAG, Graph, type GraphHandle } from "./Graph";
 import { Rewrite } from "./Rewrite";
 import { Blame } from "./Blame";
 import { GraphOptionsButton } from "./GraphOptions";
+import { CheckoutHeader, WORKING, WorktreeDiff, WorktreePanel, WorktreeRow, useWorktree } from "./Worktree";
 
 const PAGE = 2000;
 
@@ -40,6 +41,8 @@ export function HistorySection() {
   const [loadMs, setLoadMs] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const graphRef = useRef<GraphHandle>(null);
+  const w = useWorktree();
+  const working = selected === WORKING;
   const now = useNow(60_000);
 
   // Reload when any ref moves (commit, checkout, fetch, agent commits…).
@@ -73,6 +76,12 @@ export function HistorySection() {
   useChanged(() => {
     const t = shell.target;
     if (t.section !== "history" || !graph) return;
+    if (t.working) {
+      setSelected(WORKING);
+      if (t.path) w.setPick({ path: t.path, staged: false });
+      setTab(t.path ? "commit" : "graph");
+      return;
+    }
     if (t.blame) {
       setBlameOf(t.blame);
       setTab("blame");
@@ -89,7 +98,7 @@ export function HistorySection() {
 
   useChanged(() => {
     setCommit(null);
-    if (selected) api.commitDetail(selected).then(setCommit, fail);
+    if (selected && selected !== WORKING) api.commitDetail(selected).then(setCommit, fail);
   }, [selected]);
 
   // Search: git's own (messages, authors, hashes), debounced.
@@ -368,6 +377,7 @@ export function HistorySection() {
       </aside>
       <main className="main">
         <div className="task-page">
+          {working && tab !== "rewrite" && tab !== "blame" && <CheckoutHeader />}
           <PageHeader
             title={
               <>
@@ -381,6 +391,32 @@ export function HistorySection() {
             }
           >
             {tab === "graph" && <GraphOptionsButton />}
+            {working && tab === "commit" && w.pick && w.entry && (
+              <>
+                {w.entry.status !== "untracked" && w.entry.status !== "deleted" && w.entry.status !== "stageddeleted" && (
+                  <button
+                    className="ghost small"
+                    title="Who last changed each line (the working tree, uncommitted lines included)"
+                    onClick={() => {
+                      setBlameOf({ path: w.pick!.path, rev: null });
+                      setTab("blame");
+                    }}
+                  >
+                    Blame
+                  </button>
+                )}
+                {w.entry.status !== "conflicted" && (w.both || w.pick.staged) && (
+                  <Tabs
+                    value={w.pick.staged ? "staged" : "unstaged"}
+                    onChange={(v) => w.setPick({ path: w.pick!.path, staged: v === "staged" })}
+                    tabs={[
+                      { id: "unstaged", label: "Unstaged" },
+                      { id: "staged", label: "Staged" },
+                    ]}
+                  />
+                )}
+              </>
+            )}
             <Tabs
               value={tab}
               onChange={setTab}
@@ -388,7 +424,9 @@ export function HistorySection() {
                 { id: "graph", label: "Graph" },
                 {
                   id: "commit",
-                  label: commit ? (
+                  label: working ? (
+                    w.pick ? <span className="truncate tab-file">{w.pick.path.split("/").pop()}</span> : "Changes"
+                  ) : commit ? (
                     <>
                       <Commit size={12} /> <span className="mono">{commit.hash.slice(0, 7)}</span>
                     </>
@@ -407,13 +445,17 @@ export function HistorySection() {
             {!graph ? (
               <div className="boot" />
             ) : graph.rows.length === 0 ? (
-              <EmptyState title="No commits yet">Make the first one in Changes.</EmptyState>
+              <>
+                <WorktreeRow w={w} selected={working} onSelect={() => setSelected(WORKING)} />
+                <EmptyState title="No commits yet">Stage files and make the first one.</EmptyState>
+              </>
             ) : tab === "graph" ? (
               <div className="graph-wrap">
+                <WorktreeRow w={w} selected={working} onSelect={() => setSelected(WORKING)} />
                 <Graph
                   ref={graphRef}
                   graph={graph}
-                  selected={selected}
+                  selected={working ? null : selected}
                   onSelect={setSelected}
                   onOpen={(h) => {
                     setSelected(h);
@@ -470,7 +512,9 @@ export function HistorySection() {
             ) : (
               <div className="changes">
                 <div className="changes-column">
-                  {commit ? (
+                  {working ? (
+                    <WorktreeDiff w={w} />
+                  ) : commit ? (
                     <DiffView
                       patch={commit.patch}
                       empty="This commit changes no files."
@@ -485,7 +529,8 @@ export function HistorySection() {
                 </div>
               </div>
             )}
-            {commit && tab !== "rewrite" && tab !== "blame" && (
+            {working && tab !== "rewrite" && tab !== "blame" && <WorktreePanel w={w} onOpenFile={() => setTab("commit")} />}
+            {!working && commit && tab !== "rewrite" && tab !== "blame" && (
               <CommitCard
                 commit={commit}
                 current={current}

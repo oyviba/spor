@@ -290,12 +290,13 @@ try {
       await answer("feat/shout");
       await w.until(`return $(".repo-branch")?.textContent.includes("feat/shout")`, "the new branch");
     });
-    await step("stage part of a file in Changes, and commit", async () => {
+    await step("stage part of a file in the uncommitted changes, and commit", async () => {
       writeFileSync(
         `${repo}/greet.py`,
         readFileSync(`${repo}/greet.py`, "utf8") + '\n\ndef shout(name):\n    return greet(name).upper()\n\n\n# TODO: whisper()\n',
       );
-      await section("Changes");
+      await section("History", ".worktree-row");
+      await w.js(`$(".worktree-row").click()`);
       await w.waitFor(".file-row");
       await w.clickText(".file-row-main", "greet.py");
       await w.until(`return $$(".diff tr.add").length >= 4`, "greet.py's diff");
@@ -304,13 +305,13 @@ try {
       await w.js(`$$(".diff tr.add")[3].dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }))`);
       await w.clickText(".selection-bar button", "Stage lines");
       await w.until(`return $$(".file-row").length === 2`, "greet.py staged and unstaged");
-      await w.fill(".composer-dock textarea", "Add shout()");
-      await w.key(".composer-dock textarea", "Enter", { ctrlKey: true });
+      await w.fill(".inspector-commit textarea", "Add shout()");
+      await w.key(".inspector-commit textarea", "Enter", { ctrlKey: true });
       await w.until(`return $$(".file-row").length === 1`, "the commit");
       must(git("log", "-1", "--format=%s") === "Add shout()", "committed");
       must(git("show", "HEAD:greet.py").includes("def shout") && !git("show", "HEAD:greet.py").includes("whisper"), "just the picked lines");
     });
-    await step("Changes shows the branch as a work item", async () => {
+    await step("the uncommitted changes show the branch as a work item", async () => {
       await w.until(`return $(".work-header .stage-track [aria-current]")?.innerText === "In progress"`, "the work header");
     });
     await step("publish it", async () => {

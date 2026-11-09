@@ -106,14 +106,14 @@ push → Pull requests to merge.
 **Target** (budget 1):
 
 1. **Work**: *New… → Branch…* from main; it's checked out
-2. **Changes** → *1 change*: the branch's work header (*In progress*); pick
+2. **History** → *Uncommitted changes* → *1 change*: the branch's work header (*In progress*); pick
    lines in a diff, *Stage lines*, commit with ⌘↩
 3. *Publish*: the branch is pushed
 4. Its pull request opens from here, through `gh` — **gap**: your own branch's
    *Publish* only pushes, and *Open a pull request* goes to GitHub's page
    (#82's follow-up: Publish on your own branch should open it, as a task's does)
 5. A failed check shows in the work card and the header; fix, commit, *Push*
-6. *Land #n* from Changes
+6. *Land #n* from the work card
 
 ## 5. Three agents at once
 
