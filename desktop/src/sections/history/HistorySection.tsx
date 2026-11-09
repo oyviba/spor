@@ -119,7 +119,17 @@ export function HistorySection() {
     setRewriteBase(hash);
     setTab("rewrite");
   };
-  const commitMenu = (hash: string): MenuItem[] => commitActions(shell, hash, current, startRewrite);
+  const commitMenu = (hash: string): MenuItem[] => {
+    // Branches pointing at this commit come first, so a right-click on a
+    // branch tip can check it out directly.
+    const here = (graph?.rows.find((r) => r.hash === hash)?.refs ?? []).filter((r) => !r.startsWith("tag:") && r !== current);
+    const checkouts: MenuItem[] = here.map((name, i) => ({
+      label: remotes.has(name) ? `Check out ${name} as a local branch` : `Check out ${name}`,
+      separator: i === here.length - 1,
+      run: () => shell.switchBranch((stash) => api.checkout(name, stash)),
+    }));
+    return [...checkouts, ...commitActions(shell, hash, current, startRewrite)];
+  };
 
   const nextHit = () => {
     if (!hits || !graph) return;
