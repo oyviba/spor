@@ -3,7 +3,7 @@ import { api, errorText, type SyncAction } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "./types";
 import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
-import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, Sparkle, X } from "./shared/Icons";
+import { Alert, Bot, Branch, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, Sparkle, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
 import { RepoPanel } from "./shared/Layout";
 import { BranchBar, runSync } from "./shared/BranchBar";
@@ -39,7 +39,6 @@ import {
 import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuItem, type MenuSpec } from "./shared/Overlay";
 import { WorkSection } from "./sections/work/WorkSection";
 import { HistorySection } from "./sections/history/HistorySection";
-import { ChangesSection } from "./sections/changes/ChangesSection";
 import { IssuesSection } from "./sections/issues/IssuesSection";
 import { PullsSection } from "./sections/pulls/PullsSection";
 import { ActionsSection } from "./sections/actions/ActionsSection";
@@ -85,11 +84,10 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: stri
   { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "Mod+1", global: true },
   { id: "agents", label: "Agents", icon: <Sparkle size={17} />, key: "Mod+Shift+A", global: true },
   { id: "work", label: "Work", icon: <Bot size={17} />, key: "Mod+2" },
-  { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "Mod+3" },
-  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+4" },
-  { id: "issues", label: "Issues", icon: <IssueIcon size={15} />, key: "Mod+5", browser: true },
-  { id: "pulls", label: "Pull requests", icon: <PullRequest size={15} />, key: "Mod+6", browser: true },
-  { id: "actions", label: "Actions", icon: <Play size={15} />, key: "Mod+7", browser: true },
+  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+3" },
+  { id: "issues", label: "Issues", icon: <IssueIcon size={15} />, key: "Mod+4", browser: true },
+  { id: "pulls", label: "Pull requests", icon: <PullRequest size={15} />, key: "Mod+5", browser: true },
+  { id: "actions", label: "Actions", icon: <Play size={15} />, key: "Mod+6", browser: true },
 ];
 
 /** Is the task open on screen (Work, its page)? Then it needs no toast. */
@@ -176,12 +174,16 @@ export function App() {
   /** The open repository, for callbacks that outlive a render. */
   const here = useRef<string | undefined>(undefined);
   here.current = repo?.root;
-  const [section, setSection] = useStored<SectionId>("section", "inbox");
+  const [storedSection, setSection] = useStored<SectionId>("section", "inbox");
+  // Changes is gone (it's History's uncommitted-changes panel now): a
+  // section stored before that opens History.
+  const section = SECTIONS.some((s) => s.id === storedSection) ? storedSection : "history";
   // The Inbox and Agents span every repository: open, they show no
   // repository (no column, branch bar or repository header), and a
   // workspace's badge goes back to the section last open in its repository.
   const global = !!SECTIONS.find((s) => s.id === section)?.global;
-  const [repoSection, setRepoSection] = useStored<SectionId>("section.repo", "work");
+  const [storedRepoSection, setRepoSection] = useStored<SectionId>("section.repo", "work");
+  const repoSection = SECTIONS.some((s) => s.id === storedRepoSection) ? storedRepoSection : "history";
   useEffect(() => {
     if (!global) setRepoSection(section);
   }, [section]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -638,7 +640,7 @@ export function App() {
     }
     // Nothing to move for someone opening spor for the first time.
     if (firstRun) return;
-    const under = "Work, Changes, History and the browsers now sit under the open repository; the rail has the Inbox and Agents, across every repository.";
+    const under = "Work, History and the browsers now sit under the open repository; the rail has the Inbox and Agents, across every repository.";
     // Only the layout moved since #83; the shortcuts are as they were.
     if (was === "2") {
       toast(under);
@@ -911,7 +913,6 @@ export function App() {
 type GlobalId = "inbox" | "agents";
 
 const SECTION_VIEWS: Record<Exclude<SectionId, GlobalId>, () => React.ReactNode> = {
-  changes: ChangesSection,
   history: HistorySection,
   issues: IssuesSection,
   pulls: PullsSection,
@@ -960,8 +961,8 @@ function OperationBanner({ state }: { state: RepoState }) {
       </span>
       <span className="flex-1" />
       {n > 0 ? (
-        <button className="ghost small" onClick={() => shell.go({ section: "changes", path: state.conflicts[0] })}>
-          Resolve in Changes
+        <button className="ghost small" onClick={() => shell.go({ section: "history", working: true, path: state.conflicts[0] })}>
+          Resolve conflicts
         </button>
       ) : (
         <Button

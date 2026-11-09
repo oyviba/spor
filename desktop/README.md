@@ -10,8 +10,7 @@ repository (no repository column, branch bar or repository header; a
 workspace's badge goes back in, to the section last open there); the column
 beside it lists the workspace's repositories, and under the open one its
 sections, ordered by the questions you come with (#83): **Work** (what's in
-flight?), **Changes** (what's in my checkout?) and **History** (what
-happened?). Below a divider, **Issues**, **Pull requests** and **Actions**
+flight?), **History** (what happened, and what's in my checkout?). Below a divider, **Issues**, **Pull requests** and **Actions**
 are browsers for what belongs to no work item yet. Each section is built from the same four pieces: a list
 in the sidebar, a page, a details pane fixed on the right, and a bar or composer
 at the bottom.
@@ -21,11 +20,10 @@ at the bottom.
 | **Inbox** | 1 | What needs you in every workspace: answers, finished runs, failed CI, review requests | | | |
 | **Agents** | ⇧A | Every agent task in every workspace, by status or by repository | Counts per repository (click one for its Work); a task's conversation, to answer and follow up on without going to its repository | | |
 | **Work** | 2 | Every work item: agents' tasks, your branches with commits ahead of the base, and open PRs from anyone. Shelves: Needs you, In progress, In review, Settled (folded); filters Mine / Agents / Teammates; right-click to move one up or down. *New…* (⌘N): a branch, an agent task, or from an issue | The work page, for a task, a PR or a branch: the stage track and who it waits on, and the tabs with something in them: Agent · Discussion · Changes · Checks. *Take over* opens a task's folder; *Start an agent on this* hands a branch to one | The work card (issue → branch · folder → PR → checks, and the next step). A task: conflicts, publish, land, discard. A PR: land, check out, close. A branch: open a PR, switch to it | A task's composer, or a PR's comment box |
-| **Changes** | 3 | Conflicts, staged and unstaged files | The file's diff (unified or side by side): click lines, shift-click to extend, then stage, unstage or discard them; a conflicted file's regions, a side picked for each | The checked-out branch's work header (*Hand to an agent*: it moves to a task folder with your uncommitted work, ⌘Z brings it back) and work card, Fetch / Pull / Push (Publish the first time), stashes (pop, apply, drop) | Commit box (⌘↩), amend |
-| **History** | 4 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
-| **Issues** (browser) | 5 | Assigned / Yours / Open / Closed | The issue and its comments | The work card, labels, assignees, close or reopen | *Start with agent*: the issue as the prompt (editable), the base and the agent |
-| **Pull requests** (browser) | 6 | Review / Yours / Open / Closed | The work page: Discussion · Changes · Checks | The work card, checks, conflicts, land (squash, merge commit or rebase), check out, close | Comment / Approve, with line comments from Files |
-| **Actions** (browser) | 7 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | The work card, run, commit, re-run, cancel | |
+| **History** | 3 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
+| **Issues** (browser) | 4 | Assigned / Yours / Open / Closed | The issue and its comments | The work card, labels, assignees, close or reopen | *Start with agent*: the issue as the prompt (editable), the base and the agent |
+| **Pull requests** (browser) | 5 | Review / Yours / Open / Closed | The work page: Discussion · Changes · Checks | The work card, checks, conflicts, land (squash, merge commit or rebase), check out, close | Comment / Approve, with line comments from Files |
+| **Actions** (browser) | 6 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | The work card, run, commit, re-run, cancel | |
 
 What one app makes possible:
 
@@ -51,7 +49,7 @@ What one app makes possible:
   run on an agent's branch has *Send failure to agent*, which sends the
   failing log. A task's branch opens in History, and a run's commit too.
 - **One conflict banner.** A merge or rebase that stops shows on every
-  section, with *Resolve in Changes*, *Continue* and *Abort*.
+  section, with *Resolve conflicts*, *Continue* and *Abort*.
 - **From issue to landed PR** (#47, #24). *Start with agent* on an issue
   gives the agent the issue and its comments, on `agent/<number>-<three-random-words>`.
   *Publish* (or *Publish as a draft*) on the task pushes its branch and opens
@@ -147,7 +145,7 @@ src/
   App.tsx       the shell: rail, sections, conflict banner, toasts, ⌘1–7, ⌘Z, ⌘K,
                 background fetch, credential prompts, recent repositories
   shared/       DiffView, details pane, menus and dialogs, palette, status pills, CI status, icons, hooks
-  sections/     inbox/ work/ changes/ history/ issues/ pulls/ actions/ (and agents/, a task's page)
+  sections/     inbox/ work/ history/ issues/ pulls/ actions/ (and agents/, a task's page)
 ```
 
 `src-tauri` is its own Cargo workspace, so the root crate stays a

@@ -287,14 +287,17 @@ export function DetailsCard({
   children,
   menu,
   footer,
+  wide,
 }: {
   children: React.ReactNode;
   menu?: (e: React.MouseEvent) => void;
   footer?: React.ReactNode;
+  /** Room for a list and a text box (the working tree), not just facts. */
+  wide?: boolean;
 }) {
   const dismiss = useContext(DismissPane);
   return (
-    <aside className="inspector">
+    <aside className={`inspector${wide ? " wide" : ""}`}>
       {(dismiss || menu) && (
         <div className="pane-head">
           <span>Details</span>

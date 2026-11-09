@@ -188,7 +188,7 @@ export function nextStep(item: WorkItemInfo, from?: SectionId, current?: string 
     // Your work with nothing published yet.
     if (!pr && item.branch && item.owner.kind !== "teammate") {
       if (task) return { label: "Publish", target: { section: "work", taskId: task } };
-      if (current === item.branch) return { label: "Publish", target: { section: "changes" } };
+      if (current === item.branch) return { label: "Publish", target: { section: "history", working: true } };
     }
     return null;
   })();
