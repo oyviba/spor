@@ -76,16 +76,16 @@ section, run as end-to-end tests.
   design
 - **Changes** (⌘3) — staged and unstaged files; click lines in a diff (shift-click
   to extend) to stage, unstage or discard just those. Commit with ⌘↩, or
-  amend. Fetch, Pull (rebasing) and Push or Publish, the branch's pull
-  request on GitHub, and stashes: stash (right-click for a message), pop,
+  amend. Fetch, Pull (rebasing) and Push or Publish (see *Pulling and
+  pushing* below), the branch's pull request on GitHub, and stashes: stash (right-click for a message), pop,
   apply and keep, drop
 - **History** (⌘4) — the commit graph with `main` / `master` / `trunk` pinned to
   the leftmost lane and branches colored by prefix (all `feat/*` share a
   hue). Search by message, author or hash, or `path:src/main.rs` for the
   commits that touched a file. The sidebar has local, agent and remote
   branches, tags and linked worktrees. Right-click a branch to check it out,
-  merge it, rebase onto it, rename or delete it, or delete it from the
-  remote, or drag it onto another branch to merge it there or open a pull
+  merge it, rebase onto it, push or publish it (without checking it out),
+  rename or delete it, or delete it from the remote, or drag it onto another branch to merge it there or open a pull
   request between the two. Right-click a commit to branch or tag it, check
   it out detached, cherry-pick, revert, rebase onto it, reset to it (soft,
   mixed, or hard after asking), or **Rewrite after here** — an interactive
@@ -120,6 +120,28 @@ Across the app:
 - **Knowing when to pull.** The repository is fetched quietly every five
   minutes; when the upstream gains commits, a notification says so with a
   Pull button
+- **Pulling and pushing without a terminal.** The branch bar above every
+  section shows the one button that puts the branch in step:
+  - *Pull* rebases, stashing uncommitted changes around it (if they clash
+    with what came in, the conflicts are left in Changes and a copy stays
+    in the stash list). A branch with no upstream whose namesake is on the
+    remote gets linked to it first
+  - *Push* goes to the branch it tracks; *Publish* pushes a new branch
+    under its own name and tracks it. The remote is the branch's
+    `pushRemote`, `remote.pushDefault`, the remote it tracks, `origin`, or
+    the only remote — not always `origin`
+  - *Pull & push* when the branch and the remote have both moved on
+  - *Force push* when they've diverged only because you amended, rebased
+    or rewrote commits you'd already pushed (spor tells by the branch's
+    reflog). It's `--force-with-lease --force-if-includes`, so it refuses
+    if someone else pushed meanwhile, even after a background fetch
+  - *Fetch* also brings local branches that are only behind their
+    upstream (`main`, while you're on a feature branch) up to it, as
+    `git fetch origin main:main` would — never one that's checked out or
+    has commits of its own
+  - A push the remote refuses says why in words (the remote has commits
+    you don't, a protected branch, a tag that exists), and when it's
+    behind, the toast offers *Pull and push*. All of these are in ⌘K too
 - **Credentials.** The app has no terminal, so a passphrase, password or
   new-host question from git or ssh opens a dialog (an askpass bridge)
 - **Workspaces** — named, colored groups of repositories on the rail, like

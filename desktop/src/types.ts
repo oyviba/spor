@@ -251,6 +251,14 @@ export interface RepoState {
   upstream: string | null;
   ahead: number;
   behind: number;
+  /** Diverged because the branch was amended or rebased after it was
+   * pushed: force-push to put it right, not pull. */
+  rewritten?: boolean;
+  /** No upstream, but the remote has a branch by this name (`origin/x`):
+   * pulling links them. */
+  unlinked?: string | null;
+  /** Where a push goes; null when the repository has no remote. */
+  remote?: string | null;
   operation: "merge" | "rebase" | "cherrypick" | "revert" | null;
   conflicts: string[];
   /** Changes when any ref or HEAD moves. */

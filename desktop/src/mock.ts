@@ -1169,7 +1169,15 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
     case "last_message":
       return f.graph.rows.find((r: { head: boolean }) => r.head)?.subject ?? "";
     case "sync":
-      return { fetch: "Fetched", pull: "Pulled", push: "Pushed" }[args.action as string];
+      return {
+        fetch: "Fetched",
+        pull: "Pulled",
+        push: "Pushed",
+        "force-push": "Force-pushed",
+        sync: "Pulled, pushed",
+      }[args.action as string];
+    case "push_branch":
+      return `Pushed ${args.name}`;
     case "stashes":
       return f.stashes;
     case "stash":

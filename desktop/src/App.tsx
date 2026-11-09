@@ -1,12 +1,12 @@
 import { Activity, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, errorText } from "./api";
+import { api, errorText, type SyncAction } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "./types";
 import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
 import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, Sparkle, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
 import { RepoPanel } from "./shared/Layout";
-import { BranchBar } from "./shared/BranchBar";
+import { BranchBar, runSync } from "./shared/BranchBar";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { AgentLimit } from "./sections/agents/AgentLimit";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
@@ -120,15 +120,19 @@ interface AppCommand {
 
 /** What can be done to the open repository, for the palette and shortcuts. */
 function repoCommands(shell: Shell): AppCommand[] {
-  const sync = (what: "fetch" | "pull" | "push") => () =>
-    shell.act(() => api.sync(what), {
-      undo: what === "pull",
-      pending: { fetch: "Fetching…", pull: "Pulling…", push: shell.state?.upstream ? "Pushing…" : "Publishing…" }[what],
-    });
+  const sync = (what: SyncAction) => () => void runSync(shell, what);
   return [
-    { id: "fetch", label: "Fetch", hint: "all remotes", group: "Git", run: sync("fetch") },
-    { id: "pull", label: "Pull", hint: "with rebase", group: "Git", run: sync("pull") },
+    { id: "fetch", label: "Fetch", hint: "all remotes, and fast-forward branches behind", group: "Git", run: sync("fetch") },
+    { id: "pull", label: "Pull", hint: "with rebase, stashing changes around it", group: "Git", run: sync("pull") },
     { id: "push", label: shell.state?.upstream ? "Push" : "Publish branch", group: "Git", run: sync("push") },
+    { id: "sync", label: "Pull and push", hint: "rebase onto the remote, then push", group: "Git", run: sync("sync") },
+    {
+      id: "force-push",
+      label: "Force push",
+      hint: "after amend or rebase — refused if someone else pushed",
+      group: "Git",
+      run: sync("force-push"),
+    },
     { id: "stash", label: "Stash changes", group: "Git", run: () => shell.act(() => api.stash(null), { undo: false, pending: "Stashing…" }) },
     {
       id: "pr",
