@@ -114,8 +114,7 @@ SPOR_REPO=/path/to/a/repo pnpm tauri dev   # or start it inside a repo; click th
 
 **UI only.** `pnpm dev` serves the UI at http://localhost:1420 with no Rust:
 a mock backend (`src/mock.ts`). It plays back answers recorded from the real
-backend on a demo repository (`src/fixtures.json`, made by
-`e2e/record-fixtures.mjs`), and has a few agent tasks, one of which works and
+backend on a demo repository (`src/fixtures.json`), and has a few agent tasks, one of which works and
 finishes while you watch.
 
 ## Tests
@@ -124,31 +123,9 @@ finishes while you watch.
   keeping your shortcuts when the defaults move, how reloads coalesce, the
   Inbox's rows, and which links open a work item.
 - `cargo test` in `src-tauri`: the watcher, on scratch repositories.
-- `e2e/run.mjs` (agent tasks), `e2e/setup.mjs` (setup scripts) and
-  `e2e/sections.mjs` (History and its uncommitted changes, renaming and tagging, a conflicting
-  merge, stashes, pull requests, the Inbox and Actions) drive the real app through WebDriver and check the
-  repository with git at every step. CI runs all three on Linux under Xvfb.
-- `e2e/journeys.mjs` drives the five journeys in `docs/journeys.md`, counting
-  how often each changes section against its budget. Steps waiting on work
-  that hasn't landed are known gaps, reported but not failed; CI runs it
-  without failing the build. `e2e/run-all.sh <app> <out> journeys` runs it.
-
-  They need no real agent or GitHub: `e2e/bin` has stand-ins. `claude` is a
-  Python script that speaks Claude Code's stream-json both ways (it edits,
-  asks before running the tests, takes steering), and `gh` answers from
-  `e2e/fixtures/gh.json`, running spor's own `--jq` expressions through
-  `jq` and recording what's done in `$FAKE_GH_STATE`. Spor's parsers treat
-  them exactly like the real tools. `e2e/make-repos.sh` builds the scratch
-  repositories each suite expects, and `e2e/run-all.sh` puts it together:
-
-  ```sh
-  cargo install tauri-driver   # Linux also needs WebKitWebDriver (webkit2gtk-driver)
-  pnpm build && (cd src-tauri && cargo build --features tauri/custom-protocol)
-  xvfb-run -a e2e/run-all.sh src-tauri/target/debug/spor-desktop e2e-shots   # or: … e2e-shots sections
-  ```
-
-  `custom-protocol` builds the UI into the app; without it a debug build
-  loads it from `pnpm dev`. Screenshots of each step land in `e2e-shots/`.
+  `src-tauri/tests/fake/bin/gh` is a stand-in `gh` that answers from
+  `tests/fake/fixtures/gh.json`, running spor's own `--jq` expressions through
+  `jq` (so `cargo test` needs `jq`), for the work-item tests.
 
 ## Layout
 
