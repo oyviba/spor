@@ -933,8 +933,8 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
 
 // ---- Git and GitHub, from recordings ----------------------------------------
 //
-// src/fixtures.json is what the real backend answered on a demo repository
-// (e2e/record-fixtures.mjs). Times are moved up to now; changes to the
+// src/fixtures.json is what the real backend answered on a demo repository.
+// Times are moved up to now; changes to the
 // working tree are applied to an in-memory copy so the Changes section can
 // be clicked through.
 
