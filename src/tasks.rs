@@ -827,11 +827,11 @@ impl Tasks {
         commit_uncommitted: bool,
     ) -> Result<Undoable, String> {
         if task.pending {
-            return Err(format!("{} hasn't changed anything to land", task.id));
+            return Err(format!("{} hasn't changed anything to merge", task.id));
         }
         let here = self.repo.tracking()?;
         if here.branch.as_deref() != Some(task.base.as_str()) {
-            return Err(format!("Check out {} to land {} on it", task.base, task.id));
+            return Err(format!("Check out {} to merge {} into it", task.base, task.id));
         }
         if self.repo.status()?.iter().any(|e| e.status.is_staged()) {
             return Err(format!(
@@ -855,14 +855,14 @@ impl Tasks {
             .count_commits(&format!("{}..{}", task.base, task.branch))
             == 0
         {
-            return Err(format!("{} has nothing to land", task.id));
+            return Err(format!("{} has nothing to merge", task.id));
         }
         if let Some(from) = &task.from {
             let fork = self.repo.merge_base(from, &task.branch)?;
             let missing = self.repo.count_commits(&format!("{}..{fork}", task.base));
             if missing > 0 {
                 return Err(format!(
-                    "{} is {missing} {} behind {from}, where {} started — pull {} first, then land",
+                    "{} is {missing} {} behind {from}, where {} started — pull {} first, then merge",
                     task.base,
                     if missing == 1 { "commit" } else { "commits" },
                     task.id,
@@ -876,7 +876,7 @@ impl Tasks {
                 Outcome::Conflicts(files) => {
                     wt.abort_operation()?;
                     return Err(format!(
-                        "{} conflicts with {} in {} — resolve that in its folder (or ask the agent), then land",
+                        "{} conflicts with {} in {} — resolve that in its folder (or ask the agent), then merge",
                         task.id,
                         task.base,
                         files.join(", ")
@@ -900,7 +900,7 @@ impl Tasks {
         if let Outcome::Conflicts(files) = outcome {
             // Can't happen after the rebase, but never leave a half-merge.
             let _ = self.repo.reset(&base_before, ResetMode::Hard);
-            return Err(format!("Landing conflicted in {}", files.join(", ")));
+            return Err(format!("Merging conflicted in {}", files.join(", ")));
         }
         let commit = self.repo.head_sha()?;
         self.repo.remove_worktree(&task.worktree, true)?;

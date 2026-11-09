@@ -19,10 +19,10 @@ needs work that hasn't landed yet.
 | Journey | Before | Target | Now | Gaps |
 | --- | --- | --- | --- | --- |
 | 1. Morning triage | 4+ per repository | 1 | 1 | |
-| 2. Issue to landed pull request, with an agent | 5 | 1 | 1 | |
+| 2. Issue to merged pull request, with an agent | 5 | 1 | 1 | |
 | 3. Review a teammate's pull request | 2 | 1 | 1 | the failing step's log on the page |
 | 4. Your own branch | 5 | 1 | 1 so far | opening the pull request from spor, and on from there |
-| 5. Three agents at once | 0, without seeing collisions | 0 | 0 so far | collisions between tasks, and landing in order |
+| 5. Three agents at once | 0, without seeing collisions | 0 | 0 so far | collisions between tasks, and merging in order |
 
 ## 1. Morning triage
 
@@ -44,10 +44,10 @@ Then back to whichever needed you.
    **Actions**, with the work card naming its branch) → *1 change*
 3. Deal with it: *Re-run failed*
 
-## 2. From an issue to a landed pull request, with an agent
+## 2. From an issue to a merged pull request, with an agent
 
 Pick an issue, start an agent on it, answer its question, review its changes
-with line comments, send feedback, publish, watch checks, land, clean up.
+with line comments, send feedback, publish, watch checks, merge, clean up.
 
 **Before** (5 changes): Issues, *Start agent task* → Agents to watch it, answer
 it, review the diff and comment → *Open pull request* → Pull requests to see it
@@ -62,7 +62,7 @@ it, review the diff and comment → *Open pull request* → Pull requests to see
 5. *Publish*: the branch is pushed and its pull request opens; the task's page
    gains *Discussion* and *Checks*
 6. *Checks*: the pull request's checks, on the same page
-7. *Land #n*: squash and merge on GitHub, and the task cleans up (its folder
+7. *Merge #n*: squash and merge on GitHub, and the task cleans up (its folder
    and branch go; ⌘Z brings them back)
 
 ## 3. Review a teammate's pull request
@@ -88,7 +88,7 @@ requests to approve.
 ## 4. Your own branch
 
 Branch from main, stage parts of files, commit, publish, open the pull request,
-fix a failed check, land it.
+fix a failed check, merge it.
 
 **Before** (5 changes): History (or the palette) for a new branch → Changes to
 stage lines and commit, *Publish* → the browser for GitHub's new pull request
@@ -105,14 +105,14 @@ push → Pull requests to merge.
    *Publish* only pushes, and *Open a pull request* goes to GitHub's page
    (#82's follow-up: Publish on your own branch should open it, as a task's does)
 5. A failed check shows in the work card and the header; fix, commit, *Push*
-6. *Land #n* from Changes
+6. *Merge #n* from Changes
 
 ## 5. Three agents at once
 
-Start three tasks, see which collide, land them in order.
+Start three tasks, see which collide, merge them in order.
 
 **Before** (0 changes, but no collisions): Agents, three tasks; each one's card
-says whether it conflicts with its base, not with the others. Landing one and
+says whether it conflicts with its base, not with the others. Merging one and
 then finding the next conflicts is how you'd learn.
 
 **Target** (budget 0):
@@ -123,5 +123,5 @@ then finding the next conflicts is how you'd learn.
 3. Work says which of them change the same files (here, all three change
    greet.py) — **gap**: nothing compares tasks with each other yet, only each
    with its base
-4. Land them in an order Work suggests, each rebased on the last, asking the
+4. Merge them in an order Work suggests, each rebased on the last, asking the
    agent to resolve what collides

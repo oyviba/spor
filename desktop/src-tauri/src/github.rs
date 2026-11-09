@@ -152,7 +152,7 @@ pub(crate) fn pull_diff(app: State<App>, number: u64) -> Result<String, String> 
     gh::pull_diff(&root(&app)?, number).map_err(|e| first_line(&e))
 }
 
-/// `action`: merge, squash, rebase (the ways to land it on GitHub), approve, comment (with
+/// `action`: merge, squash, rebase (the ways to merge it on GitHub), approve, comment (with
 /// `body`), checkout, ready, close, reopen.
 #[tauri::command(async)]
 pub(crate) fn pull_action(
@@ -165,12 +165,12 @@ pub(crate) fn pull_action(
     let n = number;
     let result = match action.as_str() {
         "merge" => gh::merge_pull(&dir, n, gh::MergeMethod::Merge)
-            .map(|_| format!("Landed #{n} with a merge commit")),
+            .map(|_| format!("Merged #{n} with a merge commit")),
         "squash" => {
-            gh::merge_pull(&dir, n, gh::MergeMethod::Squash).map(|_| format!("Landed #{n}"))
+            gh::merge_pull(&dir, n, gh::MergeMethod::Squash).map(|_| format!("Merged #{n}"))
         }
         "rebase" => gh::merge_pull(&dir, n, gh::MergeMethod::Rebase)
-            .map(|_| format!("Landed #{n} by rebasing")),
+            .map(|_| format!("Merged #{n} by rebasing")),
         "approve" => {
             if let Some(b) = body.as_deref().filter(|b| !b.trim().is_empty()) {
                 gh::comment_on_pull(&dir, n, b)?;

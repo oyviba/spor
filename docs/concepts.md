@@ -36,16 +36,16 @@ Every work item is at one stage:
 | **Planned** | An issue assigned to you, no branch yet |
 | **In progress** | A branch with work on it, or a draft pull request |
 | **In review** | A pull request is open, or a task finished and you haven't looked yet |
-| **Landed** | In its base: the task was landed, or its pull request merged |
-| **Closed** | Its pull request was closed without landing |
+| **Merged** | In its base: the task was merged, or its pull request was |
+| **Closed** | Its pull request was closed without merging |
 
 ## Waiting on
 
-Until it's landed or closed, a work item says who has to do something next:
+Until it's merged or closed, a work item says who has to do something next:
 
 - **You**, and why: the agent asked something, a run finished that you
   haven't seen, your review is requested, checks failed, a reviewer asked for
-  changes, or it's approved and green and only needs landing
+  changes, or it's approved and green and only needs merging
 - **An agent**: it's running
 - **A teammate**: the pull request's author, or the reviewer you're waiting for
 - **CI**: checks are running
@@ -59,18 +59,18 @@ One verb for each thing you do to a work item:
 | **Start** | Make the branch from a base, and with an agent, its task folder and the agent's first run |
 | **Publish** | Push the branch for the first time; on a task, push and open its pull request in one go |
 | **Push** | Send new commits to a branch that's already published |
-| **Land** | Put the work into its base. Locally (*Land on main*: one squashed commit, or a merge commit), or by merging its pull request on GitHub (*Land #12*: squash, merge commit or rebase) |
+| **Merge** | Put the work into its base. Locally (*Merge into main*: one squashed commit, or a merge commit), or by merging its pull request on GitHub (*Merge #12*: squash, merge commit or rebase) |
 | **Hand to an agent** | Give one of your branches its own folder and an agent. From Changes, your uncommitted work goes along and your checkout switches to the base (⌘Z brings it all back). *Start an agent on this* on a branch or pull request does the same |
 | **Take over** | Open a task's folder to work in it yourself |
 | **Discard** | Remove a task's folder, and its branch unless the branch was yours before (⌘Z brings them back) |
-| **Clean up** | After a pull request was merged or closed on GitHub: remove the task's folder and branch, and mark it landed or closed |
+| **Clean up** | After a pull request was merged or closed on GitHub: remove the task's folder and branch, and mark it merged or closed |
 | **Send to agent** | Give the agent a follow-up: review comments, failing checks, your own words |
 
-**Merge** is kept for `git merge` of one branch into another, in History
-and in the operation banner ("Merge stopped on conflicts"). Landing a pull
-request is *Land*, even though GitHub calls it merging: GitHub's own words
-appear only in the hints that say what happens there ("Squash and merge on
-GitHub").
+**Merge** is the goal of a pull request, and the word for it everywhere:
+merging a task into its base, merging a pull request on GitHub, and
+`git merge` of one branch into another in History (and the operation banner,
+"Merge stopped on conflicts"). The hints say how: "Squash and merge on
+GitHub".
 
 ## Where things live
 
