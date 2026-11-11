@@ -1130,10 +1130,15 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
     case "graph":
       return f.graph;
     case "search_commits": {
-      const q = (args.query as string).toLowerCase();
-      return Object.values(f.commits as Record<string, { hash: string; message: string; author: string }>)
-        .filter((c) => c.message.toLowerCase().includes(q) || c.author.toLowerCase().includes(q) || c.hash.startsWith(q))
-        .map((c) => c.hash);
+      const words = (args.query as string).toLowerCase().split(/\s+/).filter(Boolean);
+      type Row = { hash: string; subject: string; author: string; refs: string[] };
+      return (f.graph.rows as Row[])
+        .filter((r) =>
+          words.every((w) =>
+            [r.subject, r.author, ...r.refs].some((t) => t.toLowerCase().includes(w)) || r.hash.startsWith(w),
+          ),
+        )
+        .map((r) => r.hash);
     }
     case "commit_detail":
       return f.commits[args.hash as string] ?? Promise.reject("No such commit in the recording");

@@ -102,12 +102,14 @@ try {
   const shown = await w.until(`const t = $(".task-title .small-text")?.textContent; return t && t.match(/[\\d,]+/)[0]`, "the commit count");
   check(Number(shown.replace(/,/g, "")) === total, `shows all ${total} commits`);
   check((await w.text(".graph-row .ref.current")) === "main", "marks the checked-out branch");
-  await w.fill(".sidebar-search input", "farewell");
-  await w.until(`return $$(".graph-row.dimmed").length > 0`, "search");
-  const hits = await w.count(".graph-row:not(.dimmed)");
+  await w.fill(".graph-search input", "farewell");
+  await w.until(`return $$(".graph-row").length > 0 && $$(".graph-row").length < arguments[0]`, "search narrows the list", 5000, total);
+  const hits = await w.count(".graph-row");
   const expected = git("log", "--all", "--format=%h", "-i", "--grep=farewell").split("\n").filter(Boolean).length;
   check(hits >= expected, `search finds the ${expected} commits that mention farewell`);
-  await w.fill(".sidebar-search input", "");
+  check((await w.count(".graph-row mark")) > 0, "…and marks the words");
+  await w.fill(".graph-search input", "");
+  await w.until(`return $$(".graph-row").length > arguments[0]`, "the whole graph is back", 5000, hits);
   await w.clickText(".branch-name", "feat/farewell");
   await w.until(`return $(".graph-row.selected")?.dataset.hash === arguments[0]`, "feat/farewell selected", 5000, git("rev-parse", "feat/farewell"));
   check(true, "clicking a branch selects its tip");

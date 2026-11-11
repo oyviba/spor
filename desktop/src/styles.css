@@ -2022,6 +2022,12 @@ button.busy::after {
 .graph-row.dimmed {
   opacity: 0.35;
 }
+.graph-row mark {
+  background: color-mix(in oklab, var(--amber) 30%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--amber) 30%, transparent);
+}
 .graph-svg {
   flex-shrink: 0;
   overflow: visible;
@@ -4148,4 +4154,51 @@ body.resizing * {
 }
 .agents-overview tbody tr:hover td {
   background: var(--hover);
+}
+
+/* ---- History search ---- */
+
+.graph-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+}
+.graph-search-box {
+  flex: 1;
+  max-width: 560px;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 6px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--muted);
+}
+.graph-search-box:focus-within {
+  border-color: var(--accent);
+}
+.graph-search-box input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 13px;
+}
+.graph-search .chip-toggle[aria-pressed="true"] {
+  border-color: color-mix(in oklab, var(--accent) 50%, var(--border));
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+.graph-no-matches {
+  padding: 32px 16px;
+  text-align: center;
+}
+.branch-row.default-branch .branch-name {
+  font-weight: 600;
 }

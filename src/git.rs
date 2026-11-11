@@ -540,38 +540,96 @@ impl Repo {
         Ok(parse_log(&out))
     }
 
-    /// Commits whose message, author or hash matches `query` (ignoring
-    /// case), newest first, from the same refs History shows.
+    /// Commits that match every word of `query` (ignoring case): each word
+    /// can be in the message, the author, the hash, or the name of a branch
+    /// or tag at the commit. Order isn't promised; History lays the hits
+    /// out in graph order. From the same refs History shows.
     pub fn search_commits(&self, query: &str, limit: usize) -> Result<Vec<String>, String> {
-        let query = query.trim();
-        if query.is_empty() {
-            return Ok(Vec::new());
+        let mut found: Option<Vec<String>> = None;
+        for word in query.split_whitespace().take(6) {
+            let these = self.search_word(word, limit)?;
+            found = Some(match found {
+                None => these,
+                Some(before) => {
+                    let keep: std::collections::HashSet<&str> = these.iter().map(String::as_str).collect();
+                    before
+                        .into_iter()
+                        .filter(|h| keep.contains(h.as_str()))
+                        .collect()
+                }
+            });
+            if found.as_ref().is_some_and(Vec::is_empty) {
+                break;
+            }
         }
+        Ok(found.unwrap_or_default())
+    }
+
+    /// Commits where one word is in the message, author or hash, or in the
+    /// name of a ref pointing at them.
+    fn search_word(&self, word: &str, limit: usize) -> Result<Vec<String>, String> {
         let n = format!("-n{limit}");
         let mut hashes: Vec<String> = Vec::new();
-        let mut add = |out: String| {
-            for h in out.lines().map(str::trim).filter(|h| !h.is_empty()) {
-                if !hashes.iter().any(|x| x == h) {
-                    hashes.push(h.to_string());
-                }
+        let mut seen = std::collections::HashSet::<String>::new();
+        let mut add = |hash: &str| {
+            let hash = hash.trim();
+            if !hash.is_empty() && seen.insert(hash.to_string()) {
+                hashes.push(hash.to_string());
             }
         };
-        let refs = ["--branches", "--remotes", "--tags", "HEAD"];
         for field in ["--grep", "--author"] {
-            let pattern = format!("{field}={query}");
+            let pattern = format!("{field}={word}");
             let mut args = vec!["log", "--format=%H", "-i", "--fixed-strings", &n, &pattern];
-            args.extend(refs);
-            add(self.run_ok(&args)?);
+            args.extend(HISTORY_REFS);
+            for h in self.run_ok(&args)?.lines() {
+                add(h);
+            }
         }
-        if query.len() >= 4 && query.chars().all(|c| c.is_ascii_hexdigit()) {
-            let spec = format!("{query}^{{commit}}");
+        if word.len() >= 4 && word.chars().all(|c| c.is_ascii_hexdigit()) {
+            let spec = format!("{word}^{{commit}}");
             if let Ok(h) = self.run_ok(&["rev-parse", "--verify", "--quiet", &spec]) {
-                hashes.insert(0, h.trim().to_string());
-                hashes.dedup();
+                add(&h);
+            }
+        }
+        // Branch and tag names: the commit they point at. A tag object
+        // (`%(*objectname)`) is looked through to its commit.
+        let lower = word.to_lowercase();
+        let refs = self.run_ok(&[
+            "for-each-ref",
+            "--format=%(refname:short)\t%(objectname)\t%(*objectname)",
+            "refs/heads",
+            "refs/remotes",
+            "refs/tags",
+        ])?;
+        for line in refs.lines() {
+            let mut cols = line.split('\t');
+            let (Some(name), Some(obj), peeled) = (cols.next(), cols.next(), cols.next()) else {
+                continue;
+            };
+            if name.to_lowercase().contains(&lower) {
+                add(peeled.filter(|p| !p.is_empty()).unwrap_or(obj));
             }
         }
         hashes.truncate(limit);
         Ok(hashes)
+    }
+
+    /// Commits that added or removed `text` somewhere in the code (git's
+    /// pickaxe, `-S`), from the refs History shows.
+    pub fn search_code(&self, text: &str, limit: usize) -> Result<Vec<String>, String> {
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let n = format!("-n{limit}");
+        let needle = format!("-S{text}");
+        let mut args = vec!["log", "--format=%H", &n, &needle];
+        args.extend(HISTORY_REFS);
+        Ok(self
+            .run_ok(&args)?
+            .lines()
+            .map(|h| h.trim().to_string())
+            .filter(|h| !h.is_empty())
+            .collect())
     }
 
     /// Who last changed each line of `path`, as it is in the working tree.
@@ -1444,6 +1502,9 @@ const PATCH_FLAGS: [&str; 6] = [
 ];
 
 /// %x1f = unit separator, %x1e = record separator.
+/// The refs History shows (not `--all`: that would pull in refs/stash).
+const HISTORY_REFS: [&str; 4] = ["--branches", "--remotes", "--tags", "HEAD"];
+
 const LOG_FORMAT: &str = "%H%x1f%h%x1f%P%x1f%D%x1f%s%x1f%an%x1f%at%x1e";
 
 fn parse_log(out: &str) -> Vec<Commit> {

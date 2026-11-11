@@ -9,6 +9,7 @@ import { ago } from "../agents/transcript";
 import { Bot, Tag } from "../../shared/Icons";
 import { DEFAULT_GRAPH, setSettings, useSettings, type GraphOptions } from "../../shared/settings";
 import { useMode } from "../../shared/theme";
+import { highlight } from "./search";
 
 const PAD = 12;
 const OVERSCAN = 12;
@@ -31,8 +32,13 @@ interface Props {
   selected: string | null;
   onSelect: (hash: string) => void;
   onOpen: (hash: string) => void;
-  /** Search: rows not in here are dimmed. */
+  /** Search: rows not in here are dimmed, or left out when `flat`. */
   hits: Set<string> | null;
+  /** Only the hits, as a plain list: the lines between commits that
+   * aren't shown would lead nowhere. */
+  flat: boolean;
+  /** Words of the search to mark in the subject and author. */
+  terms: string[];
   currentBranch: string | null;
   /** Remote-tracking branch names, drawn quieter than local ones. */
   remotes: Set<string>;
@@ -53,14 +59,17 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
   const [view, setView] = useState({ top: 0, height: 800 });
   const dark = useMode() === "dark";
   const palette = useMemo(() => p.graph.palette.map((hex) => (dark ? hex : deepen(hex))), [p.graph.palette, dark]);
-  const index = useMemo(() => new Map(p.graph.rows.map((r, i) => [r.hash, i])), [p.graph.rows]);
+  const all = p.graph.rows;
+  const rows = useMemo(() => (p.flat && p.hits ? all.filter((r) => p.hits!.has(r.hash)) : all), [all, p.flat, p.hits]);
+  const index = useMemo(() => new Map(rows.map((r, i) => [r.hash, i])), [rows]);
   const options = useSettings().graph;
   const geo = useMemo<Geo>(
     () => ({ row: options.rowHeight, lane: options.laneWidth, mid: options.rowHeight / 2 }),
     [options.rowHeight, options.laneWidth],
   );
   const ROW = geo.row;
-  const width = xOf(geo, Math.min(p.graph.lanes, 12)) + 4;
+  const flat = p.flat && !!p.hits;
+  const width = flat ? PAD * 2 : xOf(geo, Math.min(p.graph.lanes, 12)) + 4;
   // Stable handlers, so scrolling re-renders only rows coming into view.
   const latest = useRef(p);
   latest.current = p;
@@ -93,7 +102,7 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
   }, []);
 
   const first = Math.max(0, Math.floor(view.top / ROW) - OVERSCAN);
-  const last = Math.min(p.graph.rows.length, Math.ceil((view.top + view.height) / ROW) + OVERSCAN);
+  const last = Math.min(rows.length, Math.ceil((view.top + view.height) / ROW) + OVERSCAN);
 
   // ↑/↓ move the selection; Enter opens the commit.
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -101,7 +110,7 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
     const step = e.key === "ArrowDown" || e.key === "j" ? 1 : e.key === "ArrowUp" || e.key === "k" ? -1 : 0;
     if (step) {
       e.preventDefault();
-      const next = p.graph.rows[Math.max(0, Math.min(p.graph.rows.length - 1, i + step))];
+      const next = rows[Math.max(0, Math.min(rows.length - 1, i + step))];
       if (next) {
         p.onSelect(next.hash);
         const el = scroller.current!;
@@ -124,8 +133,8 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
       onKeyDown={onKeyDown}
       onScroll={(e) => setView({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })}
     >
-      <div className="graph-canvas" style={{ height: p.graph.rows.length * ROW }}>
-        {p.graph.rows.slice(first, last).map((row, k) => (
+      <div className="graph-canvas" style={{ height: rows.length * ROW }}>
+        {rows.slice(first, last).map((row, k) => (
           <Row
             key={row.hash}
             row={row}
@@ -135,7 +144,9 @@ export const Graph = forwardRef<GraphHandle, Props>(function Graph(p, ref) {
             options={options}
             palette={palette}
             selected={p.selected === row.hash}
-            dimmed={!!p.hits && !p.hits.has(row.hash)}
+            dimmed={!!p.hits && !flat && !p.hits.has(row.hash)}
+            flat={flat}
+            terms={p.terms}
             currentBranch={p.currentBranch}
             remotes={p.remotes}
             nowMs={p.nowMs}
@@ -207,6 +218,8 @@ const Row = memo(function Row({
   palette,
   selected,
   dimmed,
+  flat,
+  terms,
   currentBranch,
   remotes,
   nowMs,
@@ -224,6 +237,8 @@ const Row = memo(function Row({
   palette: string[];
   selected: boolean;
   dimmed: boolean;
+  flat: boolean;
+  terms: string[];
   currentBranch: string | null;
   remotes: Set<string>;
   nowMs: number;
@@ -237,11 +252,11 @@ const Row = memo(function Row({
   // The branch a drop here lands on: a local one if there's one, else a remote one.
   const branches = row.refs.filter((r) => !r.startsWith("tag:"));
   const target = branches.find((r) => !remotes.has(r)) ?? branches[0];
-  const node = xOf(geo, row.lane);
+  const node = flat ? PAD : xOf(geo, row.lane);
   const color = palette[row.color] ?? "#888";
   const { row: ROW, mid: MID } = geo;
   const refs = row.refs.map((r) => (
-    <RefBadge key={r} name={r} current={r === currentBranch} remote={remotes.has(r)} color={color} pr={prs.get(r)} />
+    <RefBadge key={r} name={r} current={r === currentBranch} remote={remotes.has(r)} color={color} pr={prs.get(r)} terms={terms} />
   ));
   return (
     <div
@@ -280,7 +295,7 @@ const Row = memo(function Row({
       }
     >
       <svg width={width} height={ROW} className="graph-svg" aria-hidden>
-        {row.segments.map((s, i) => (
+        {(flat ? [] : row.segments).map((s, i) => (
           <path
             key={i}
             d={pathOf(s, node, geo)}
@@ -312,7 +327,9 @@ const Row = memo(function Row({
       )}
       <div className="graph-text">
         {!options.refColumn && refs}
-        <span className="graph-subject">{row.subject}</span>
+        <span className="graph-subject">
+          <Marked text={row.subject} terms={terms} />
+        </span>
       </div>
       {options.columns.hash && (
         <span className="graph-hash mono" style={{ width: options.widths.hash }}>
@@ -321,7 +338,7 @@ const Row = memo(function Row({
       )}
       {options.columns.author && (
         <span className="graph-author truncate" style={{ width: options.widths.author }}>
-          {row.author}
+          <Marked text={row.author} terms={terms} />
         </span>
       )}
       {options.columns.date && (
@@ -333,6 +350,16 @@ const Row = memo(function Row({
   );
 });
 
+/** `text`, with the searched words marked. */
+function Marked({ text, terms }: { text: string; terms: string[] }) {
+  if (terms.length === 0) return <>{text}</>;
+  return (
+    <>
+      {highlight(text, terms).map((part, i) => (part.match ? <mark key={i}>{part.text}</mark> : part.text))}
+    </>
+  );
+}
+
 const CHECK_GLYPH: Record<PrBadge["checks"], string> = { none: "", pending: "●", passing: "✓", failing: "✗" };
 
 function RefBadge({
@@ -341,12 +368,14 @@ function RefBadge({
   remote,
   color,
   pr,
+  terms,
 }: {
   name: string;
   current: boolean;
   remote: boolean;
   color: string;
   pr?: PrBadge;
+  terms: string[];
 }) {
   const tag = name.startsWith("tag:");
   const label = tag ? name.slice(4).trim() : name;
@@ -369,7 +398,7 @@ function RefBadge({
     >
       {tag && <Tag size={10} />}
       {agent && <Bot size={10} />}
-      {label}
+      <Marked text={label} terms={terms} />
       {pr && (
         <span
           className={`pr-badge review-${pr.draft ? "draft" : pr.review}`}

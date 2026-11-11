@@ -14,6 +14,8 @@ import { BRANCH_DRAG, Graph, type GraphHandle } from "./Graph";
 import { Rewrite } from "./Rewrite";
 import { Blame } from "./Blame";
 import { GraphOptionsButton } from "./GraphOptions";
+import { GraphSearch } from "./GraphSearch";
+import { searchTerms, stepHit } from "./search";
 
 const PAGE = 2000;
 
@@ -35,6 +37,11 @@ export function HistorySection() {
   const [commit, setCommit] = useState<CommitDetail | null>(null);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<Set<string> | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [matchesOnly, setMatchesOnly] = useStored("history.matchesOnly", true);
+  // The sidebar's own filter, on the names of branches, tags and worktrees.
+  const [filter, setFilter] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
   const [shelves, setShelves] = useStored("history.shelves", { agent: true, remote: false, tags: false, worktrees: false });
   const [loadMs, setLoadMs] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -79,11 +86,7 @@ export function HistorySection() {
     }
     const hash =
       t.hash ?? (t.branch ? graph.rows.find((r) => r.refs.some((x) => x === t.branch))?.hash : undefined);
-    if (hash) {
-      setSelected(hash);
-      setTab("graph");
-      requestAnimationFrame(() => graphRef.current?.scrollTo(hash));
-    }
+    if (hash) reveal(hash);
   }, [shell.target.seq, !!graph]);
 
   useChanged(() => {
@@ -91,28 +94,84 @@ export function HistorySection() {
     if (selected) api.commitDetail(selected).then(setCommit, fail);
   }, [selected]);
 
-  // Search: git's own (messages, authors, hashes), debounced.
+  // Search: git's own (messages, authors, hashes) and the names of branches
+  // and tags, debounced. A newer search drops an older one's answer.
   useEffect(() => {
     const q = query.trim();
-    if (!q) return setHits(null);
-    const id = setTimeout(() => api.searchCommits(q).then((h) => setHits(new Set(h)), fail), 250);
-    return () => clearTimeout(id);
-  }, [query]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!q) {
+      setHits(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let stale = false;
+    const id = setTimeout(
+      () =>
+        api.searchCommits(q).then(
+          (h) => {
+            if (stale) return;
+            setHits(new Set(h));
+            setSearching(false);
+          },
+          (e) => {
+            if (stale) return;
+            setSearching(false);
+            fail(e);
+          },
+        ),
+      200,
+    );
+    return () => {
+      stale = true;
+      clearTimeout(id);
+    };
+  }, [query, state?.refs]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ⌘F, or / outside a text field, goes to the search.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+      const find = (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f";
+      const slash = e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey && !typing;
+      if (!find && !slash) return;
+      e.preventDefault();
+      setTab("graph");
+      requestAnimationFrame(() => {
+        searchInput.current?.focus();
+        searchInput.current?.select();
+      });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Switching between the matches and the graph keeps the commit in view.
+  useEffect(() => {
+    if (selected) requestAnimationFrame(() => graphRef.current?.scrollTo(selected));
+  }, [matchesOnly, hits === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const current = state?.branch ?? shell.repo.branch;
   const tipOf = (name: string) => graph?.rows.find((r) => r.refs.includes(name))?.hash;
+  /** Select a commit and bring it into view. A search that doesn't
+   * include it gives way: it wouldn't be in the list. */
+  const reveal = (hash: string) => {
+    if (hits && matchesOnly && !hits.has(hash)) {
+      setQuery("");
+      setHits(null);
+    }
+    setSelected(hash);
+    setTab("graph");
+    requestAnimationFrame(() => graphRef.current?.scrollTo(hash));
+  };
   const showBranch = (name: string) => {
     const hash = tipOf(name);
     if (!hash) return shell.toast(`${name} is further back than the graph shows`, "error");
-    setSelected(hash);
-    setTab("graph");
-    graphRef.current?.scrollTo(hash);
+    reveal(hash);
   };
   const showCommit = (hash: string) => {
     if (!graph?.rows.some((r) => r.hash === hash)) return shell.toast("That commit is further back than the graph shows", "error");
-    setSelected(hash);
-    setTab("graph");
-    graphRef.current?.scrollTo(hash);
+    reveal(hash);
   };
   const startRewrite = (hash: string) => {
     setRewriteBase(hash);
@@ -120,20 +179,33 @@ export function HistorySection() {
   };
   const commitMenu = (hash: string): MenuItem[] => commitActions(shell, hash, current, startRewrite);
 
-  const nextHit = () => {
-    if (!hits || !graph) return;
-    const rows = graph.rows;
-    const from = selected ? rows.findIndex((r) => r.hash === selected) : -1;
-    const next = rows.slice(from + 1).find((r) => hits.has(r.hash)) ?? rows.find((r) => hits.has(r.hash));
-    if (next) {
-      setSelected(next.hash);
-      graphRef.current?.scrollTo(next.hash);
+  // The search's hits among the commits the graph has loaded, as rows.
+  const hitRows = useMemo(
+    () => (hits && graph ? graph.rows.flatMap((r, i) => (hits.has(r.hash) ? [i] : [])) : []),
+    [hits, graph],
+  );
+  const selectedRow = selected && graph ? graph.rows.findIndex((r) => r.hash === selected) : -1;
+  const stepHits = (step: 1 | -1) => {
+    const next = stepHit(hitRows, selectedRow, step);
+    const row = next == null ? undefined : graph?.rows[next];
+    if (row) {
+      setSelected(row.hash);
+      graphRef.current?.scrollTo(row.hash);
     }
   };
+  const terms = useMemo(() => searchTerms(query), [query]);
+  const hitStats = hits ? { total: hits.size, loaded: hitRows.length, at: hitRows.includes(selectedRow) ? hitRows.indexOf(selectedRow) : null } : null;
 
-  const local = branches.filter((b) => !b.remote && !b.agent);
-  const agent = branches.filter((b) => b.agent);
-  const remote = branches.filter((b) => b.remote);
+  // The default branch is pinned above the rest, and out of the filter's reach.
+  const defaultName = graph?.main ?? null;
+  const defaultBranch = branches.find((b) => !b.remote && b.name === defaultName);
+  const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+  const named = (name: string) => words.every((w) => name.toLowerCase().includes(w));
+  const local = branches.filter((b) => !b.remote && !b.agent && b.name !== defaultName && named(b.name));
+  const agent = branches.filter((b) => b.agent && named(b.name));
+  const remote = branches.filter((b) => b.remote && named(b.name));
+  const shownTags = tags.filter((t) => named(t.name));
+  const shownWorktrees = worktrees.filter((w) => named(w.branch ?? w.path));
   const remotes = useMemo(() => new Set(remote.map((b) => b.name)), [branches]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const branchMenu = (b: BranchInfo): MenuItem[] => {
@@ -198,7 +270,7 @@ export function HistorySection() {
   const branchRow = (b: BranchInfo) => (
     <div
       key={b.name}
-      className={`branch-row${b.current ? " current" : ""}${dropOn === b.name ? " drop-target" : ""}`}
+      className={`branch-row${b.current ? " current" : ""}${b.name === defaultName && !b.remote ? " default-branch" : ""}${dropOn === b.name ? " drop-target" : ""}`}
       onContextMenu={(e) => shell.menu(e, branchMenu(b))}
       draggable
       onDragStart={(e) => {
@@ -268,24 +340,29 @@ export function HistorySection() {
         <div className="sidebar-search">
           <Search size={13} />
           <input
-            value={query}
-            placeholder="Search commits, or path:file"
-            title="Message, author or hash — path:src/main.rs shows the commits that touched a file"
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") nextHit();
-              if (e.key === "Escape") setQuery("");
-            }}
+            value={filter}
+            placeholder="Filter branches and tags"
+            title="Show the branches, tags and worktrees whose name has all of these words. Search the commits themselves above the graph (⌘F)."
+            onChange={(e) => setFilter(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && setFilter("")}
           />
-          {hits && <span className="num muted small-text">{hits.size}</span>}
         </div>
         <div className="task-list">
-          <div className="list-label">Branches</div>
+          {defaultBranch && (
+            <>
+              <div className="list-label">Default branch</div>
+              {branchRow(defaultBranch)}
+            </>
+          )}
+          {(local.length > 0 || !filter) && <div className="list-label">Branches</div>}
           {local.map(branchRow)}
+          {filter && local.length + agent.length + remote.length + shownTags.length + shownWorktrees.length === 0 && (
+            <p className="hint">Nothing is named like that.</p>
+          )}
           <Shelf
             label="Agent branches"
             count={agent.length}
-            open={shelves.agent}
+            open={shelves.agent || !!filter}
             onToggle={() => setShelves({ ...shelves, agent: !shelves.agent })}
           >
             {agent.map(branchRow)}
@@ -293,18 +370,18 @@ export function HistorySection() {
           <Shelf
             label="Remote"
             count={remote.length}
-            open={shelves.remote}
+            open={shelves.remote || !!filter}
             onToggle={() => setShelves({ ...shelves, remote: !shelves.remote })}
           >
             {remote.map(branchRow)}
           </Shelf>
           <Shelf
             label="Tags"
-            count={tags.length}
-            open={shelves.tags}
+            count={shownTags.length}
+            open={shelves.tags || !!filter}
             onToggle={() => setShelves({ ...shelves, tags: !shelves.tags })}
           >
-            {tags.map((t) => (
+            {shownTags.map((t) => (
               <div key={t.name} className="branch-row" onContextMenu={(e) => shell.menu(e, tagMenu(shell, t, showCommit))}>
                 <button className="branch-name" onClick={() => showCommit(t.hash)} title={`Show ${t.name} — right-click for more`}>
                   <Tag size={12} />
@@ -320,11 +397,11 @@ export function HistorySection() {
           </Shelf>
           <Shelf
             label="Worktrees"
-            count={worktrees.length > 1 ? worktrees.length : 0}
-            open={shelves.worktrees}
+            count={worktrees.length > 1 ? shownWorktrees.length : 0}
+            open={shelves.worktrees || !!filter}
             onToggle={() => setShelves({ ...shelves, worktrees: !shelves.worktrees })}
           >
-            {worktrees.map((w) => (
+            {shownWorktrees.map((w) => (
               <div
                 key={w.path}
                 className={`branch-row${w.current ? " current" : ""}`}
@@ -401,6 +478,28 @@ export function HistorySection() {
               <EmptyState title="No commits yet">Make the first one in Changes.</EmptyState>
             ) : tab === "graph" ? (
               <div className="graph-wrap">
+                <GraphSearch
+                  query={query}
+                  onQuery={(q) => {
+                    setQuery(q);
+                    if (!q) setHits(null);
+                  }}
+                  inputRef={searchInput}
+                  hits={hitStats}
+                  searching={searching}
+                  matchesOnly={matchesOnly}
+                  onMatchesOnly={setMatchesOnly}
+                  onStep={stepHits}
+                  onLoadMore={graph.more ? () => setLimit((l) => l + PAGE) : null}
+                  defaultBranch={defaultName}
+                  onDefault={() => defaultName && showBranch(defaultName)}
+                />
+                {hits && matchesOnly && hitRows.length === 0 ? (
+                  <div className="graph-no-matches muted">
+                    {searching ? "Searching…" : `No commit matches “${query.trim()}”.`}
+                    {!searching && hits.size > 0 && " The matches are further back than the graph has loaded."}
+                  </div>
+                ) : (
                 <Graph
                   ref={graphRef}
                   graph={graph}
@@ -411,6 +510,8 @@ export function HistorySection() {
                     setTab("commit");
                   }}
                   hits={hits}
+                  flat={matchesOnly}
+                  terms={terms}
                   currentBranch={current}
                   remotes={remotes}
                   nowMs={now}
@@ -418,7 +519,8 @@ export function HistorySection() {
                   onContext={(hash, e) => shell.menu(e, commitMenu(hash))}
                   onDropBranch={(source, target, e) => dropMenu(source, target, e)}
                 />
-                {graph.more && (
+                )}
+                {graph.more && !hits && (
                   <Button
                     className="link load-more"
                     busy={loadingMore}

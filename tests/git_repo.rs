@@ -537,3 +537,26 @@ fn unstaged_patch_leaves_out_conflicted_files() {
     assert!(patch.contains("other.txt"));
     assert!(!patch.contains("f.txt"));
 }
+
+#[test]
+fn search_matches_every_word_anywhere() {
+    let f = fixture();
+    let a = f.commit_file("a.txt", "1\n", "Add the login page");
+    f.commit_file("b.txt", "2\n", "Fix the signup page");
+    f.repo.create_tag("v1-login", &a, None).unwrap();
+    // Words can be far apart, and in any order.
+    assert_eq!(f.repo.search_commits("page login", 10).unwrap(), vec![a.clone()]);
+    assert_eq!(f.repo.search_commits("the  PAGE", 10).unwrap().len(), 2);
+    assert!(f.repo.search_commits("login signup", 10).unwrap().is_empty());
+    // The name of a tag finds the commit it points at.
+    assert_eq!(f.repo.search_commits("v1-login", 10).unwrap(), vec![a.clone()]);
+    // So does a branch name.
+    let b = f.repo.head_sha().unwrap();
+    f.repo.create_branch_at("feature/avatars", &b).unwrap();
+    assert_eq!(f.repo.search_commits("avatars", 10).unwrap(), vec![b]);
+    assert!(f.repo.search_commits("   ", 10).unwrap().is_empty());
+    // Code that was added or removed.
+    f.commit_file("c.txt", "needle_in_haystack\n", "Add data");
+    assert_eq!(f.repo.search_code("needle_in", 10).unwrap().len(), 1);
+    assert!(f.repo.search_code("", 10).unwrap().is_empty());
+}

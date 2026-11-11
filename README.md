@@ -80,9 +80,15 @@ section, run as end-to-end tests.
   apply and keep, drop
 - **History** (⌘4) — the commit graph with `main` / `master` / `trunk` pinned to
   the leftmost lane and branches colored by prefix (all `feat/*` share a
-  hue). Search by message, author or hash, or `path:src/main.rs` for the
-  commits that touched a file. The sidebar has local, agent and remote
-  branches, tags and linked worktrees. Right-click a branch to check it out,
+  hue). The search above the graph (⌘F or `/`) wants every word you type to
+  match the message, author, hash, or a branch or tag name; it lists just the
+  matches, with the words marked (switch off *Only matches* to see them in
+  the graph), and Enter / Shift+Enter step through them. `path:src/main.rs`
+  finds the commits that touched a file and `code:needle` the ones that added
+  or removed some text. *Go to main* (the default branch) is always one click
+  away, and the sidebar pins it above the rest. The sidebar has local, agent
+  and remote branches, tags and linked worktrees, with a filter on their
+  names. Right-click a branch to check it out,
   merge it, rebase onto it, rename or delete it, or delete it from the
   remote, or drag it onto another branch to merge it there or open a pull
   request between the two. Right-click a commit to branch or tag it, check
