@@ -359,6 +359,20 @@ export function App() {
   const everyRepo = [...new Set(workspaces.list.flatMap((w) => w.repos))];
   const inbox = useInbox(everyRepo, !!repo);
 
+  // Automations (#151) start tasks from their schedules and from CI failures,
+  // in every repository, while the app is open.
+  const everyKey = [...everyRepo].sort().join("\n");
+  usePoll(
+    async () => {
+      const started = await api.automationsTick(everyRepo);
+      for (const s of started) toast(`${s.automation} started ${s.task}`);
+      if (started.length) reloadTasks();
+    },
+    60_000,
+    [everyKey],
+    !!repo,
+  );
+
   const undo = useCallback(() => {
     track("Undoing…", api.undo)
       .then(async (msg) => {

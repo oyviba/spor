@@ -4,6 +4,7 @@
 //! core, and these only turn it into JSON and record what Undo needs.
 
 mod agents;
+mod automations;
 mod cache;
 mod changes;
 mod github;
@@ -469,6 +470,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             current_repo,
+            automations::automations,
+            automations::automations_tick,
+            automations::automation_enable,
+            automations::automation_run,
             open_repo,
             repo_state,
             undo,

@@ -636,7 +636,7 @@ fn mode_name(mode: Mode) -> &'static str {
     }
 }
 
-fn mode_of(name: &str) -> Result<Mode, String> {
+pub(crate) fn mode_of(name: &str) -> Result<Mode, String> {
     Mode::ALL
         .into_iter()
         .find(|m| mode_name(*m) == name)

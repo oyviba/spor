@@ -9,6 +9,8 @@ import type {
   FileEntry,
   Graph,
   InboxGithub,
+  AutomationStarted,
+  Automations,
   InboxTask,
   Issue,
   IssueDetail,
@@ -109,6 +111,14 @@ export const api = {
   inboxTasks: (roots: string[]) => call<InboxTask[]>("inbox_tasks", { roots }),
   /** Review requests and failing runs on your branches, across `roots`. */
   inboxGithub: (roots: string[]) => call<InboxGithub>("inbox_github", { roots }),
+
+  // Automations (#151)
+  /** Start what's due in every repository in `roots`; what it started. */
+  automationsTick: (roots: string[]) => call<AutomationStarted[]>("automations_tick", { roots }),
+  automations: (root: string) => call<Automations>("automations", { root }),
+  automationEnable: (root: string, name: string, enabled: boolean) =>
+    call<void>("automation_enable", { root, name, enabled }),
+  automationRun: (root: string, name: string) => call<AutomationStarted>("automation_run", { root, name }),
 
   // History
   graph: (limit: number) => call<Graph>("graph", { limit }),

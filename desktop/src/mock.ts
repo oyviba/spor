@@ -611,6 +611,20 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         return repo;
       case "open_repo":
         return { ...repo, root: args.path as string };
+      case "automations":
+        return {
+          items: [
+            { name: "weekly-deps", on: "schedule weekly mon 09:00", prompt: "Update dependencies.", enabled: true, started: null, task: null, task_open: false, note: null },
+            { name: "fix-main", on: "ci-failed main", prompt: "CI failed on {branch}.", enabled: false, started: null, task: null, task_open: false, note: null },
+          ],
+          errors: [],
+        };
+      case "automations_tick":
+        return [];
+      case "automation_enable":
+        return null;
+      case "automation_run":
+        return { repo: fixtures?.repo.root ?? repo.root, automation: String(args.name ?? ""), task: "mock-task" };
       case "inbox_tasks":
         return tasks
           .filter((t) => !t.summary.landed)
