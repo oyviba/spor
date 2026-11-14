@@ -1,0 +1,73 @@
+# A release: push a tag like v0.2.0. Builds the universal macOS app, signs
+# the update with the updater key, and makes a *draft* GitHub release with
+# the bundle, its signature and `latest.json`, which running copies of the
+# app read (#152). Publish the draft when it looks right: the app looks at
+# the latest published release.
+#
+# One-time setup (see desktop/README.md, "Releasing"):
+#   - secret   TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD)
+#   - variable SPOR_UPDATER_PUBKEY, the matching public key
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - name: Check the key is there
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PUB: ${{ vars.SPOR_UPDATER_PUBKEY }}
+        run: |
+          test -n "$KEY" || { echo "::error::secret TAURI_SIGNING_PRIVATE_KEY is missing"; exit 1; }
+          test -n "$PUB" || { echo "::error::variable SPOR_UPDATER_PUBKEY is missing"; exit 1; }
+      - name: Use the tag's version, and make the update artifacts
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          node -e '
+            const fs = require("fs");
+            const p = "src-tauri/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(p, "utf8"));
+            c.version = process.argv[1];
+            c.bundle.createUpdaterArtifacts = true;
+            fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+          ' "$version"
+      - name: Install UI dependencies
+        run: pnpm install --frozen-lockfile
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SPOR_UPDATER_PUBKEY: ${{ vars.SPOR_UPDATER_PUBKEY }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: Spor ${{ github.ref_name }}
+          releaseDraft: true
+          includeUpdaterJson: true
+          args: --target universal-apple-darwin --bundles app

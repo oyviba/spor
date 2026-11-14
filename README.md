@@ -146,6 +146,15 @@ Across the app:
     behind, the toast offers *Pull and push*. All of these are in ⌘K too
 - **Credentials.** The app has no terminal, so a passphrase, password or
   new-host question from git or ssh opens a dialog (an askpass bridge)
+- **Automations** — tasks that start themselves. A repository's checked-in
+  `.spor/automations` lists them, each with a trigger (`schedule daily|weekdays
+  09:00`, `schedule weekly mon 09:00`, or `ci-failed [branch]`) and a prompt
+  (`{branch}`, `{workflow}`, `{run_url}` and `{date}` are filled in). They
+  run while spor is open, never start a second task while the last one is
+  open, don't fire for what happened before they were added, and never land
+  anything: the task ends up in the Inbox like any other. The Work sidebar
+  lists them, with *Run now* and an on/off switch. The format is described in
+  `src/automations.rs`
 - **Workspaces** — named, colored groups of repositories on the rail, like
   Slack's (⌘⌥1–9), each reopening the repository last open in it. Beside
   the rail, a column lists the workspace's repositories with their branch,

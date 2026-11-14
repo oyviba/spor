@@ -632,3 +632,39 @@ export interface RuleSuggestion {
   rule: string;
   tasks: string[];
 }
+
+/** An entry in a repository's `.spor/automations` (#151). */
+export interface AutomationInfo {
+  name: string;
+  /** The trigger as written after `on:`. */
+  on: string;
+  prompt: string;
+  enabled: boolean;
+  /** When it last started a task (seconds), and that task. */
+  started: number | null;
+  task: string | null;
+  /** Its last task is still open, so the next start is held back. */
+  task_open: boolean;
+  /** Why it last held back or failed to start. */
+  note: string | null;
+}
+
+export interface Automations {
+  items: AutomationInfo[];
+  /** Blocks of the file that couldn't be read. */
+  errors: string[];
+}
+
+export interface AutomationStarted {
+  repo: string;
+  automation: string;
+  task: string;
+}
+
+/** Whether a newer version of the app is out (#152). */
+export interface UpdateCheck {
+  /** False for builds without an update key. */
+  enabled: boolean;
+  current: string;
+  available: { version: string; notes: string | null } | null;
+}

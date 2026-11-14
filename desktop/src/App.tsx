@@ -9,6 +9,7 @@ import { RepoPanel } from "./shared/Layout";
 import { BranchBar, runSync } from "./shared/BranchBar";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { AgentLimit } from "./sections/agents/AgentLimit";
+import { UpdatesPage, useUpdates } from "./shared/Updates";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
 import { AppearancePage } from "./shared/ThemeEditor";
@@ -358,6 +359,24 @@ export function App() {
   // What needs you in every repository of every workspace: the Inbox, and its badge.
   const everyRepo = [...new Set(workspaces.list.flatMap((w) => w.repos))];
   const inbox = useInbox(everyRepo, !!repo);
+
+  // Updates (#152): checked daily, installed when no agent is running.
+  const running = (inbox.tasks ?? []).filter((t) => t.run === "running").length;
+  const updates = useUpdates(running, toast);
+
+  // Automations (#151) start tasks from their schedules and from CI failures,
+  // in every repository, while the app is open.
+  const everyKey = [...everyRepo].sort().join("\n");
+  usePoll(
+    async () => {
+      const started = await api.automationsTick(everyRepo);
+      for (const s of started) toast(`${s.automation} started ${s.task}`);
+      if (started.length) reloadTasks();
+    },
+    60_000,
+    [everyKey],
+    !!repo,
+  );
 
   const undo = useCallback(() => {
     track("Undoing…", api.undo)
@@ -720,6 +739,7 @@ export function App() {
       ),
     },
     { id: "agents", label: "Agents", render: () => <AgentLimit /> },
+    { id: "updates", label: "Updates", render: () => <UpdatesPage u={updates} /> },
     { id: "diffs", label: "Diffs", render: () => <DiffSettings /> },
     { id: "history", label: "History graph", render: () => <GraphOptionsPanel /> },
     {

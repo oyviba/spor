@@ -4,12 +4,14 @@
 //! core, and these only turn it into JSON and record what Undo needs.
 
 mod agents;
+mod automations;
 mod cache;
 mod changes;
 mod github;
 mod history;
 mod inbox;
 mod undo;
+mod updates;
 mod watch;
 mod work;
 
@@ -456,8 +458,11 @@ pub fn run() {
         tidy(&repo);
         *app.repo.lock().unwrap() = Some(repo);
     }
-    tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
+    if let Some(updater) = updates::plugin() {
+        builder = builder.plugin(updater);
+    }
+    builder
         .manage(app)
         .setup(|tauri| {
             let handle = tauri.handle();
@@ -469,6 +474,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             current_repo,
+            updates::update_check,
+            updates::update_install,
+            automations::automations,
+            automations::automations_tick,
+            automations::automation_enable,
+            automations::automation_run,
             open_repo,
             repo_state,
             undo,

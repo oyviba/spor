@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod askpass;
+pub mod automations;
 pub mod checkpoint;
 pub mod color;
 pub mod conflict;
