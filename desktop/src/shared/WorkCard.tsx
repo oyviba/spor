@@ -4,7 +4,7 @@
 // part lives. What only one section does (landing options, re-runs,
 // labels) stays in that section's own card, below this one.
 
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import { api } from "../api";
 import type { WorkItemInfo } from "../types";
 import { useShell, type SectionId, type Target } from "./app";
@@ -29,6 +29,11 @@ const CHECKS = {
   running: { ci: "running", label: "Checks running" },
 } as const;
 
+/** On the work page: show one of its own tabs, if it has it (true when it
+ * did). The card's pull request and checks are on the page already, so
+ * they open there instead of sending you to another section. */
+export const ShowTab = createContext<((tab: "discussion" | "checks") => boolean) | null>(null);
+
 /** A row that links somewhere, unless it's where the card is shown. */
 function Row({
   here,
@@ -36,16 +41,20 @@ function Row({
   onClick,
   title,
   className = "",
+  tab,
   children,
 }: {
   here: boolean;
   to?: Target;
   onClick?: () => void;
+  /** The work page's tab that shows the same, when the card is on one. */
+  tab?: "discussion" | "checks";
   title?: string;
   className?: string;
   children: ReactNode;
 }) {
   const shell = useShell();
+  const showTab = useContext(ShowTab);
   if (here || (!to && !onClick))
     return (
       <div className={`inspector-row ${className}`} title={title}>
@@ -56,7 +65,7 @@ function Row({
     <button
       className={`inspector-row action ${className}`}
       title={title}
-      onClick={onClick ?? (() => shell.go(to!, { browse: to!.section !== "work" }))}
+      onClick={onClick ?? (() => (tab && showTab?.(tab)) || shell.go(to!, { browse: to!.section !== "work" }))}
     >
       {children}
     </button>
@@ -77,7 +86,11 @@ export function WorkCard({
 }) {
   const shell = useShell();
   const waiting = waitingText(item);
-  const step = actions ? nextStep(item, from, shell.state?.branch) : null;
+  const showTab = useContext(ShowTab);
+  const next = actions ? nextStep(item, from, shell.state?.branch) : null;
+  // On the work page the pull request is the page itself: a step to it in
+  // Pull requests would only take you away from it.
+  const step = showTab && next?.target.section === "pulls" ? null : next;
   const pr = item.pull;
   const checks = item.checks ? CHECKS[item.checks] : null;
   return (
@@ -133,7 +146,7 @@ export function WorkCard({
           </div>
         )}
         {pr && (
-          <Row here={from === "pulls"} to={{ section: "pulls", number: pr.number }} title={pr.title}>
+          <Row here={from === "pulls"} to={{ section: "pulls", number: pr.number }} tab="discussion" title={pr.title}>
             <PullRequest size={13} />
             <span>
               Pull request <span className="num">#{pr.number}</span>
@@ -146,6 +159,7 @@ export function WorkCard({
           <Row
             here={from === "actions"}
             to={{ section: "actions", branch: item.branch }}
+            tab="checks"
             className={item.checks === "failed" ? "bad" : ""}
           >
             <CiIcon status={checks.ci} size={13} />
@@ -155,7 +169,10 @@ export function WorkCard({
       </div>
       {step && (
         <div className="inspector-actions">
-          <Button className="primary" onClick={() => shell.go(step.target, { browse: step.browse })}>
+          <Button
+            className="primary"
+            onClick={() => (step.target.section === "actions" && showTab?.("checks")) || shell.go(step.target, { browse: step.browse })}
+          >
             {step.label}
           </Button>
         </div>

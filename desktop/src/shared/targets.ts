@@ -1,9 +1,9 @@
 // Where a link really goes (#83): a pull request, an issue or a run that
 // belongs to a work item opens that item's page in Work. Only what belongs
-// to none (an issue nobody has started, a run on `main`) stays in its
-// browser section.
+// to none (an issue nobody has started, a run on `main`, a closed pull
+// request) stays in its browser section.
 
-import type { TaskSummary } from "../types";
+import type { TaskSummary, WorkItemInfo } from "../types";
 import type { Target } from "./app";
 
 /** The first task that matches, one still open before a landed one
@@ -27,8 +27,15 @@ export function workItemOf(target: Target, tasks: TaskSummary[]): TaskSummary | 
   }
 }
 
-/** The target, sent to its work item's page when it has one. */
-export function resolveTarget(target: Target, tasks: TaskSummary[]): Target {
+/** The target, sent to its work item's page when it has one. An open pull
+ * request is in Work's list (a teammate's, yours, a branch's), so it opens
+ * there too, beside the rest of your work, rather than in the browser. */
+export function resolveTarget(target: Target, tasks: TaskSummary[], work: WorkItemInfo[] = []): Target {
   const task = workItemOf(target, tasks);
-  return task ? { section: "work", taskId: task.id } : target;
+  if (task) return { section: "work", taskId: task.id };
+  if (target.section === "pulls" && target.number != null) {
+    const item = work.find((w) => w.pull?.number === target.number);
+    if (item?.pull && (item.pull.state === "open" || item.pull.state === "draft")) return { section: "work", number: target.number };
+  }
+  return target;
 }

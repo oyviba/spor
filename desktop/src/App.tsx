@@ -3,7 +3,7 @@ import { api, errorText, type SyncAction } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "./types";
 import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
-import { Alert, Bot, Branch, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, Sparkle, X } from "./shared/Icons";
+import { Alert, Bot, Branch, Chevron, ChevronLeft, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, Sparkle, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
 import { RepoPanel } from "./shared/Layout";
 import { BranchBar, runSync } from "./shared/BranchBar";
@@ -16,6 +16,7 @@ import { useApplyTheme } from "./shared/theme";
 import { display, effective, isMac, keepChanges, lookup, shortcutOf } from "./shared/keys";
 import { getSettings, setSettings, useSettings } from "./shared/settings";
 import { resolveTarget } from "./shared/targets";
+import { EMPTY_NAV, leave, stepBack, stepForward, type Nav, type Place } from "./shared/nav";
 import {
   WORKSPACE_COLORS,
   activeWorkspace,
@@ -189,6 +190,11 @@ export function App() {
   }, [section]); // eslint-disable-line react-hooks/exhaustive-deps
   const [reposShown, setReposShown] = useStored("repos.shown", true);
   const [target, setTarget] = useState<Target & { seq: number }>({ section: "work", seq: 0 });
+  // Back and forward (⌘[ ⌘]): the places you were, with what was open in
+  // each, so a link to another section never loses where you came from.
+  const [nav, setNav] = useState<Nav>(EMPTY_NAV);
+  /** What each section has open, as it last said (`useHere`). */
+  const places = useRef<Partial<Record<SectionId, { target: Target; label: string }>>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [changed, setChanged] = useState(0);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
@@ -335,8 +341,7 @@ export function App() {
           run: () => {
             // From Agents, answer there, not in the repository's Work.
             if (localStorage.getItem("spor.section") === '"agents"' && here.current) return setAgentOpen({ repo: here.current, taskId: t.id });
-            setSection("work");
-            setTarget((old) => ({ section: "work", taskId: t.id, seq: old.seq + 1 }));
+            goRef.current?.({ section: "work", taskId: t.id });
           },
         });
       }
@@ -386,15 +391,16 @@ export function App() {
   /** An Inbox row: its workspace and repository (switching if need be),
    * then its section. */
   const openItem = async (item: Pick<InboxItem, "repo" | "target">) => {
+    remember();
     if (item.repo !== repo?.root && !(await openRepo(item.repo))) return;
     const owner = workspaces.list.find((w) => w.repos.includes(item.repo));
     if (owner && owner.id !== workspaces.active) switchTo(owner.id);
     // Its work item if it has one, from the tasks of the repository it's in.
     const to =
       item.repo === repo?.root
-        ? resolveTarget(item.target, tasks)
-        : await api.listTasks().then(
-            (t) => resolveTarget(item.target, t),
+        ? resolveTarget(item.target, tasks, work)
+        : await Promise.all([api.listTasks(), api.workItems(seenTasks()).catch(() => [])]).then(
+            ([t, w]) => resolveTarget(item.target, t, w),
             () => item.target,
           );
     setSection(to.section);
@@ -412,6 +418,69 @@ export function App() {
       if (owner && owner.id !== workspaces.active) switchTo(owner.id);
     });
   }, [section, agentOpen?.repo, repo?.root]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Where you are now: the section, what it has open, and its repository. */
+  const currentPlace = (): Place => {
+    const name = SECTIONS.find((s) => s.id === section)?.label ?? section;
+    if (section === "inbox") return { repo: null, target: { section: "inbox" }, label: name };
+    if (section === "agents") {
+      const title = agentOpen ? (tasks.find((t) => t.id === agentOpen.taskId)?.title ?? agentOpen.taskId) : null;
+      return { repo: agentOpen?.repo ?? null, target: { section: "agents" }, label: title ? `${name} · ${title}` : name, agentOpen };
+    }
+    const p = places.current[section];
+    return { repo: repo?.root ?? null, target: p?.target ?? { section }, label: p?.label ? `${name} · ${p.label}` : name };
+  };
+  /** About to go somewhere: keep where you are for Back. */
+  const remember = () => setNav((n) => leave(n, currentPlace()));
+  /** A section from the column, the rail or a shortcut, as it was left. */
+  const openSection = (id: SectionId) => {
+    if (id === section) return;
+    remember();
+    setSection(id);
+  };
+  /** Somewhere in particular (a link, a toast's button). */
+  const navigate = (to: Target) => {
+    remember();
+    setSection(to.section);
+    setTarget((old) => ({ ...to, seq: old.seq + 1 }));
+  };
+  /** Back (or forward) to a place: its repository, its section, and what was open there. */
+  const restore = async (p: Place) => {
+    if (p.repo && p.repo !== repo?.root) {
+      if (!(await openRepo(p.repo))) return;
+      const owner = workspaces.list.find((w) => w.repos.includes(p.repo!));
+      if (owner && owner.id !== workspaces.active) switchTo(owner.id);
+    }
+    if (p.target.section === "agents") setAgentOpen(p.agentOpen ?? null);
+    setSection(p.target.section);
+    setTarget((old) => ({ ...p.target, seq: old.seq + 1 }));
+  };
+  const goBack = () => {
+    const step = stepBack(nav, currentPlace());
+    if (!step) return;
+    setNav(step.nav);
+    void restore(step.to);
+  };
+  const goForward = () => {
+    const step = stepForward(nav, currentPlace());
+    if (!step) return;
+    setNav(step.nav);
+    void restore(step.to);
+  };
+  const noteHere = useCallback((t: Target, label: string) => {
+    places.current[t.section] = { target: t, label };
+  }, []);
+  /** Open a repository from the column or the switcher; the one open goes
+   * back to its section from the Inbox or Agents. */
+  const switchRepo = (path: string) => {
+    if (path === repo?.root) {
+      if (global) openSection(repoSection);
+      return;
+    }
+    remember();
+    if (global) setSection(repoSection);
+    void openRepo(path);
+  };
 
   const shell: Shell | null = useMemo(
     () =>
@@ -462,13 +531,10 @@ export function App() {
                 await refresh();
               }
             },
-            go: (t, opts) => {
-              const to = opts?.browse ? t : resolveTarget(t, tasks);
-              setSection(to.section);
-              setTarget((old) => ({ ...to, seq: old.seq + 1 }));
-            },
+            go: (t, opts) => navigate(opts?.browse ? t : resolveTarget(t, tasks, work)),
+            here: noteHere,
             target,
-            openRepo,
+            openRepo: switchRepo,
             recent,
             forgetRepo: removeRepo,
             workspaceName: ws.name,
@@ -482,13 +548,14 @@ export function App() {
             confirm: (spec) => new Promise((resolve) => setDialog({ kind: "confirm", ...spec, resolve })),
           }
         : null,
-    [repo, state, refresh, tasks, work, toast, fail, undo, track, target, workspaces], // eslint-disable-line react-hooks/exhaustive-deps
+    [repo, state, refresh, tasks, work, toast, fail, undo, track, target, workspaces, section, agentOpen, nav], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   /** Switch workspace, opening the repository last open there. */
   const goToWorkspace = (id: string) => {
     const target = workspaces.list.find((w) => w.id === id);
     if (!target) return;
+    if (id !== workspaces.active) remember();
     switchTo(id);
     if (global) setSection(repoSection);
     const path = landing(target);
@@ -565,8 +632,10 @@ export function App() {
       group: "Sections",
       keys: x.key,
       whileTyping: true,
-      run: () => setSection(x.id),
+      run: () => openSection(x.id),
     })),
+    { id: "back", label: "Back", group: "Navigation", keys: "Mod+[", run: () => goBack() },
+    { id: "forward", label: "Forward", group: "Navigation", keys: "Mod+]", run: () => goForward() },
     { id: "palette", label: "Command palette", group: "App", keys: "Mod+K", whileTyping: true, run: () => openPalette() },
     { id: "settings", label: "Settings", group: "App", keys: "Mod+,", whileTyping: true, run: () => setSettingsPage("appearance") },
     { id: "shortcuts", label: "Keyboard shortcuts", group: "App", keys: "Mod+/", whileTyping: true, run: () => setSettingsPage("shortcuts") },
@@ -625,6 +694,18 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // The mouse's back and forward buttons.
+  useEffect(() => {
+    const onMouse = (e: MouseEvent) => {
+      if (e.button === 3) goBack();
+      else if (e.button === 4) goForward();
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("mouseup", onMouse);
+    return () => window.removeEventListener("mouseup", onMouse);
   });
 
   // The rail's order and shortcuts moved (#83). Once: keep the shortcuts the
@@ -807,7 +888,7 @@ export function App() {
       <button
         key={s.id}
         className={`nav-section ${where === "panel" ? "repo-section" : "rail-item"}${s.browser ? " browser" : ""}${section === s.id ? " active" : ""}`}
-        onClick={() => setSection(s.id)}
+        onClick={() => openSection(s.id)}
         title={where === "panel" ? keys || undefined : keys ? `${s.label} (${keys})` : s.label}
         aria-label={s.label}
         aria-current={section === s.id ? "page" : undefined}
@@ -825,6 +906,35 @@ export function App() {
         {sectionLink(s, where)}
       </Fragment>
     ));
+
+  /** Back (and Forward, once you've gone back), at the left of the top bar. */
+  const backTo = nav.back[nav.back.length - 1];
+  const placeName = (p: Place) =>
+    p.repo && p.repo !== repo?.root && p.target.section !== "agents" ? `${p.repo.split("/").pop()} › ${p.label}` : p.label;
+  const navButtons = (
+    <span className="nav-buttons">
+      <button
+        className="nav-back"
+        onClick={goBack}
+        disabled={!backTo}
+        title={backTo ? `Back to ${placeName(backTo)}${keyLabel("back") ? ` (${keyLabel("back")})` : ""}` : "Nothing to go back to"}
+        aria-label={backTo ? `Back to ${placeName(backTo)}` : "Back"}
+      >
+        <ChevronLeft size={14} />
+        {backTo && <span className="nav-back-label truncate">{placeName(backTo)}</span>}
+      </button>
+      {nav.forward.length > 0 && (
+        <button
+          className="nav-forward icon-button"
+          onClick={goForward}
+          title={`Forward to ${placeName(nav.forward[0])}${keyLabel("forward") ? ` (${keyLabel("forward")})` : ""}`}
+          aria-label={`Forward to ${placeName(nav.forward[0])}`}
+        >
+          <Chevron size={14} />
+        </button>
+      )}
+    </span>
+  );
 
   if (repo === undefined) return <div className="boot" />;
   if (repo === null || !shell)
@@ -848,14 +958,14 @@ export function App() {
 
   return (
     <ShellContext.Provider value={shell}>
-      <div className={`app ${global ? "global-view" : reposShown ? "with-repos" : "with-strip"}`}>
+      <div className={`app ${reposShown ? "with-repos" : "with-strip"}${global ? " global-view" : ""}`}>
         <nav className="rail" aria-label="Workspaces">
           {workspaceRail}
           {SECTIONS.filter((s) => s.global).map((s) => sectionLink(s, "rail"))}
           <span className="flex-1" />
           {settingsButton}
         </nav>
-        {global ? null : reposShown ? (
+        {reposShown ? (
           <RepoPanel color={WORKSPACE_COLORS[ws.color]} changed={changed}>
             {repoSections("panel")}
           </RepoPanel>
@@ -873,7 +983,13 @@ export function App() {
           </nav>
         )}
         <div className="section">
-          {state && !global && <BranchBar state={state} />}
+          {global ? (
+            <ScopeBar lead={navButtons} title={SECTIONS.find((s) => s.id === section)!.label} scope="Every repository in every workspace" />
+          ) : state ? (
+            <BranchBar state={state} lead={navButtons} />
+          ) : (
+            <ScopeBar lead={navButtons} title={repo.name} />
+          )}
           {state?.operation && !global && <OperationBanner state={state} />}
           <div className="section-body">
             <Sections
@@ -938,6 +1054,18 @@ function Sections({ section, globals }: { section: SectionId; globals: Record<Gl
         );
       })}
     </>
+  );
+}
+
+/** The top bar of a view that spans every repository (the Inbox, Agents):
+ * the same height and place as the branch bar, so nothing below it moves. */
+function ScopeBar({ lead, title, scope }: { lead: React.ReactNode; title: string; scope?: string }) {
+  return (
+    <div className="branch-bar scope-bar">
+      {lead}
+      <span className="branch-bar-name">{title}</span>
+      {scope && <span className="branch-bar-text truncate">{scope}</span>}
+    </div>
   );
 }
 

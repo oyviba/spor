@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Pull } from "../../types";
-import { useShell } from "../../shared/app";
+import { useHere, useShell } from "../../shared/app";
 import { useChanged, usePoll, useStored } from "../../shared/hooks";
 import { EmptyState, ListLoading, SidebarHeader } from "../../shared/Layout";
 import { StatusPill } from "../../shared/StatusPill";
@@ -48,6 +48,11 @@ export function PullsSection() {
   useChanged(() => {
     if (shell.target.section === "pulls" && shell.target.number) setSelected(shell.target.number);
   }, [shell.target.seq]);
+  const picked = pulls?.find((p) => p.number === selected);
+  useHere(
+    selected == null ? { section: "pulls" } : { section: "pulls", number: selected },
+    selected == null ? "" : picked ? `#${selected} ${picked.title}` : `#${selected}`,
+  );
 
   return (
     <>
