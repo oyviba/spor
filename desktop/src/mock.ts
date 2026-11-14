@@ -611,6 +611,10 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         return repo;
       case "open_repo":
         return { ...repo, root: args.path as string };
+      case "update_check":
+        return { enabled: false, current: "0.1.0", available: null };
+      case "update_install":
+        return null;
       case "automations":
         return {
           items: [

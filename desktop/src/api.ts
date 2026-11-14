@@ -11,6 +11,7 @@ import type {
   InboxGithub,
   AutomationStarted,
   Automations,
+  UpdateCheck,
   InboxTask,
   Issue,
   IssueDetail,
@@ -111,6 +112,11 @@ export const api = {
   inboxTasks: (roots: string[]) => call<InboxTask[]>("inbox_tasks", { roots }),
   /** Review requests and failing runs on your branches, across `roots`. */
   inboxGithub: (roots: string[]) => call<InboxGithub>("inbox_github", { roots }),
+
+  // Updates (#152)
+  updateCheck: () => call<UpdateCheck>("update_check"),
+  /** Downloads, installs and restarts; only returns when it fails. */
+  updateInstall: () => call<void>("update_install"),
 
   // Automations (#151)
   /** Start what's due in every repository in `roots`; what it started. */

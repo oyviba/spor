@@ -660,3 +660,11 @@ export interface AutomationStarted {
   automation: string;
   task: string;
 }
+
+/** Whether a newer version of the app is out (#152). */
+export interface UpdateCheck {
+  /** False for builds without an update key. */
+  enabled: boolean;
+  current: string;
+  available: { version: string; notes: string | null } | null;
+}
