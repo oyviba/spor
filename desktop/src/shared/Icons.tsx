@@ -26,6 +26,7 @@ function Svg({ size = 14, children, ...rest }: P & { children: React.ReactNode }
 
 export const Plus = (p: P) => <Svg {...p}><path d="M12 5v14M5 12h14" /></Svg>;
 export const Chevron = (p: P) => <Svg {...p}><path d="m9 18 6-6-6-6" /></Svg>;
+export const ChevronLeft = (p: P) => <Svg {...p}><path d="m15 18-6-6 6-6" /></Svg>;
 export const ChevronDown = (p: P) => <Svg {...p}><path d="m6 9 6 6 6-6" /></Svg>;
 export const Check = (p: P) => <Svg {...p}><path d="M20 6 9 17l-5-5" /></Svg>;
 export const X = (p: P) => <Svg {...p}><path d="M18 6 6 18M6 6l12 12" /></Svg>;

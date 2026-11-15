@@ -2,7 +2,7 @@
 // state, toasts, the shared undo, and a way to send the user to another
 // section ("open this run in Actions").
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useEffect } from "react";
 import type { RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "../types";
 import type { MenuItem } from "./Overlay";
 
@@ -16,7 +16,7 @@ export type Target =
   | { section: "issues"; number?: number }
   | { section: "pulls"; number?: number; /** Its head, to find its work item. */ branch?: string }
   | { section: "actions"; runId?: number; jobId?: number; /** The run's branch, to find its work item. */ branch?: string }
-  | { section: "work"; taskId?: string; number?: number; branch?: string };
+  | { section: "work"; taskId?: string; number?: number; branch?: string; /** The page to start something new. */ fresh?: boolean };
 
 export interface ToastAction {
   label: string;
@@ -62,6 +62,8 @@ export interface Shell {
    * browser section itself ("Open in Actions", a work item's own PR).
    */
   go: (target: Target, opts?: { browse?: boolean }) => void;
+  /** What the shown section has open, so Back can return to it. */
+  here: (target: Target, label: string) => void;
   /** The last target sent to a section, with a counter so a repeat still lands. */
   target: Target & { seq: number };
   openRepo: (path: string) => void;
@@ -93,4 +95,14 @@ export function useShell(): Shell {
   const shell = useContext(ShellContext);
   if (!shell) throw new Error("useShell outside the app shell");
   return shell;
+}
+
+/** Tell the shell what this section has open (its place for Back). Only
+ * the shown section's effects run, so only it reports. */
+export function useHere(target: Target, label: string, active = true) {
+  const { here } = useShell();
+  const key = JSON.stringify(target);
+  useEffect(() => {
+    if (active) here(target, label);
+  }, [key, label, active]); // eslint-disable-line react-hooks/exhaustive-deps
 }

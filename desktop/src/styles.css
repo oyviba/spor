@@ -1883,6 +1883,57 @@ body:has(.pane-foot) .toasts {
   flex-shrink: 0;
   min-width: 0;
 }
+/* Back and forward: where you came from, named, at the top left. */
+.nav-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: -8px;
+  min-width: 0;
+  max-width: 34%;
+  flex-shrink: 1;
+}
+.nav-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 8px 0 5px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+}
+.nav-back > svg {
+  flex-shrink: 0;
+}
+.nav-back:not(:disabled):hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.nav-back:disabled {
+  opacity: 0.35;
+  padding-right: 5px;
+}
+.nav-back-label {
+  min-width: 0;
+}
+.nav-forward {
+  width: 26px;
+  height: 26px;
+}
+.nav-buttons + * {
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.branch-bar-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
 .branch-bar-name {
   display: inline-flex;
   align-items: center;
@@ -3654,10 +3705,9 @@ body.resizing * {
 }
 /* The repository column hidden (⌘⇧E): its open repository's sections, as
    icons, in a strip where it was. */
-/* The Inbox or Agents: across every repository, so no repository column. */
-.app.global-view {
-  grid-template-columns: 52px 1fr;
-}
+/* The Inbox and Agents span every repository, but the repository column
+   stays where it is (no section under the open one is lit), so going to
+   them and back never moves the rest of the window. */
 .scope-header {
   flex: 1;
   min-width: 0;
@@ -4319,4 +4369,10 @@ body.resizing * {
 }
 .inspector-commit .composer-footer {
   flex-wrap: wrap;
+}
+
+/* A page on its way, after a link to it: say so rather than show nothing. */
+.page-loading {
+  margin: 48px auto;
+  justify-content: center;
 }

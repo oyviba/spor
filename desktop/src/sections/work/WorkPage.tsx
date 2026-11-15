@@ -18,6 +18,7 @@ import { PanelRight } from "../../shared/Icons";
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { DismissPane, Tabs } from "../../shared/Layout";
 import { waitingText } from "../../shared/work";
+import { ShowTab } from "../../shared/WorkCard";
 
 export type WorkTab = "agent" | "discussion" | "changes" | "checks";
 
@@ -160,7 +161,11 @@ export function WorkPage({
           {children}
           {dock}
         </div>
-        {inspector && <DismissPane.Provider value={onInspector ? () => onInspector(false) : null}>{details}</DismissPane.Provider>}
+        {inspector && (
+          <DismissPane.Provider value={onInspector ? () => onInspector(false) : null}>
+            <ShowTab.Provider value={(t) => tabs.some((x) => x.id === t) && (onTab(t), true)}>{details}</ShowTab.Provider>
+          </DismissPane.Provider>
+        )}
       </div>
     </div>
   );

@@ -29,3 +29,11 @@ test("what belongs to no work item stays in its browser", () => {
   ] as const)
     assert.deepEqual(resolveTarget(t, tasks), t);
 });
+
+test("an open pull request Work lists opens in Work; a closed one stays in the browser", () => {
+  const item = (number: number, state: "open" | "closed") =>
+    ({ key: `branch:b${number}`, pull: { number, state } }) as unknown as import("../types.ts").WorkItemInfo;
+  const work = [item(11, "open"), item(7, "closed")];
+  assert.deepEqual(resolveTarget({ section: "pulls", number: 11 }, [], work), { section: "work", number: 11 });
+  assert.deepEqual(resolveTarget({ section: "pulls", number: 7 }, [], work), { section: "pulls", number: 7 });
+});

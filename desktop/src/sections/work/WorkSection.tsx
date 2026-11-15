@@ -5,7 +5,7 @@ import { activityAt, matches, moveTo, shelve, workItems, type Filter, type WorkI
 import { isOpen } from "../agents/status";
 import { catchUpPrompt, restorePrompt } from "../agents/prompts";
 import { useChanged, usePoll, useRepoChanges, useStored } from "../../shared/hooks";
-import { useShell } from "../../shared/app";
+import { useHere, useShell, type Target } from "../../shared/app";
 import { EmptyState } from "../../shared/Layout";
 import { Sidebar } from "./Sidebar";
 import { BranchPage } from "./BranchPage";
@@ -85,6 +85,7 @@ export function WorkSection({ embedded }: { embedded?: EmbeddedTask } = {}) {
     if (t.taskId) setView({ kind: "task", id: t.taskId });
     else if (t.number) setView({ kind: "pull", number: t.number });
     else if (t.branch) setView({ kind: "branch", name: t.branch });
+    else if (t.fresh) setView({ kind: "new" });
   }, [shell.target.seq]);
 
   // Your branches, reloaded when refs move.
@@ -146,7 +147,25 @@ export function WorkSection({ embedded }: { embedded?: EmbeddedTask } = {}) {
   );
   const shelves = useMemo(() => shelve(items.filter((i) => matches(i, filter)), order), [items, filter, order]);
   const selectedKey = keyOf(view);
-  const selectedItem = items.find((i) => i.key === selectedKey);
+  // A pull request opened by number may be a branch's or a task's: that's
+  // the item it is in the list.
+  const selectedItem =
+    items.find((i) => i.key === selectedKey) ?? (view.kind === "pull" ? items.find((i) => i.pull?.number === view.number) : undefined);
+
+  // Where this is, for Back.
+  const hereTarget: Target =
+    view.kind === "task"
+      ? { section: "work", taskId: view.id }
+      : view.kind === "pull"
+        ? { section: "work", number: view.number }
+        : view.kind === "branch"
+          ? { section: "work", branch: view.name }
+          : { section: "work", fresh: true };
+  useHere(
+    hereTarget,
+    selectedItem?.title ?? (view.kind === "new" ? "New" : view.kind === "pull" ? `#${view.number}` : view.kind === "branch" ? view.name : "Task"),
+    !embedded,
+  );
 
   // An item gets its place in the list when first seen there, so it keeps it.
   useEffect(() => {
@@ -417,7 +436,7 @@ export function WorkSection({ embedded }: { embedded?: EmbeddedTask } = {}) {
         any={items.length > 0}
         filter={filter}
         onFilter={setFilter}
-        selected={selectedKey}
+        selected={selectedItem?.key ?? selectedKey}
         seen={seen}
         settledOpen={settledOpen}
         onSettledOpen={setSettledOpen}
