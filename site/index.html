@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>spor</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="spor is a desktop git client for working alongside coding agents: each agent task gets its own branch and folder, and one inbox tells you what needs you.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: the page is a branch graph. One lane (main) runs down the left
+   edge; every section is a commit on it, and the agents section forks off
+   onto its own lane and merges back, the way a task does in the app. */
+:root {
+  --bg: #fbfbfd;
+  --surface: #ffffff;
+  --raised: #f1f2f6;
+  --line: #e2e3ea;
+  --fg: #15161c;
+  --fg-2: #464854;
+  --muted: #6e7080;
+  --accent: oklch(0.49 0.22 264);
+  --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
+  --lane-main: #16a34a;
+  --lane-agent: #db2777;
+  --lane-docs: #9333ea;
+  --tag: #b45309;
+  --shot-ring: rgba(20, 22, 40, 0.12);
+  --shadow: 0 1px 2px rgba(10, 12, 30, 0.06), 0 24px 60px -20px rgba(10, 12, 30, 0.25);
+
+  --display: "Schibsted Grotesk", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --body: "Schibsted Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --gutter-l: max(16px, env(safe-area-inset-left, 0px));
+  --gutter-r: max(16px, env(safe-area-inset-right, 0px));
+  --lane-x: 20px;
+  --rail: 64px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #050608;
+    --surface: #0e1015;
+    --raised: #15171e;
+    --line: #23262f;
+    --fg: #f3f4f7;
+    --fg-2: #c9cbd4;
+    --muted: #8b8e9c;
+    --accent: oklch(0.66 0.19 264);
+    --accent-soft: color-mix(in oklab, var(--accent) 18%, transparent);
+    --lane-main: #4ade80;
+    --lane-agent: #f472b6;
+    --lane-docs: #c084fc;
+    --tag: #fbbf24;
+    --shot-ring: rgba(255, 255, 255, 0.1);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 30px 80px -24px rgba(0, 0, 0, 0.8);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #050608;
+  --surface: #0e1015;
+  --raised: #15171e;
+  --line: #23262f;
+  --fg: #f3f4f7;
+  --fg-2: #c9cbd4;
+  --muted: #8b8e9c;
+  --accent: oklch(0.66 0.19 264);
+  --accent-soft: color-mix(in oklab, var(--accent) 18%, transparent);
+  --lane-main: #4ade80;
+  --lane-agent: #f472b6;
+  --lane-docs: #c084fc;
+  --tag: #fbbf24;
+  --shot-ring: rgba(255, 255, 255, 0.1);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 30px 80px -24px rgba(0, 0, 0, 0.8);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 17px/1.6 var(--body);
+  -webkit-font-smoothing: antialiased;
+}
+img { max-width: 100%; display: block; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+code, kbd, .mono { font-family: var(--mono); font-size: 0.86em; }
+code { background: var(--raised); padding: 0.1em 0.35em; border-radius: 4px; }
+kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 0.35em; background: var(--surface); }
+
+.wrap {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding-left: var(--gutter-l);
+  padding-right: var(--gutter-r);
+}
+
+/* ---------- top bar ---------- */
+.top { padding-block: 22px; }
+.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.mark { display: flex; align-items: center; gap: 10px; font: 800 22px/1 var(--display); letter-spacing: -0.03em; text-decoration: none; }
+.mark svg { width: 26px; height: 26px; }
+.top nav { display: flex; gap: 22px; align-items: center; font-size: 15px; }
+.top nav a { text-decoration: none; color: var(--fg-2); }
+.top nav a:hover { color: var(--fg); }
+.top nav .gh { color: var(--fg); border: 1px solid var(--line); padding: 7px 14px; border-radius: 999px; }
+@media (max-width: 640px) { .top nav .hide-s { display: none; } }
+
+/* ---------- the track ---------- */
+.track { position: relative; padding-left: var(--rail); }
+.track::before {
+  content: "";
+  position: absolute;
+  left: var(--lane-x);
+  top: 0; bottom: 0;
+  border-left: 2px solid var(--lane-main);
+  opacity: 0.85;
+}
+.commit { position: relative; padding-block: 72px; }
+.commit > .dot {
+  position: absolute;
+  left: calc(var(--lane-x) - var(--rail) - 6px);
+  top: 77px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--lane-main);
+  box-shadow: 0 0 0 4px var(--bg);
+}
+.commit.head > .dot { background: var(--bg); border: 3px solid var(--fg); }
+
+.ref {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 500 13px/1 var(--mono);
+  padding: 5px 8px; border-radius: 5px;
+  color: var(--lane-main);
+  background: color-mix(in oklab, var(--lane-main) 14%, transparent);
+  border: 1px solid color-mix(in oklab, var(--lane-main) 35%, transparent);
+}
+.ref.agent { color: var(--lane-agent); background: color-mix(in oklab, var(--lane-agent) 12%, transparent); border-color: color-mix(in oklab, var(--lane-agent) 35%, transparent); }
+.ref.docs { color: var(--lane-docs); background: color-mix(in oklab, var(--lane-docs) 12%, transparent); border-color: color-mix(in oklab, var(--lane-docs) 35%, transparent); }
+.ref.tag { color: var(--tag); background: color-mix(in oklab, var(--tag) 12%, transparent); border-color: color-mix(in oklab, var(--tag) 35%, transparent); }
+.ref .ok { color: var(--lane-main); }
+
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(40px, 6.4vw, 78px); line-height: 0.98; letter-spacing: -0.045em; font-weight: 800; max-width: 15ch; }
+h2 { font-size: clamp(30px, 4vw, 46px); line-height: 1.04; letter-spacing: -0.035em; font-weight: 800; }
+h3 { font-size: 19px; line-height: 1.25; letter-spacing: -0.015em; font-weight: 700; }
+p { margin: 0; }
+.lede { font-size: clamp(18px, 2vw, 21px); color: var(--fg-2); max-width: 36em; }
+.prose { color: var(--fg-2); max-width: 34em; display: grid; gap: 14px; }
+.prose strong { color: var(--fg); font-weight: 600; }
+.head-stack { display: grid; gap: 18px; justify-items: start; }
+
+/* ---------- hero ---------- */
+.hero { padding-top: 40px; }
+.commit.hero > .dot { top: 45px; }
+.hero .head-stack { gap: 26px; }
+.define {
+  font: 400 14px/1.5 var(--mono);
+  color: var(--muted);
+}
+.define b { color: var(--fg); font-weight: 500; }
+.ctas { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: 600 16px/1 var(--body);
+  padding: 14px 20px; border-radius: 10px;
+  text-decoration: none; border: 1px solid transparent; cursor: pointer;
+}
+.btn.primary { background: var(--accent); color: #fff; }
+.btn.primary:hover { background: color-mix(in oklab, var(--accent) 88%, #000); }
+.btn.ghost { border-color: var(--line); color: var(--fg); background: var(--surface); }
+.btn.ghost:hover { border-color: var(--muted); }
+.btn svg { width: 18px; height: 18px; }
+.small { font-size: 14px; color: var(--muted); }
+
+.shot {
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 0 0 1px var(--shot-ring), var(--shadow);
+}
+.shot img { width: 100%; height: auto; }
+.hero .shot { margin-top: 56px; }
+
+/* ---------- section bodies ---------- */
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; align-items: start; }
+.split > * { min-width: 0; }
+.split.narrow-img { grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr); }
+@media (max-width: 900px) { .split, .split.narrow-img { grid-template-columns: minmax(0, 1fr); gap: 36px; } }
+.stack-lg { display: grid; gap: 40px; }
+
+.inbox-shot { max-width: 340px; justify-self: center; }
+.inbox-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border-top: 1px solid var(--line); }
+.inbox-list li { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 14px; padding-block: 14px; border-bottom: 1px solid var(--line); align-items: baseline; }
+.inbox-list li::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--muted)); transform: translateY(-1px); }
+.inbox-list b { font-weight: 600; color: var(--fg); }
+.inbox-list span { color: var(--muted); display: block; font-size: 15px; }
+
+/* the agent lane: forks off main, runs beside it, merges back */
+.fork { position: relative; }
+.lane2 {
+  position: absolute;
+  left: calc(var(--lane-x) - var(--rail));
+  top: 88px; bottom: 40px;
+  width: 26px;
+  display: flex; flex-direction: column;
+  pointer-events: none;
+}
+.lane2 svg { width: 26px; height: 40px; flex: none; display: block; }
+.lane2 .mid { flex: 1; margin-left: 23px; border-left: 2px solid var(--lane-agent); }
+.lane2 svg path { fill: none; stroke: var(--lane-agent); stroke-width: 2; }
+.lane2 .adot { position: absolute; left: 18px; width: 12px; height: 12px; border-radius: 50%; background: var(--lane-agent); box-shadow: 0 0 0 4px var(--bg); }
+
+.stages { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 0; font: 500 14px/1 var(--mono); color: var(--muted); }
+.stages span { display: inline-flex; align-items: center; }
+.stages span + span::before { content: ""; width: 28px; height: 1px; background: var(--line); margin-inline: 10px; }
+.stages .on { color: var(--accent); }
+
+.verbs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.verbs > div { background: var(--surface); padding: 22px; display: grid; gap: 8px; align-content: start; }
+.verbs h3 { font-size: 17px; }
+.verbs p { color: var(--fg-2); font-size: 15px; line-height: 1.55; }
+@media (max-width: 760px) { .verbs { grid-template-columns: minmax(0, 1fr); } }
+
+.facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px 40px; }
+.facts > div { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.facts p { color: var(--fg-2); font-size: 15.5px; }
+.facts .glyph { font: 500 13px/1 var(--mono); color: var(--muted); }
+@media (max-width: 900px) { .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .facts { grid-template-columns: minmax(0, 1fr); } }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.term {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  min-width: 0;
+}
+.term-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); font: 500 13px/1 var(--mono); color: var(--muted); }
+.copy { font: 500 13px/1 var(--mono); color: var(--fg-2); background: var(--raised); border: 1px solid var(--line); padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+.copy:hover { color: var(--fg); }
+.term pre { margin: 0; padding: 18px; overflow-x: auto; font: 400 14px/1.75 var(--mono); color: var(--fg); }
+.term pre .c { color: var(--muted); }
+
+.merge-note { font: 400 14px/1.5 var(--mono); color: var(--muted); }
+
+footer { padding-block: 40px 56px; border-top: 1px solid var(--line); }
+footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; font-size: 14px; color: var(--muted); }
+footer a { color: var(--fg-2); }
+
+@media (max-width: 640px) {
+  :root { --rail: 40px; --lane-x: 10px; }
+  .commit { padding-block: 52px; }
+  .commit > .dot { top: 57px; }
+  .lane2 { top: 68px; }
+  body { font-size: 16px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .commit.head > .dot { animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 4px var(--bg), 0 0 0 9px color-mix(in oklab, var(--fg) 18%, transparent); } }
+}
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <a class="mark" href="#top" aria-label="spor home">
+      <svg viewBox="0 0 26 26" aria-hidden="true">
+        <path d="M7 3v20" stroke="var(--lane-main)" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+        <path d="M7 8c0 5 12 3 12 8" stroke="var(--lane-agent)" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+        <circle cx="7" cy="20" r="3.4" fill="var(--lane-main)"/>
+        <circle cx="19" cy="17" r="3.4" fill="var(--lane-agent)"/>
+      </svg>
+      spor
+    </a>
+    <nav aria-label="Sections">
+      <a class="hide-s" href="#inbox">Inbox</a>
+      <a class="hide-s" href="#agents">Agents</a>
+      <a class="hide-s" href="#history">History</a>
+      <a class="gh" href="https://github.com/oyviba/spor">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top" class="wrap">
+  <div class="track">
+
+    <section class="commit head hero" aria-labelledby="hero-title">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="head-stack">
+        <span class="ref">HEAD → main</span>
+        <h1 id="hero-title">Follow every branch, including the ones your agents start.</h1>
+        <p class="lede">spor is a desktop git client for working alongside coding agents. Each agent task gets its own branch and folder, one inbox tells you which of them needs you, and the history graph shows where all of it went.</p>
+        <div class="ctas">
+          <a class="btn primary" href="#get">Get spor</a>
+          <a class="btn ghost" href="https://github.com/oyviba/spor">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+            Source on GitHub
+          </a>
+        </div>
+        <p class="define"><b>spor</b> /spuːr/ <i>n.</i> Norwegian: a track, a trace. What you follow to see where a branch has been.</p>
+      </div>
+      <figure class="shot" style="margin-inline:0">
+        <img src="img/task.webp" width="2880" height="1800" alt="spor's Work section: a list of work items grouped into Needs you, In progress and In review, with an agent's finished task open in the middle and its branch, folder and Land button on the right.">
+      </figure>
+    </section>
+
+    <section id="inbox" class="commit" aria-labelledby="inbox-title">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="split narrow-img">
+        <div class="head-stack">
+          <span class="ref">inbox</span>
+          <h2 id="inbox-title">What needs me?</h2>
+          <div class="prose">
+            <p>Open spor and the first thing you see is one list, across every repository in every workspace. Each row opens where you deal with it, and goes away once you have. Its count is the only badge in the app.</p>
+          </div>
+          <ul class="inbox-list">
+            <li style="--c: var(--tag)"><div><b>An agent waiting on an answer</b> <span>like a plan to approve</span></div></li>
+            <li style="--c: var(--lane-agent)"><div><b>A finished run you haven't looked at</b> <span>ready for review</span></div></li>
+            <li style="--c: #ef4444"><div><b>A failed CI run on your branch</b> <span>with Send failure to agent</span></div></li>
+            <li style="--c: var(--accent)"><div><b>A pull request waiting for your review</b> <span>from anyone</span></div></li>
+          </ul>
+        </div>
+        <figure class="shot inbox-shot" style="margin:0">
+          <img src="img/inbox.webp" width="640" height="900" alt="The Inbox: rows grouped under Waiting on an answer, Failed runs, Ready for review and Review requested.">
+        </figure>
+      </div>
+    </section>
+
+    <section id="agents" class="commit fork" aria-labelledby="agents-title">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="lane2" aria-hidden="true">
+        <svg viewBox="0 0 26 40" preserveAspectRatio="none"><path d="M3 0 C3 22 24 14 24 40"/></svg>
+        <div class="mid"></div>
+        <svg viewBox="0 0 26 40" preserveAspectRatio="none"><path d="M24 0 C24 26 3 18 3 40"/></svg>
+      </div>
+      <div class="stack-lg">
+        <div class="split">
+          <div class="head-stack">
+            <span class="ref agent">agent/rename-drafts</span>
+            <h2 id="agents-title">What's in flight?</h2>
+          </div>
+          <div class="prose">
+            <p>A task is a prompt. spor creates <code>agent/&lt;name&gt;</code> from a base branch, checks it out in <code>&lt;repo&gt;.spor/&lt;name&gt;</code> beside your repository, and starts Claude Code (or any command you choose) there. Several agents work at once and none of them touch your checkout.</p>
+            <p>Read its plan before it changes anything, answer its questions, and steer it while it works. Review the changes with line comments, send them back, or undo a run. When it's right, <strong>Land</strong> it as one commit, <strong>Publish</strong> it as a pull request, or <strong>Discard</strong> it.</p>
+          </div>
+        </div>
+        <figure class="shot" style="margin:0">
+          <img src="img/plan.webp" width="2880" height="1800" alt="An agent task waiting on you: it has proposed a five-step plan to rename drafts to posts, with Approve plan and a box to comment on it.">
+        </figure>
+        <div class="stages" aria-label="Every work item moves through four stages">
+          <span>Planned</span><span>In progress</span><span class="on">In review</span><span>Landed</span>
+        </div>
+        <p class="prose">Agents' tasks, your own branches and open pull requests from anyone share one list and the same four stages, so a work item reads the same wherever you meet it: its issue, branch, folder, agent, pull request and checks, and who it's waiting on.</p>
+      </div>
+    </section>
+
+    <section class="commit" aria-labelledby="land-title" style="padding-block: 8px 40px">
+      <span class="dot" aria-hidden="true" style="top: 12px"></span>
+      <p id="land-title" class="merge-note">Merge branch 'agent/rename-drafts' · 14 files · undo with <kbd>⌘Z</kbd></p>
+    </section>
+
+    <section id="history" class="commit" aria-labelledby="history-title">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="stack-lg">
+        <div class="split">
+          <div class="head-stack">
+            <span class="ref">history</span>
+            <h2 id="history-title">What happened?</h2>
+            <div class="legend" aria-label="Branch labels as the graph draws them">
+              <span class="ref">main</span>
+              <span class="ref agent">agent/let-greet-take-optional</span>
+              <span class="ref docs">docs/contributing <span class="ok">#11 ✓</span></span>
+              <span class="ref tag">v0.1.0</span>
+            </div>
+          </div>
+          <div class="prose">
+            <p>The commit graph keeps <code>main</code> pinned to the leftmost lane and colors branches by prefix, so every <code>feat/*</code> shares a hue and agent branches stand apart. Branch labels carry their pull request's number, review state and CI.</p>
+            <p>Your uncommitted changes sit at the top of the graph. Stage down to single lines, commit, stash, and search by message, author, hash or <code>path:src/main.rs</code>. Right-click to cherry-pick, revert, rebase or <strong>Rewrite after here</strong>, an interactive rebase you do on screen.</p>
+          </div>
+        </div>
+        <figure class="shot" style="margin:0">
+          <img src="img/history.webp" width="2880" height="1800" alt="The History section: a commit graph with main in green on the left lane and colored branch lanes, branch labels with pull request badges, and the selected commit's details on the right.">
+        </figure>
+      </div>
+    </section>
+
+    <section class="commit" aria-labelledby="across-title">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="stack-lg">
+        <div class="head-stack">
+          <span class="ref">everywhere</span>
+          <h2 id="across-title">Git without the terminal, and without the fear.</h2>
+        </div>
+        <div class="verbs">
+          <div>
+            <h3>Undo instead of “are you sure?”</h3>
+            <p>Staging, discarding, commits, merges, rebases, resets, deleting a branch, landing a task: all happen at once and come back with <kbd>⌘Z</kbd>. Only what git can't take back asks first.</p>
+          </div>
+          <div>
+            <h3>One button to get in step</h3>
+            <p>The branch bar shows Pull, Push, Publish, Pull &amp; push or Force push, whichever fits. Force push is <code>--force-with-lease --force-if-includes</code>.</p>
+          </div>
+          <div>
+            <h3>One conflict banner</h3>
+            <p>A merge or rebase that stops shows on every section. Pick a side per conflict, then Continue, Skip commit or Abort.</p>
+          </div>
+          <div>
+            <h3>GitHub, through <code>gh</code></h3>
+            <p>Issues, pull requests and Actions: review with line comments, approve, land, read a run's log folded by step, re-run it. <em>Start with agent</em> turns an issue into a task.</p>
+          </div>
+          <div>
+            <h3>Workspaces</h3>
+            <p>Named, colored groups of repositories on the rail, each showing its branch, changed files and what there is to pull.</p>
+          </div>
+          <div>
+            <h3>Everything in <kbd>⌘K</kbd></h3>
+            <p>Every command, section, work item, branch and repository. Your own shortcuts, unified or side-by-side diffs, and six themes with a live editor.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="commit" aria-labelledby="core-title">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="stack-lg">
+        <div class="head-stack">
+          <span class="ref">src/lib.rs</span>
+          <h2 id="core-title">Small, and honest about what it runs.</h2>
+        </div>
+        <div class="facts">
+          <div>
+            <span class="glyph">[dependencies]</span>
+            <h3>A Rust core with no dependencies</h3>
+            <p>It runs <code>git</code> and <code>gh</code> in your repository and parses their output. It knows nothing about how it's drawn.</p>
+          </div>
+          <div>
+            <span class="glyph">desktop/</span>
+            <h3>A native app on Tauri</h3>
+            <p>A React UI over that core. CI builds a universal <code>Spor.app</code> for macOS on every push.</p>
+          </div>
+          <div>
+            <span class="glyph">MIT OR Apache-2.0</span>
+            <h3>Open source</h3>
+            <p>Dual-licensed, your choice. Read every line on GitHub.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="get" class="commit" aria-labelledby="get-title">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="split">
+        <div class="head-stack">
+          <span class="ref tag">v0.1.0</span>
+          <h2 id="get-title">Run it on your own repository.</h2>
+          <div class="prose">
+            <p>You need Rust, Node 20 or later and pnpm, plus the <a href="https://v2.tauri.app/start/prerequisites/">Tauri prerequisites</a> for your OS. Pull requests, Actions and issues need the GitHub CLI, signed in with <code>gh auth login</code>.</p>
+            <p class="small">Prefer a Mac app? Grab the <code>Spor-macos</code> artifact from the latest CI run. It isn't signed yet, so open it the first time with right-click → Open.</p>
+          </div>
+        </div>
+        <div class="term">
+          <div class="term-bar"><span>~/code</span><button class="copy" id="copy-cmds" type="button">Copy</button></div>
+<pre id="cmds"><span class="c"># clone and start</span>
+git clone https://github.com/oyviba/spor
+cd spor/desktop
+pnpm install
+SPOR_REPO=~/code/your-repo pnpm tauri dev</pre>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>spor · a git client for working alongside coding agents</span>
+    <span><a href="https://github.com/oyviba/spor">GitHub</a> · MIT or Apache-2.0</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var btn = document.getElementById('copy-cmds');
+  var pre = document.getElementById('cmds');
+  if (!btn || !pre) return;
+  btn.addEventListener('click', function () {
+    var text = pre.innerText.split('\n').filter(function (l) { return l.trim() && l.trim()[0] !== '#'; }).join('\n');
+    function selectIt() {
+      var r = document.createRange(); r.selectNodeContents(pre);
+      var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      btn.textContent = 'Press ⌘C';
+    }
+    try {
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = 'Copied';
+        setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
+      }, selectIt);
+    } catch (e) { selectIt(); }
+  });
+})();
+</script>
+</html>
