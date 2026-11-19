@@ -10,6 +10,8 @@ export interface RepoInfo {
    * when origin has the default branch, else the local one. */
   default_start: string | null;
   claude: boolean;
+  /** GitHub Copilot CLI is installed. */
+  copilot: boolean;
 }
 
 export interface Stats {
@@ -25,11 +27,14 @@ export interface Stats {
   unpushed: number;
 }
 
+/** The agents spor runs itself, plus any command. */
+export type AgentName = "claude" | "copilot" | "command";
+
 export type RunStateName = "running" | "finished" | "failed" | "stopped";
 
 export interface RunInfo {
   index: number;
-  agent: "claude" | "command";
+  agent: AgentName;
   label: string;
   prompt: string;
   state: RunStateName;
@@ -241,6 +246,7 @@ export interface RunPatch {
 
 export type AgentChoice =
   | { kind: "claude"; model?: string; effort?: Effort | "" }
+  | { kind: "copilot"; model?: string; effort?: Effort | "" }
   | { kind: "command"; template: string }
   | { kind: "none" };
 

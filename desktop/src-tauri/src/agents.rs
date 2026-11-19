@@ -95,6 +95,7 @@ impl From<Run> for RunInfo {
             index: r.index,
             agent: match r.kind {
                 AgentKind::Claude => "claude",
+                AgentKind::Copilot => "copilot",
                 AgentKind::Command(_) => "command",
             },
             label: match r.model.describe() {
@@ -654,6 +655,14 @@ pub(crate) enum AgentChoice {
         #[serde(default)]
         effort: Option<String>,
     },
+    /// GitHub Copilot CLI; its model and effort are left to Copilot when
+    /// they're missing or empty.
+    Copilot {
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        effort: Option<String>,
+    },
     Command {
         template: String,
     },
@@ -664,6 +673,7 @@ impl AgentChoice {
     fn kind(&self) -> Option<AgentKind> {
         match self {
             AgentChoice::Claude { .. } => Some(AgentKind::Claude),
+            AgentChoice::Copilot { .. } => Some(AgentKind::Copilot),
             AgentChoice::Command { template } => Some(AgentKind::Command(template.clone())),
             AgentChoice::None => None,
         }
@@ -681,7 +691,7 @@ impl AgentChoice {
 
     fn model(&self) -> Result<Model, String> {
         match self {
-            AgentChoice::Claude { model, effort } => {
+            AgentChoice::Claude { model, effort } | AgentChoice::Copilot { model, effort } => {
                 let effort = match effort.as_deref().filter(|e| !e.is_empty()) {
                     Some(e) => {
                         Some(Effort::from_flag(e).ok_or_else(|| format!("Unknown effort {e}"))?)

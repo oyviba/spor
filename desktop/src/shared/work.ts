@@ -3,9 +3,16 @@
 // doesn't have it (a closed pull request, say), and the one next step for
 // its stage. The words are docs/concepts.md's.
 
-import type { Pull, TaskSummary, WorkItemInfo } from "../types";
+import type { AgentName, Pull, TaskSummary, WorkItemInfo } from "../types";
 import type { Status } from "./StatusPill";
 import type { SectionId, Target } from "./app";
+
+/** An agent, by the name people know it by. */
+export function agentName(agent: AgentName): string {
+  if (agent === "claude") return "Claude Code";
+  if (agent === "copilot") return "Copilot CLI";
+  return "Agent";
+}
 
 /** What an inspector knows about the thing it shows. */
 export interface WorkRef {
@@ -83,7 +90,7 @@ export function itemFromTask(t: TaskSummary, pull?: Pull): WorkItemInfo {
     worktree: settled ? null : t.worktree,
     task: t.id,
     issue: t.issue,
-    owner: t.run ? { kind: "agent", name: t.run.agent === "claude" ? "Claude Code" : "Agent" } : { kind: "you" },
+    owner: t.run ? { kind: "agent", name: agentName(t.run.agent) } : { kind: "you" },
     stage: t.landed != null ? "landed" : t.closed ? "closed" : pull?.state === "open" ? "inreview" : "inprogress",
   };
 }
