@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RepoInfo } from "../../types";
 import { AgentSelect, ModelPicker, ModePicker, type AgentSettings } from "./Composer";
+import { isAgentId } from "../../shared/agents";
 import { ArrowUp } from "../../shared/Icons";
 import { BasePicker, defaultStart } from "../../shared/BasePicker";
 import { Button } from "../../shared/Button";
@@ -62,7 +63,7 @@ export function NewTask({ repo, settings, onSettings, onCreate }: Props) {
           <div className="composer-footer">
             <BasePicker repo={repo} value={base} onChange={setBase} title="The branch it starts from and lands on" />
             <AgentSelect repo={repo} value={settings.agent} onChange={(agent) => onSettings({ ...settings, agent })} />
-            {(settings.agent === "claude" || settings.agent === "copilot") && (
+            {isAgentId(settings.agent) && (
               <>
                 <ModelPicker settings={settings} onSettings={onSettings} />
                 <ModePicker agent={settings.agent} mode={settings.mode} onChange={(mode) => onSettings({ ...settings, mode })} />

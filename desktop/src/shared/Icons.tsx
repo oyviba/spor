@@ -1,7 +1,8 @@
 // Small stroke icons (24-unit grid), drawn after Lucide (ISC, see
 // LICENSE-LUCIDE beside this file), so the app has no icon dependency.
 
-import type { SVGProps } from "react";
+import type { ReactElement, SVGProps } from "react";
+import type { AgentId, AgentName } from "../types";
 
 type P = SVGProps<SVGSVGElement> & { size?: number };
 
@@ -147,10 +148,16 @@ export const CopilotMark = ({ size = 14, ...rest }: P) => (
   </svg>
 );
 
-export function AgentIcon({ agent, size = 13 }: { agent: "claude" | "copilot" | "command" | null; size?: number }) {
-  if (agent === "claude") return <ClaudeMark size={size} />;
-  if (agent === "copilot") return <CopilotMark size={size} />;
+/** Each agent's mark, by its id (shared/agents.ts). */
+const AGENT_MARKS: Record<AgentId, (p: P) => ReactElement> = {
+  claude: ClaudeMark,
+  copilot: CopilotMark,
+};
+
+export function AgentIcon({ agent, size = 13 }: { agent: AgentName | null; size?: number }) {
   if (agent === "command") return <Terminal size={size} className="muted-icon" />;
+  const Mark = agent ? AGENT_MARKS[agent] : undefined;
+  if (Mark) return <Mark size={size} />;
   return <Bot size={size} className="muted-icon" />;
 }
 
