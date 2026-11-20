@@ -101,12 +101,12 @@ Spor runs agents rather than reimplementing them. Each adapter answers four
 questions: how to start the agent, how to tell its state, how to send it a
 follow-up, and how to answer its questions.
 
-| | Generic command | Claude Code |
-|---|---|---|
-| Start | a command template, `{prompt}` filled in, run in the worktree | `claude -p "{prompt}" --output-format stream-json` |
-| State | process alive or exited, plus git activity | the stream's events: tool calls, messages, the final result with cost |
-| Follow-up | start the command again with the feedback | `claude -p "{feedback}" --resume {session}` |
-| Questions | none, so give the agent a permission mode that never asks | a hook forwards permission requests to spor (below) |
+| | Generic command | Claude Code | Copilot CLI |
+|---|---|---|---|
+| Start | a command template, `{prompt}` filled in, run in the worktree | `claude -p "{prompt}" --output-format stream-json` | `copilot -p "{prompt}" --output-format=json` |
+| State | process alive or exited, plus git activity | the stream's events: tool calls, messages, the final result with cost | its JSONL session events: tool calls, messages, token use, the final result (no cost: Copilot spends premium requests) |
+| Follow-up | start the command again with the feedback | `claude -p "{feedback}" --resume {session}` | `copilot -p "{feedback}" --resume={session}` |
+| Questions | none, so give the agent a permission mode that never asks | a hook forwards permission requests to spor (below) | none: prompt mode can't ask, so what the mode doesn't allow is refused |
 
 The generic adapter is what makes this useful on day one with any agent,
 including ones run by hand in the worktree. With no adapter at all, a task
@@ -256,8 +256,9 @@ Claude Code doesn't prompt for any tool.
 ## Decisions to make
 
 - **Which agents first.** Claude Code has a structured stream and hooks,
-  so it can do everything above. The generic adapter covers the rest with
-  less detail. Codex and others could get adapters later.
+  so it can do everything above. Copilot CLI has an adapter too (below).
+  The generic adapter covers the rest with less detail. Codex and others
+  could get adapters later.
 - **Headless or a terminal.** Phase 2 is headless (structured output and
   logs). Some people want to watch the agent's own terminal UI. That needs
   a terminal emulator in the app (xterm.js in the web view, over a pty in
@@ -268,6 +269,14 @@ Claude Code doesn't prompt for any tool.
 - **Where task state lives.** `.git/spor/` is per-clone and invisible to
   collaborators. Sharing tasks across machines would mean a server, which
   is out of scope for now.
+
+## Copilot CLI
+
+GitHub's [Copilot CLI](https://github.com/github/copilot-cli) (`copilot`) runs headless with `-p` and `--output-format=json`, a JSONL stream of its session events. `parse_copilot` reads them into the same transcript as Claude's: its tools take Claude's names (`bash` is `Bash`, `view` is `Read`, `edit` is `Edit`, `task` a subagent), so icons, folded command output and the *Tests ✓ · Build ✓* line work alike, and `report_intent` stays out. The session id comes from `session.start` and the final `result`; context fill from `session.usage_info`.
+
+Prompt mode can't ask, so each mode becomes allow rules, and the rest is refused: *Read only* (no rules: read-only commands still run), *Auto-accept edits* (`--allow-tool=write`), *Auto* (`--assisted-approval`, Copilot's safety judge), *Full access* (`--allow-all-tools`) and *Plan first* (`--plan`; follow up to start the work). `--deny-tool=shell(git push)` goes on every run. Copilot has no flag to add to its system prompt, so what the agent is told (below) goes in an `AGENTS.md` in the run directory, named by `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`. Spor's MCP server comes with `--additional-mcp-config`, without `ask`.
+
+Not yet: Copilot can't fork a session, so undoing a run takes back its changes but not the conversation; there's no Needs-you bridge, no stop hook for `.spor/checks`, no steering while it works; and the PR description, debrief and rules search still ask Claude Code.
 
 ## What the agent is told (#105)
 

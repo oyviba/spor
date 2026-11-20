@@ -1,20 +1,24 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import type { AgentChoice, Ask, Effort, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
+import type { AgentChoice, AgentName, Ask, Effort, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
 import { useStored } from "../../shared/hooks";
 import { CONTEXT_HIGH } from "./transcript";
 import { useShell } from "../../shared/app";
+import { agentName } from "../../shared/work";
 import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
 import { Button } from "../../shared/Button";
 import { PlanCard, QuestionCard } from "./AskCards";
 import { AgentIcon, Alert, ArrowUp, Check, Clock, CornerDownRight, MessageSquare, Square, X } from "../../shared/Icons";
 
 export interface AgentSettings {
-  agent: "claude" | "command" | "none";
+  agent: "claude" | "copilot" | "command" | "none";
   template: string;
   mode: Mode;
   /** Claude's model and effort; "" leaves it to Claude Code's own settings. */
   model: string;
   effort: Effort | "";
+  /** Copilot's model: "" for its own setting, "auto" to let it pick. The
+   * effort is shared with Claude's. */
+  copilotModel: string;
 }
 
 /** Claude Code's aliases for the latest of each model. */
@@ -26,6 +30,13 @@ export const MODELS: { id: string; label: string }[] = [
   { id: "haiku", label: "Haiku" },
 ];
 
+/** Copilot CLI's models change often: its default (`/model` in Copilot,
+ * or `COPILOT_MODEL`), or Auto. */
+export const COPILOT_MODELS: { id: string; label: string }[] = [
+  { id: "", label: "Default model" },
+  { id: "auto", label: "Auto" },
+];
+
 export const EFFORTS: { id: Effort | ""; label: string }[] = [
   { id: "", label: "Default effort" },
   { id: "low", label: "Low effort" },
@@ -33,6 +44,16 @@ export const EFFORTS: { id: Effort | ""; label: string }[] = [
   { id: "high", label: "High effort" },
   { id: "xhigh", label: "Extra high effort" },
   { id: "max", label: "Max effort" },
+];
+
+/** Copilot CLI can't ask in prompt mode: what a mode doesn't allow is
+ * refused rather than asked about. */
+export const COPILOT_MODES: { id: Mode; label: string; hint: string }[] = [
+  { id: "supervised", label: "Read only", hint: "Reads and runs read-only commands; edits and other commands are refused" },
+  { id: "acceptEdits", label: "Auto-accept edits", hint: "Edits freely; commands that change things are refused" },
+  { id: "auto", label: "Auto", hint: "Copilot's safety judge approves or refuses each action" },
+  { id: "full", label: "Full access", hint: "Never asks. git push is refused in every mode" },
+  { id: "plan", label: "Plan first", hint: "Reads and plans, changes nothing. Follow up to start the work" },
 ];
 
 export const MODES: { id: Mode; label: string; hint: string }[] = [
@@ -56,26 +77,64 @@ export function useAgentSettings(): [AgentSettings, (s: AgentSettings) => void] 
     mode: "acceptEdits",
     model: "",
     effort: "",
+    copilotModel: "",
   });
   const mode = stored.mode ?? (stored.allowCommands ? "full" : "acceptEdits");
   return [
-    { agent: stored.agent, template: stored.template, mode, model: stored.model ?? "", effort: stored.effort ?? "" },
+    {
+      agent: stored.agent,
+      template: stored.template,
+      mode,
+      model: stored.model ?? "",
+      effort: stored.effort ?? "",
+      copilotModel: stored.copilotModel ?? "",
+    },
     set,
   ];
 }
 
-/** Which Claude model a new task runs, and how hard it thinks. */
+/** The agent a new task runs: Claude Code, Copilot CLI, a command, or none. */
+export function AgentSelect({
+  repo,
+  value,
+  onChange,
+  noneLabel = "No agent — I'll run one",
+}: {
+  repo: RepoInfo;
+  value: AgentSettings["agent"];
+  onChange: (agent: AgentSettings["agent"]) => void;
+  noneLabel?: string;
+}) {
+  return (
+    <select className="chip-select" value={value} onChange={(e) => onChange(e.target.value as AgentSettings["agent"])}>
+      <option value="claude" disabled={!repo.claude}>
+        Claude Code{repo.claude ? "" : " (not installed)"}
+      </option>
+      <option value="copilot" disabled={!repo.copilot}>
+        Copilot CLI{repo.copilot ? "" : " (not installed)"}
+      </option>
+      <option value="command">Custom command</option>
+      <option value="none">{noneLabel}</option>
+    </select>
+  );
+}
+
+/** Which model a new task runs (Claude's or Copilot's), and how hard it thinks. */
 export function ModelPicker({ settings, onSettings }: { settings: AgentSettings; onSettings: (s: AgentSettings) => void }) {
+  const copilot = settings.agent === "copilot";
+  const product = copilot ? "Copilot CLI" : "Claude Code";
   return (
     <>
       <select
         className="chip-select"
-        value={settings.model}
-        onChange={(e) => onSettings({ ...settings, model: e.target.value })}
-        title="The model Claude Code runs. Default: whatever Claude Code is set to"
+        value={copilot ? settings.copilotModel : settings.model}
+        onChange={(e) =>
+          onSettings(copilot ? { ...settings, copilotModel: e.target.value } : { ...settings, model: e.target.value })
+        }
+        title={`The model ${product} runs. Default: whatever ${product} is set to`}
         aria-label="Model"
       >
-        {MODELS.map((m) => (
+        {(copilot ? COPILOT_MODELS : MODELS).map((m) => (
           <option key={m.id} value={m.id}>
             {m.label}
           </option>
@@ -85,7 +144,7 @@ export function ModelPicker({ settings, onSettings }: { settings: AgentSettings;
         className="chip-select"
         value={settings.effort}
         onChange={(e) => onSettings({ ...settings, effort: e.target.value as Effort | "" })}
-        title="How hard Claude thinks. Default: whatever Claude Code is set to"
+        title={`How hard the model thinks. Default: whatever ${product} is set to`}
         aria-label="Effort"
       >
         {EFFORTS.map((m) => (
@@ -98,8 +157,18 @@ export function ModelPicker({ settings, onSettings }: { settings: AgentSettings;
   );
 }
 
-export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
-  const current = MODES.find((m) => m.id === mode) ?? MODES[1];
+export function ModePicker({
+  mode,
+  onChange,
+  agent,
+}: {
+  mode: Mode;
+  onChange: (m: Mode) => void;
+  /** Copilot's modes read differently: it can't ask. */
+  agent?: AgentSettings["agent"] | AgentName | null;
+}) {
+  const modes = agent === "copilot" ? COPILOT_MODES : MODES;
+  const current = modes.find((m) => m.id === mode) ?? modes[1];
   return (
     <select
       className={`chip-select mode-${mode}`}
@@ -108,7 +177,7 @@ export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode)
       title={`${current.label}: ${current.hint}`}
       aria-label="Permission mode"
     >
-      {MODES.map((m) => (
+      {modes.map((m) => (
         <option key={m.id} value={m.id} title={m.hint}>
           {m.label}
         </option>
@@ -120,6 +189,7 @@ export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode)
 export function choiceOf(s: AgentSettings): AgentChoice {
   if (s.agent === "command") return { kind: "command", template: s.template };
   if (s.agent === "claude") return { kind: "claude", model: s.model, effort: s.effort };
+  if (s.agent === "copilot") return { kind: "copilot", model: s.copilotModel, effort: s.effort };
   return { kind: "none" };
 }
 
@@ -414,22 +484,18 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
             {followUpAgent ? (
               <span className="chip-static" title="Follow-ups go to the agent that did the work">
                 <AgentIcon agent={followUpAgent} size={12} />
-                {followUpAgent === "claude" ? "Claude Code" : "Custom command"}
+                {followUpAgent === "command" ? "Custom command" : agentName(followUpAgent)}
               </span>
             ) : (
-              <select
-                className="chip-select"
+              <AgentSelect
+                repo={p.repo}
                 value={p.settings.agent}
-                onChange={(e) => p.onSettings({ ...p.settings, agent: e.target.value as AgentSettings["agent"] })}
-              >
-                <option value="claude" disabled={!p.repo.claude}>
-                  Claude Code{p.repo.claude ? "" : " (not installed)"}
-                </option>
-                <option value="command">Custom command</option>
-                <option value="none">No agent</option>
-              </select>
+                onChange={(agent) => p.onSettings({ ...p.settings, agent })}
+                noneLabel="No agent"
+              />
             )}
             <ModePicker
+              agent={followUpAgent ?? p.settings.agent}
               mode={p.liveMode ?? p.settings.mode}
               onChange={(mode) => {
                 p.onSettings({ ...p.settings, mode });

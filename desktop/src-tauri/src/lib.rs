@@ -54,6 +54,8 @@ struct RepoInfo {
     /// copy of the default branch (`origin/main`) when there is one.
     default_start: Option<String>,
     claude: bool,
+    /// GitHub Copilot CLI is on the PATH.
+    copilot: bool,
 }
 
 fn repo_info(repo: &Repo) -> RepoInfo {
@@ -77,6 +79,7 @@ fn repo_info(repo: &Repo) -> RepoInfo {
         default_base: repo.default_base_branch(),
         default_start: repo.default_start(),
         claude: spor::agent::available("claude"),
+        copilot: spor::agent::available(spor::agent::COPILOT),
     }
 }
 

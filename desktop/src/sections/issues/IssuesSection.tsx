@@ -12,7 +12,7 @@ import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../..
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
 import { isOpen } from "../agents/status";
-import { ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
+import { AgentSelect, ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
 import { ArrowUp, Bot, External, MessageSquare, Tag, Users } from "../../shared/Icons";
 import { BasePicker, defaultStart } from "../../shared/BasePicker";
 
@@ -318,21 +318,11 @@ export function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarte
           )}
           <div className="composer-footer">
             <BasePicker repo={repo} value={base} onChange={setBase} title="The branch it starts from and its pull request goes into" />
-            <select
-              className="chip-select"
-              value={settings.agent}
-              onChange={(e) => setSettings({ ...settings, agent: e.target.value as typeof settings.agent })}
-            >
-              <option value="claude" disabled={!repo.claude}>
-                Claude Code{repo.claude ? "" : " (not installed)"}
-              </option>
-              <option value="command">Custom command</option>
-              <option value="none">No agent — I'll run one</option>
-            </select>
-            {settings.agent === "claude" && (
+            <AgentSelect repo={repo} value={settings.agent} onChange={(agent) => setSettings({ ...settings, agent })} />
+            {(settings.agent === "claude" || settings.agent === "copilot") && (
               <>
                 <ModelPicker settings={settings} onSettings={setSettings} />
-                <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
+                <ModePicker agent={settings.agent} mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
               </>
             )}
             <span className="flex-1" />

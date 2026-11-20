@@ -34,6 +34,7 @@ const repo: RepoInfo = {
   default_base: "main",
   default_start: "origin/main",
   claude: true,
+  copilot: true,
 };
 
 const stats = (over: Partial<TaskSummary["stats"]> = {}): TaskSummary["stats"] => ({
@@ -534,11 +535,15 @@ function start(t: MockTask, prompt: string, agent: AgentChoice) {
   if (t.summary.run?.state === "running") throw `An agent is already working on ${t.summary.id}`;
   const r = run({
     index: t.runs.length,
-    agent: agent.kind === "command" ? "command" : "claude",
+    agent: agent.kind === "command" || agent.kind === "copilot" ? agent.kind : "claude",
     label:
       agent.kind === "command"
         ? "Custom command"
-        : ["Claude Code", agent.kind === "claude" && agent.model, agent.kind === "claude" && agent.effort && `${agent.effort} effort`]
+        : [
+            agent.kind === "copilot" ? "Copilot CLI" : "Claude Code",
+            agent.kind !== "none" && agent.model,
+            agent.kind !== "none" && agent.effort && `${agent.effort} effort`,
+          ]
             .filter(Boolean)
             .join(" · "),
     state: "running",
