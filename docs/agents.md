@@ -108,6 +108,21 @@ follow-up, and how to answer its questions.
 | Follow-up | start the command again with the feedback | `claude -p "{feedback}" --resume {session}` | `copilot -p "{feedback}" --resume={session}` |
 | Questions | none, so give the agent a permission mode that never asks | a hook forwards permission requests to spor (below) | none: prompt mode can't ask, so what the mode doesn't allow is refused |
 
+In the code each column is an `Adapter` (`src/agent/adapter.rs`), one file
+per agent in `src/agent/`: `claude.rs`, `copilot.rs`, `command.rs`. An
+adapter builds the command line (`command`), gives the agent what it's told
+and spor's MCP server the way that agent takes them (`prepare`: flags, or
+files beside the run), says whether it can run under the host
+(`hosted_args`), and reads its log back: the transcript (`parse`), session,
+cost and token use (`stats`), and what it's doing now (`progress`). `Runs`
+calls only these, so nothing outside an adapter checks which agent a run
+has. The UI's half is `desktop/src/shared/agents.ts`: each agent's name,
+models and how its permission modes read, plus its mark in `Icons.tsx`.
+
+To add an agent: a variant in `AgentKind` (with `AgentKind::KNOWN` and
+`adapter()`), its adapter file, and its entry in `shared/agents.ts` and
+`AGENT_MARKS`. The UI offers it once it's on the PATH (`RepoInfo.installed`).
+
 The generic adapter is what makes this useful on day one with any agent,
 including ones run by hand in the worktree. With no adapter at all, a task
 still has a branch, a worktree and a diff. Spor just can't tell "thinking"
