@@ -3,6 +3,7 @@
 // transcript over time, and answers the same commands as src-tauri.
 
 import type { AgentChoice, Ask, Issue, IssueDetail, Item, Mode, Pull, RepoInfo, RunInfo, TaskDetail, TaskPull, TaskSummary, WorkBranch, WorkItemInfo } from "./types";
+import { agentName } from "./shared/agents";
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -33,8 +34,7 @@ const repo: RepoInfo = {
   branches: ["main", "release/1.4", "feat/share-links"],
   default_base: "main",
   default_start: "origin/main",
-  claude: true,
-  copilot: true,
+  installed: ["claude", "copilot"],
 };
 
 const stats = (over: Partial<TaskSummary["stats"]> = {}): TaskSummary["stats"] => ({
@@ -535,12 +535,12 @@ function start(t: MockTask, prompt: string, agent: AgentChoice) {
   if (t.summary.run?.state === "running") throw `An agent is already working on ${t.summary.id}`;
   const r = run({
     index: t.runs.length,
-    agent: agent.kind === "command" || agent.kind === "copilot" ? agent.kind : "claude",
+    agent: agent.kind === "none" ? "claude" : agent.kind,
     label:
       agent.kind === "command"
         ? "Custom command"
         : [
-            agent.kind === "copilot" ? "Copilot CLI" : "Claude Code",
+            agentName(agent.kind === "none" ? "claude" : agent.kind),
             agent.kind !== "none" && agent.model,
             agent.kind !== "none" && agent.effort && `${agent.effort} effort`,
           ]

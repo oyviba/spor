@@ -93,11 +93,7 @@ impl From<Run> for RunInfo {
         let model = r.init.as_ref().map(|i| i.model.clone());
         Self {
             index: r.index,
-            agent: match r.kind {
-                AgentKind::Claude => "claude",
-                AgentKind::Copilot => "copilot",
-                AgentKind::Command(_) => "command",
-            },
+            agent: r.kind.id(),
             label: match r.model.describe() {
                 Some(model) => format!("{} · {model}", r.kind.label()),
                 None => r.kind.label().to_string(),
@@ -644,38 +640,32 @@ fn mode_of(name: &str) -> Result<Mode, String> {
         .ok_or_else(|| format!("Unknown permission mode {name}"))
 }
 
-/// Which agent to run, as the UI names it. Claude's model and effort are
-/// left to Claude Code when they're missing or empty.
+/// Which agent to run, as the UI names it: a known agent by its id
+/// (`claude`, `copilot`) with its model and effort, left to the agent when
+/// they're missing or empty; `command` with its template; or `none`.
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum AgentChoice {
-    Claude {
-        #[serde(default)]
-        model: Option<String>,
-        #[serde(default)]
-        effort: Option<String>,
-    },
-    /// GitHub Copilot CLI; its model and effort are left to Copilot when
-    /// they're missing or empty.
-    Copilot {
-        #[serde(default)]
-        model: Option<String>,
-        #[serde(default)]
-        effort: Option<String>,
-    },
-    Command {
-        template: String,
-    },
-    None,
+pub(crate) struct AgentChoice {
+    kind: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
+    #[serde(default)]
+    template: Option<String>,
 }
 
 impl AgentChoice {
-    fn kind(&self) -> Option<AgentKind> {
-        match self {
-            AgentChoice::Claude { .. } => Some(AgentKind::Claude),
-            AgentChoice::Copilot { .. } => Some(AgentKind::Copilot),
-            AgentChoice::Command { template } => Some(AgentKind::Command(template.clone())),
-            AgentChoice::None => None,
+    fn kind(&self) -> Result<Option<AgentKind>, String> {
+        match self.kind.as_str() {
+            "none" => Ok(None),
+            "command" => Ok(Some(AgentKind::Command(
+                self.template.clone().unwrap_or_default(),
+            ))),
+            id => AgentKind::KNOWN
+                .into_iter()
+                .find(|k| k.id() == id)
+                .map(Some)
+                .ok_or_else(|| format!("Unknown agent {id}")),
         }
     }
 
@@ -686,22 +676,18 @@ impl AgentChoice {
         if follow_up && runs.latest().is_some() {
             return Ok(None);
         }
-        self.kind().map(|k| Ok((k, self.model()?))).transpose()
+        self.kind()?.map(|k| Ok((k, self.model()?))).transpose()
     }
 
     fn model(&self) -> Result<Model, String> {
-        match self {
-            AgentChoice::Claude { model, effort } | AgentChoice::Copilot { model, effort } => {
-                let effort = match effort.as_deref().filter(|e| !e.is_empty()) {
-                    Some(e) => {
-                        Some(Effort::from_flag(e).ok_or_else(|| format!("Unknown effort {e}"))?)
-                    }
-                    None => None,
-                };
-                Model::new(model.as_deref(), effort)
-            }
-            _ => Ok(Model::default()),
+        if matches!(self.kind()?, None | Some(AgentKind::Command(_))) {
+            return Ok(Model::default());
         }
+        let effort = match self.effort.as_deref().filter(|e| !e.is_empty()) {
+            Some(e) => Some(Effort::from_flag(e).ok_or_else(|| format!("Unknown effort {e}"))?),
+            None => None,
+        };
+        Model::new(self.model.as_deref(), effort)
     }
 }
 
@@ -797,7 +783,7 @@ pub(crate) fn create_issue_task(
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
     let model = agent.model()?;
-    let kind = agent.kind();
+    let kind = agent.kind()?;
     if let Some(e) = kind.as_ref().and_then(agent::missing) {
         return Err(e);
     }
@@ -851,7 +837,7 @@ pub(crate) fn create_task(
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
     let model = agent.model()?;
-    let kind = agent.kind();
+    let kind = agent.kind()?;
     if let Some(e) = kind.as_ref().and_then(agent::missing) {
         return Err(e);
     }
@@ -888,7 +874,7 @@ pub(crate) fn hand_to_agent(
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
     let model = agent.model()?;
-    let kind = agent.kind();
+    let kind = agent.kind()?;
     if let Some(e) = kind.as_ref().and_then(agent::missing) {
         return Err(e);
     }

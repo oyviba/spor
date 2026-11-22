@@ -13,6 +13,7 @@ import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
 import { isOpen } from "../agents/status";
 import { AgentSelect, ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
+import { isAgentId } from "../../shared/agents";
 import { ArrowUp, Bot, External, MessageSquare, Tag, Users } from "../../shared/Icons";
 import { BasePicker, defaultStart } from "../../shared/BasePicker";
 
@@ -319,7 +320,7 @@ export function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarte
           <div className="composer-footer">
             <BasePicker repo={repo} value={base} onChange={setBase} title="The branch it starts from and its pull request goes into" />
             <AgentSelect repo={repo} value={settings.agent} onChange={(agent) => setSettings({ ...settings, agent })} />
-            {(settings.agent === "claude" || settings.agent === "copilot") && (
+            {isAgentId(settings.agent) && (
               <>
                 <ModelPicker settings={settings} onSettings={setSettings} />
                 <ModePicker agent={settings.agent} mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />

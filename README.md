@@ -179,7 +179,8 @@ output:
   creating, measuring, landing, discarding and restoring them
 - `src/agent.rs`, `src/host.rs`, `src/checkpoint.rs` — running agents in
   task folders, the host that lets the app talk to a running Claude Code,
-  and per-run checkpoints
+  and per-run checkpoints; `src/agent/` has one adapter per agent (Claude
+  Code, Copilot CLI, a custom command) behind the `Adapter` trait
 - `src/work.rs` — work items: a pure join of tasks, branches, pull
   requests, runs and issues into one item per branch, with its stage and
   who it's waiting on
