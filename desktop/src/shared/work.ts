@@ -104,7 +104,7 @@ const STAGES: Record<WorkItemInfo["stage"], Status> = {
   planned: { label: "Planned", tone: "muted", live: false },
   inprogress: { label: "In progress", tone: "sky", live: false },
   inreview: { label: "In review", tone: "amber", live: false },
-  landed: { label: "Landed", tone: "violet", live: false },
+  landed: { label: "Merged", tone: "violet", live: false },
   closed: { label: "Closed", tone: "muted", live: false },
 };
 
@@ -119,7 +119,7 @@ const WHY: Record<NonNullable<NonNullable<WorkItemInfo["waiting_on"]>["why"]>, s
   review: "your review is requested",
   checksfailed: "checks failed",
   changesrequested: "changes were requested",
-  ready: "approved and ready to land",
+  ready: "approved and ready to merge",
 };
 
 /** Who's next, in a few words: "Waiting on you: checks failed". */
@@ -152,7 +152,7 @@ function sameSection(t: Target, from: SectionId | undefined): boolean {
 
 /**
  * The one thing to do next, as a step to where it's done: Start, Publish,
- * Land, answering or reviewing. `from` is the section showing the card; a
+ * Merge, answering or reviewing. `from` is the section showing the card; a
  * step that would only lead back there is left out, since that section
  * shows its own buttons for it.
  */
@@ -182,8 +182,8 @@ export function nextStep(item: WorkItemInfo, from?: SectionId, current?: string 
         case "ready":
           return pr
             ? task
-              ? { label: `Land #${pr.number}`, target: { section: "work", taskId: task } }
-              : { label: `Land #${pr.number}`, target: { section: "pulls", number: pr.number }, browse: true }
+              ? { label: `Merge #${pr.number}`, target: { section: "work", taskId: task } }
+              : { label: `Merge #${pr.number}`, target: { section: "pulls", number: pr.number }, browse: true }
             : null;
       }
     }
