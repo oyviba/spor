@@ -4320,3 +4320,85 @@ body.resizing * {
 .inspector-commit .composer-footer {
   flex-wrap: wrap;
 }
+
+/* ---- A pull request's reviewers, assignees and labels (#149) ---- */
+
+.pull-people {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px;
+}
+.people-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.people-label {
+  flex: 0 0 84px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 4px;
+}
+.people-values {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+  min-height: 24px;
+}
+.people-values .chip-main {
+  padding-right: 8px;
+}
+.people-values .chip-main:has(+ .chip-x) {
+  padding-right: 2px;
+}
+.people-add {
+  position: relative;
+}
+.people-add .icon-button {
+  width: 22px;
+  height: 22px;
+}
+.people-picker {
+  top: 26px;
+  left: auto;
+  right: 0;
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.people-picker input {
+  width: 100%;
+}
+.people-choices {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.people-choices button.active {
+  background: var(--hover);
+}
+.people-note {
+  padding: 6px 8px;
+}
+
+.preset-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  max-width: 360px;
+}
+.people-picker input,
+.preset-field input {
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--card);
+  padding: 0 8px;
+}

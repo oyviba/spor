@@ -23,6 +23,7 @@ import { choiceOf, useAgentSettings } from "../agents/Composer";
 import { catchUpPrompt } from "../agents/prompts";
 import { WorkPage, shownTab, type WorkTab } from "./WorkPage";
 import { handToAgent } from "./handover";
+import { PullPeople } from "./PullPeople";
 
 /** A pull request's details, reloaded every 30 s, and its diff once asked. */
 export function usePullDetail(number: number | null, wantDiff: boolean) {
@@ -352,6 +353,7 @@ export function PullCard({ pr, task, from, onChanged }: { pr: PullDetail; task?:
           </div>
         )}
       </div>
+      <PullPeople pr={pr} onChanged={onChanged} />
       <div className="inspector-actions">
         {task && open && (
           <Button

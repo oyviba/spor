@@ -85,6 +85,8 @@ export interface Shell {
   }) => Promise<{ value: string; extra: string } | null>;
   /** Ask before something that can't be undone. */
   confirm: (spec: { title: string; detail?: string; action: string; danger?: boolean }) => Promise<boolean>;
+  /** Open Settings at a page ("pulls", "agents", …). */
+  openSettings: (page: string) => void;
 }
 
 export const ShellContext = createContext<Shell | null>(null);

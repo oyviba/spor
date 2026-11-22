@@ -101,7 +101,11 @@ piece of work yet (an issue nobody has started, a run on `main`):
 - **Issues**, **Pull requests**, **Actions** (⌘4–⌘6) — through `gh`: an
   issue and its comments (and *Start with agent* from it); a PR's
   conversation, files and checks, with comments, line comments, approve,
-  land, check out; a run's jobs and its log folded by step, re-run and
+  land, check out; its reviewers, assignees and labels, picked from the
+  repository's collaborators, teams and labels, and draft ↔ ready. Publishing
+  a task can start its PR as a draft with reviewers, assignees and labels
+  already set (Settings → Pull requests, kept per repository in `git config
+  spor.pull*`), and a work item says whom it's waiting on by name; a run's jobs and its log folded by step, re-run and
   cancel. Branch labels in the graph carry their open PR's number, review
   state and CI (`#42✓`)
 

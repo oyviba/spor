@@ -447,6 +447,8 @@ const pull = (number: number, t: TaskSummary, over: Partial<Pull> = {}): Pull =>
 
 const taskPulls: Record<string, TaskPull> = {};
 let nextPull = 41;
+/** The repository's pull request defaults (#149). */
+let mockPreset: { draft: boolean; reviewers: string[]; assignees: string[]; labels: string[] } = { draft: false, reviewers: [], assignees: [], labels: [] };
 {
   const login = tasks.find((t) => t.summary.id === "login-redirect")!.summary;
   taskPulls[login.id] = {
@@ -837,14 +839,15 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         const n = nextPull++;
         t.summary.pull = n;
         t.summary.stats = { ...t.summary.stats, uncommitted: 0, unpushed: 0 };
-        taskPulls[id] = { task: id, pull: pull(n, t.summary, { state: args.draft ? "draft" : "open" }), merge_commit: null };
+        const draft = (args.draft as boolean | null) ?? mockPreset.draft;
+        taskPulls[id] = { task: id, pull: pull(n, t.summary, { state: draft ? "draft" : "open", reviewers: mockPreset.reviewers }), merge_commit: null };
         // CI passes after a while, and then someone merges it.
         setTimeout(() => (taskPulls[id].pull.checks = "passing"), 8000);
         setTimeout(() => {
           taskPulls[id].pull = { ...taskPulls[id].pull, state: "merged", review: "approved" };
           taskPulls[id].merge_commit = "c0ffee1d2e3f";
         }, 20000);
-        return `Published ${id} as ${args.draft ? "a draft " : ""}pull request #${n}`;
+        return `Published ${id} as ${draft ? "a draft " : ""}pull request #${n}`;
       }
       case "push_task": {
         const t = find(id);
@@ -994,18 +997,20 @@ function mockWorkItems(pulls: Pull[], review: Set<number>, seen: Record<string, 
     review: p.review as NonNullable<WorkItemInfo["pull"]>["review"],
     author: p.author,
     url: p.url,
+    reviewers: p.reviewers ?? [],
   });
   const checks = (p?: Pull): WorkItemInfo["checks"] =>
     p?.checks === "passing" ? "passed" : p?.checks === "failing" ? "failed" : p?.checks === "pending" ? "running" : null;
   const pullWaiting = (p: Pull, theirs: boolean): WorkItemInfo["waiting_on"] => {
     if (p.state === "open" && review.has(p.number)) return { who: "you", why: "review" };
-    if (theirs) return { who: "teammate", why: null };
+    if (theirs) return { who: "teammate", why: null, names: [p.author] };
     if (p.checks === "failing") return { who: "you", why: "checksfailed" };
     if (p.checks === "pending") return { who: "ci", why: null };
     if (p.state !== "open") return null;
+    if (p.review === "changesrequested" && p.reviewers?.length) return { who: "teammate", why: null, names: p.reviewers };
     if (p.review === "changesrequested") return { who: "you", why: "changesrequested" };
     if (p.review === "approved") return { who: "you", why: "ready" };
-    return { who: "teammate", why: null };
+    return { who: "teammate", why: null, names: p.reviewers ?? [] };
   };
   const out: WorkItemInfo[] = [];
   const claimed = new Set<string>();
@@ -1215,6 +1220,15 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       return f.pullDiffs[n] ?? "";
     case "pull_action":
       return `${args.action} #${n}`;
+    case "pull_edit":
+      return `Updated #${n}`;
+    case "pull_candidates":
+      return { people: ["ada", "grace", "linus", "acme/web"], labels: ["agent", "bug", "enhancement", "docs"] };
+    case "pull_preset":
+      return mockPreset;
+    case "set_pull_preset":
+      mockPreset = args.preset as typeof mockPreset;
+      return;
     case "runs":
       return (f.runs as { branch: string; workflow: string }[]).filter(
         (r) => (!args.branch || r.branch === args.branch) && (!args.workflow || r.workflow === args.workflow),

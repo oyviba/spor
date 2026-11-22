@@ -122,6 +122,13 @@ const WHY: Record<NonNullable<NonNullable<WorkItemInfo["waiting_on"]>["why"]>, s
   ready: "approved and ready to land",
 };
 
+/** "ada", "ada and bob", "ada, bob and 2 more". */
+function names(list: string[]): string {
+  if (list.length <= 2) return list.join(" and ");
+  if (list.length === 3) return `${list[0]}, ${list[1]} and ${list[2]}`;
+  return `${list[0]}, ${list[1]} and ${list.length - 2} more`;
+}
+
 /** Who's next, in a few words: "Waiting on you: checks failed". */
 export function waitingText(item: WorkItemInfo): string | null {
   const w = item.waiting_on;
@@ -132,6 +139,7 @@ export function waitingText(item: WorkItemInfo): string | null {
     case "agent":
       return item.owner.kind === "agent" ? `Waiting on ${item.owner.name}` : "Waiting on the agent";
     case "teammate":
+      if (w.names?.length) return `Waiting on ${names(w.names)}`;
       return item.owner.kind === "teammate" ? `Waiting on ${item.owner.login}` : "Waiting on a reviewer";
     case "ci":
       return "Waiting on checks";

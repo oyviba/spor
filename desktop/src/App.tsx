@@ -9,6 +9,7 @@ import { RepoPanel } from "./shared/Layout";
 import { BranchBar, runSync } from "./shared/BranchBar";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { AgentLimit } from "./sections/agents/AgentLimit";
+import { PullDefaults } from "./sections/work/PullDefaults";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
 import { ShortcutsPage } from "./shared/Shortcuts";
 import { AppearancePage } from "./shared/ThemeEditor";
@@ -480,6 +481,7 @@ export function App() {
             },
             prompt: (spec) => new Promise((resolve) => setDialog({ kind: "prompt", ...spec, resolve })),
             confirm: (spec) => new Promise((resolve) => setDialog({ kind: "confirm", ...spec, resolve })),
+            openSettings: setSettingsPage,
           }
         : null,
     [repo, state, refresh, tasks, work, toast, fail, undo, track, target, workspaces], // eslint-disable-line react-hooks/exhaustive-deps
@@ -720,6 +722,7 @@ export function App() {
       ),
     },
     { id: "agents", label: "Agents", render: () => <AgentLimit /> },
+    { id: "pulls", label: "Pull requests", render: () => <PullDefaults /> },
     { id: "diffs", label: "Diffs", render: () => <DiffSettings /> },
     { id: "history", label: "History graph", render: () => <GraphOptionsPanel /> },
     {

@@ -327,7 +327,7 @@ export function WorkSection({ embedded }: { embedded?: EmbeddedTask } = {}) {
   const github = (id: string) => ({
     pull: pulls[id],
     // The work item's own issue and PR: show them, not the item again.
-    onPublish: async (draft: boolean, commitUncommitted: boolean) =>
+    onPublish: async (draft: boolean | null, commitUncommitted: boolean) =>
       (await undoesOk("Open the pull request anyway?")) &&
       shell
         .act(() => api.publishTask(id, draft, commitUncommitted), {

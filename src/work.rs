@@ -98,6 +98,8 @@ pub struct PullSummary {
     pub review: ReviewState,
     pub author: String,
     pub url: String,
+    /// Whose review is requested and not given yet.
+    pub reviewers: Vec<String>,
 }
 
 impl PullSummary {
@@ -109,6 +111,7 @@ impl PullSummary {
             review: pull.review,
             author: pull.author.clone(),
             url: pull.url.clone(),
+            reviewers: pull.reviewers.clone(),
         }
     }
 }
@@ -169,8 +172,10 @@ pub enum Why {
 pub enum Waiting {
     You(Why),
     Agent,
-    /// A teammate: the reviewer, or the pull request's author.
-    Teammate,
+    /// Teammates, by login (or `org/team`): the reviewers asked, or the
+    /// pull request's author. Empty when nobody in particular has been
+    /// asked to review.
+    Teammate(Vec<String>),
     Ci,
 }
 
@@ -417,7 +422,7 @@ fn waiting(
             return Some(Waiting::You(Why::Review));
         }
         if theirs {
-            return Some(Waiting::Teammate);
+            return Some(Waiting::Teammate(vec![p.author.clone()]));
         }
         // A cloud agent works in a draft until it's done.
         if p.state == PrState::Draft && agent.is_none() && matches!(owner, Owner::Agent(_)) {
@@ -431,9 +436,14 @@ fn waiting(
     }
     let p = open?;
     Some(match p.review {
+        // Changes were asked for and a review requested again since: it's
+        // back with the reviewers.
+        ReviewState::ChangesRequested if !p.reviewers.is_empty() => {
+            Waiting::Teammate(p.reviewers.clone())
+        }
         ReviewState::ChangesRequested => Waiting::You(Why::ChangesRequested),
         ReviewState::Approved => Waiting::You(Why::Ready),
-        ReviewState::None => Waiting::Teammate,
+        ReviewState::None => Waiting::Teammate(p.reviewers.clone()),
     })
 }
 

@@ -18,7 +18,10 @@ import type {
   PlanCommit,
   PrBadge,
   Pull,
+  PullCandidates,
   PullDetail,
+  PullEdit,
+  PullPreset,
   RepoInfo,
   RepoHead,
   RepoState,
@@ -183,6 +186,11 @@ export const api = {
   pullDiff: (number: number) => call<string>("pull_diff", { number }),
   pullAction: (number: number, action: string, body?: string) =>
     call<string>("pull_action", { number, action, body: body ?? null }),
+  /** Request or withdraw reviews, assign, label (#149). */
+  pullEdit: (number: number, edit: PullEdit) => call<string>("pull_edit", { number, edit }),
+  pullCandidates: () => call<PullCandidates>("pull_candidates"),
+  pullPreset: () => call<PullPreset>("pull_preset"),
+  setPullPreset: (preset: PullPreset) => call<void>("set_pull_preset", { preset }),
   runs: (branch: string | null, workflow: string | null) => call<Run[]>("runs", { branch, workflow }),
   workflows: () => call<string[]>("workflows"),
   runDetail: (id: number) => call<RunDetail>("run_detail", { id }),
@@ -209,8 +217,9 @@ export const api = {
     call<TaskSummary>("hand_to_agent", { branch, prompt, base, agent, mode }),
   createIssueTask: (number: number, prompt: string, base: string, agent: AgentChoice, mode: Mode) =>
     call<TaskSummary>("create_issue_task", { number, prompt, base, agent, mode }),
-  /** Push the task's branch and open a pull request for it. */
-  publishTask: (id: string, draft: boolean, commitUncommitted: boolean) =>
+  /** Push the task's branch and open a pull request for it, with the
+   * repository's preset (#149); `draft` null takes the preset's. */
+  publishTask: (id: string, draft: boolean | null, commitUncommitted: boolean) =>
     call<string>("publish_task", { id, draft, commitUncommitted }),
   /** Push the agent's new commits to the task's pull request; with
    * `commitUncommitted`, what it left uncommitted is committed and goes too. */

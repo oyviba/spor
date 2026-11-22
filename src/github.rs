@@ -283,16 +283,29 @@ pub struct Pull {
     pub additions: usize,
     pub deletions: usize,
     pub url: String,
+    /// Whose review is requested and not given yet: logins, and teams as
+    /// `org/slug` (the form `gh pr edit --add-reviewer` takes).
+    pub reviewers: Vec<String>,
 }
 
 const PULL_FIELDS: &str =
-    "number,title,author,headRefName,baseRefName,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,additions,deletions,url";
+    "number,title,author,headRefName,baseRefName,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,additions,deletions,url,reviewRequests";
 
 /// The jq that turns one PR object into a `Pull` line, prefixed by `tag`.
 fn pull_jq(tag: &str) -> String {
     format!(
-        r#"["{tag}", (.number|tostring), .title, (.author.login // ""), .headRefName, .baseRefName, (if .isDraft and .state == "OPEN" then "DRAFT" else .state end), (.reviewDecision // ""), ([.statusCheckRollup[]? | ((.conclusion // .state // "") | if . == "" then "PENDING" else . end)] | join(",")), .updatedAt, (.additions|tostring), (.deletions|tostring), .url] | @tsv"#
+        r#"["{tag}", (.number|tostring), .title, (.author.login // ""), .headRefName, .baseRefName, (if .isDraft and .state == "OPEN" then "DRAFT" else .state end), (.reviewDecision // ""), ([.statusCheckRollup[]? | ((.conclusion // .state // "") | if . == "" then "PENDING" else . end)] | join(",")), .updatedAt, (.additions|tostring), (.deletions|tostring), .url, ([.reviewRequests[]? | if type == "string" then . elif .login then .login elif .slug then ((.organization.login // "") + "/" + .slug | ltrimstr("/")) else (.name // "") end | select(. != "")] | join(","))] | @tsv"#
     )
+}
+
+/// `a,b,,c` → `[a, b, c]`.
+fn list(field: &str) -> Vec<String> {
+    field
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 fn parse_pull(f: &[&str]) -> Option<Pull> {
@@ -321,6 +334,7 @@ fn parse_pull(f: &[&str]) -> Option<Pull> {
         additions: f[9].parse().unwrap_or(0),
         deletions: f[10].parse().unwrap_or(0),
         url: f[11].to_string(),
+        reviewers: f.get(12).map_or_else(Vec::new, |r| list(r)),
     })
 }
 
@@ -491,6 +505,8 @@ pub struct PullDetail {
     pub commits: usize,
     pub checks: Vec<Check>,
     pub timeline: Vec<Comment>,
+    pub assignees: Vec<String>,
+    pub labels: Vec<String>,
 }
 
 /// One `gh pr view` call, flattened to a `pr` line, a `meta` line, and one
@@ -499,7 +515,7 @@ fn pull_detail_jq() -> String {
     format!(
         concat!(
             "({pull}), ",
-            r#"(["meta", .body, (.mergeable // ""), (.changedFiles|tostring), (.commits|length|tostring)] | @tsv), "#,
+            r#"(["meta", .body, (.mergeable // ""), (.changedFiles|tostring), (.commits|length|tostring), ([.assignees[]?.login] | join(",")), ([.labels[]?.name] | join(","))] | @tsv), "#,
             r#"(.statusCheckRollup[]? | if .__typename == "StatusContext" then ["check", .context, "", (.state // ""), "", (.targetUrl // ""), (.startedAt // ""), ""] else ["check", .name, (.workflowName // ""), (.status // ""), (.conclusion // ""), (.detailsUrl // ""), (.startedAt // ""), (.completedAt // "")] end | @tsv), "#,
             r#"(.reviews[]? | ["review", (.author.login // ""), .body, .submittedAt, .state] | @tsv), "#,
             r#"(.comments[]? | ["comment", (.author.login // ""), .body, .createdAt] | @tsv)"#,
@@ -531,11 +547,15 @@ fn parse_pull_detail(out: &str) -> Option<PullDetail> {
     let mut commits = 0;
     let mut checks = Vec::new();
     let mut timeline = Vec::new();
+    let mut assignees = Vec::new();
+    let mut labels = Vec::new();
     for line in out.lines() {
         let f: Vec<&str> = line.split('\t').collect();
         match f.as_slice() {
             ["pr", rest @ ..] => pull = parse_pull(rest),
-            ["meta", b, m, files, count, ..] => {
+            ["meta", b, m, files, count, rest @ ..] => {
+                assignees = rest.first().map_or_else(Vec::new, |a| list(a));
+                labels = rest.get(1).map_or_else(Vec::new, |l| list(&unescape(l)));
                 body = unescape(b);
                 mergeable = match *m {
                     "MERGEABLE" => Mergeable::Yes,
@@ -609,6 +629,8 @@ fn parse_pull_detail(out: &str) -> Option<PullDetail> {
         commits,
         checks,
         timeline,
+        assignees,
+        labels,
     })
 }
 
@@ -616,7 +638,9 @@ fn parse_pull_detail(out: &str) -> Option<PullDetail> {
 pub fn pull_detail(dir: &Path, number: u64) -> Result<PullDetail, String> {
     let repo = repo(dir)?;
     let number = number.to_string();
-    let fields = format!("{PULL_FIELDS},body,mergeable,changedFiles,commits,reviews,comments");
+    let fields = format!(
+        "{PULL_FIELDS},body,mergeable,changedFiles,commits,reviews,comments,assignees,labels"
+    );
     let jq = pull_detail_jq();
     let out = gh(
         dir,
@@ -737,6 +761,219 @@ pub fn mark_ready(dir: &Path, number: u64) -> Result<(), String> {
     gh(dir, &repo, &["pr", "ready", &number.to_string()]).map(drop)
 }
 
+/// Put an open PR back into draft.
+pub fn mark_draft(dir: &Path, number: u64) -> Result<(), String> {
+    let repo = repo(dir)?;
+    gh(dir, &repo, &["pr", "ready", &number.to_string(), "--undo"]).map(drop)
+}
+
+/// Changes to who's on a PR and how it's labelled. Reviewers are logins,
+/// or teams as `org/slug`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PullEdit {
+    pub add_reviewers: Vec<String>,
+    pub remove_reviewers: Vec<String>,
+    pub add_assignees: Vec<String>,
+    pub remove_assignees: Vec<String>,
+    pub add_labels: Vec<String>,
+    pub remove_labels: Vec<String>,
+}
+
+impl PullEdit {
+    pub fn is_empty(&self) -> bool {
+        self.args().is_empty()
+    }
+
+    /// The `gh pr edit` flags it comes to.
+    fn args(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (flag, names) in [
+            ("--add-reviewer", &self.add_reviewers),
+            ("--remove-reviewer", &self.remove_reviewers),
+            ("--add-assignee", &self.add_assignees),
+            ("--remove-assignee", &self.remove_assignees),
+            ("--add-label", &self.add_labels),
+            ("--remove-label", &self.remove_labels),
+        ] {
+            let names: Vec<&str> = names
+                .iter()
+                .map(|n| n.trim())
+                .filter(|n| !n.is_empty())
+                .collect();
+            if !names.is_empty() {
+                out.push(flag.to_string());
+                out.push(names.join(","));
+            }
+        }
+        out
+    }
+}
+
+/// Request or withdraw reviews, assign or unassign, label or unlabel.
+pub fn edit_pull(dir: &Path, number: u64, edit: &PullEdit) -> Result<(), String> {
+    let args = edit.args();
+    if args.is_empty() {
+        return Ok(());
+    }
+    let repo = repo(dir)?;
+    let number = number.to_string();
+    let mut all = vec!["pr", "edit", number.as_str()];
+    all.extend(args.iter().map(String::as_str));
+    gh(dir, &repo, &all).map(drop)
+}
+
+/// Who can be asked to review or be assigned: the repository's
+/// collaborators, then the teams with access to it as `org/slug` (only an
+/// organization's repository has those, and only someone who may see them
+/// gets them; otherwise there are none).
+pub fn collaborators(dir: &Path) -> Result<Vec<String>, String> {
+    let repo = repo(dir)?;
+    let base = format!("repos/{}/{}", repo.owner, repo.name);
+    let people = gh(
+        dir,
+        &repo,
+        &[
+            "api",
+            "--paginate",
+            &format!("{base}/collaborators?per_page=100"),
+            "--jq",
+            ".[].login",
+        ],
+    )?;
+    let teams = gh(
+        dir,
+        &repo,
+        &[
+            "api",
+            "--paginate",
+            &format!("{base}/teams?per_page=100"),
+            "--jq",
+            r#".[] | (.organization.login // "") + "/" + .slug"#,
+        ],
+    )
+    .unwrap_or_default();
+    let mut out: Vec<String> = people
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+    out.sort_by_key(|a| a.to_lowercase());
+    let mut teams: Vec<String> = teams
+        .lines()
+        .map(|l| l.trim().trim_start_matches('/').to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    teams.sort_by_key(|a| a.to_lowercase());
+    out.extend(teams);
+    Ok(out)
+}
+
+/// The repository's labels, by name.
+pub fn labels(dir: &Path) -> Result<Vec<String>, String> {
+    let repo = repo(dir)?;
+    let out = gh(
+        dir,
+        &repo,
+        &[
+            "label", "list", "--limit", "500", "--json", "name", "--jq", ".[].name",
+        ],
+    )?;
+    let mut names: Vec<String> = out
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(String::from)
+        .collect();
+    names.sort_by_key(|a| a.to_lowercase());
+    Ok(names)
+}
+
+/// What a new pull request starts with: draft or not, reviewers,
+/// assignees and labels. A repository keeps its own in `git config`
+/// (`spor.pullDraft`, `spor.pullReviewers`, `spor.pullAssignees`,
+/// `spor.pullLabels`, the lists comma-separated), so agent tasks can
+/// always open as drafts in one and request a team's review in another.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PullPreset {
+    pub draft: bool,
+    pub reviewers: Vec<String>,
+    pub assignees: Vec<String>,
+    pub labels: Vec<String>,
+}
+
+impl PullPreset {
+    const DRAFT: &'static str = "spor.pullDraft";
+    const REVIEWERS: &'static str = "spor.pullReviewers";
+    const ASSIGNEES: &'static str = "spor.pullAssignees";
+    const LABELS: &'static str = "spor.pullLabels";
+
+    /// The repository's at `dir`; nothing set is the default.
+    pub fn load(dir: &Path) -> PullPreset {
+        let get = |key: &str| {
+            Command::new("git")
+                .current_dir(dir)
+                .args(["config", "--get", key])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default()
+        };
+        PullPreset {
+            draft: matches!(
+                get(Self::DRAFT).to_lowercase().as_str(),
+                "true" | "yes" | "on" | "1"
+            ),
+            reviewers: list(&get(Self::REVIEWERS)),
+            assignees: list(&get(Self::ASSIGNEES)),
+            labels: list(&get(Self::LABELS)),
+        }
+    }
+
+    /// Keep it as the repository's at `dir` (in its local config); empty
+    /// values are unset.
+    pub fn save(&self, dir: &Path) -> Result<(), String> {
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .map_err(|e| format!("Couldn't run git: {e}"))
+        };
+        let set = |key: &str, value: String| -> Result<(), String> {
+            if value.is_empty() {
+                // Exit status 5: it wasn't set, which is fine.
+                git(&["config", "--local", "--unset", key])?;
+                return Ok(());
+            }
+            let out = git(&["config", "--local", key, &value])?;
+            if out.status.success() {
+                Ok(())
+            } else {
+                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+            }
+        };
+        let join = |v: &[String]| {
+            v.iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        set(
+            Self::DRAFT,
+            if self.draft {
+                "true".into()
+            } else {
+                String::new()
+            },
+        )?;
+        set(Self::REVIEWERS, join(&self.reviewers))?;
+        set(Self::ASSIGNEES, join(&self.assignees))?;
+        set(Self::LABELS, join(&self.labels))
+    }
+}
+
 /// Close the PR without merging, or reopen a closed one.
 pub fn set_pull_open(dir: &Path, number: u64, open: bool) -> Result<(), String> {
     let repo = repo(dir)?;
@@ -744,22 +981,35 @@ pub fn set_pull_open(dir: &Path, number: u64, open: bool) -> Result<(), String> 
     gh(dir, &repo, &["pr", verb, &number.to_string()]).map(drop)
 }
 
-/// Open a pull request from `head` (already pushed) into `base`. Returns
-/// its number and URL.
+/// Open a pull request from `head` (already pushed) into `base`, as
+/// `preset` says (draft, reviewers, assignees, labels). Returns its number
+/// and URL.
 pub fn create_pull(
     dir: &Path,
     head: &str,
     base: &str,
     title: &str,
     body: &str,
-    draft: bool,
+    preset: &PullPreset,
 ) -> Result<(u64, String), String> {
     let repo = repo(dir)?;
     let mut args = vec![
         "pr", "create", "--head", head, "--base", base, "--title", title, "--body", body,
     ];
-    if draft {
+    if preset.draft {
         args.push("--draft");
+    }
+    let reviewers = preset.reviewers.join(",");
+    let assignees = preset.assignees.join(",");
+    let labels = preset.labels.join(",");
+    for (flag, value) in [
+        ("--reviewer", &reviewers),
+        ("--assignee", &assignees),
+        ("--label", &labels),
+    ] {
+        if !value.is_empty() {
+            args.extend([flag, value.as_str()]);
+        }
     }
     let out = gh(dir, &repo, &args)?;
     // `gh pr create` prints the new PR's URL.
@@ -1758,7 +2008,7 @@ mod tests {
 
     #[test]
     fn parses_pull_list() {
-        let out = "pr\t12\tAdd login\\twith tabs\toyviba\tfeat/login\tmain\tOPEN\tAPPROVED\tSUCCESS,SKIPPED\t2026-10-30T10:00:00Z\t120\t4\thttps://github.com/o/r/pull/12\n\
+        let out = "pr\t12\tAdd login\\twith tabs\toyviba\tfeat/login\tmain\tOPEN\tAPPROVED\tSUCCESS,SKIPPED\t2026-10-30T10:00:00Z\t120\t4\thttps://github.com/o/r/pull/12\tada,acme/web\n\
                    pr\t11\tWIP\tsomeone\twip\tmain\tDRAFT\t\t\t2026-10-29T10:00:00Z\t1\t0\thttps://github.com/o/r/pull/11\n\
                    junk\n";
         let pulls = parse_pulls(out);
@@ -1769,12 +2019,15 @@ mod tests {
         assert_eq!(pulls[0].additions, 120);
         assert_eq!(pulls[1].state, PrState::Draft);
         assert_eq!(pulls[1].checks, ChecksState::None);
+        // Requested reviewers, people and teams; none on an older line.
+        assert_eq!(pulls[0].reviewers, ["ada", "acme/web"]);
+        assert!(pulls[1].reviewers.is_empty());
     }
 
     #[test]
     fn parses_pull_detail() {
         let out = "pr\t7\tFix it\toyviba\tfix/x\tmain\tOPEN\t\tFAILURE,SUCCESS\t2026-10-30T10:00:00Z\t3\t1\thttps://github.com/o/r/pull/7\n\
-                   meta\tFixes the thing.\\n\\n- one\\n- two\tMERGEABLE\t2\t3\n\
+                   meta\tFixes the thing.\\n\\n- one\\n- two\tMERGEABLE\t2\t3\toyviba,ada\tbug,good first issue\n\
                    check\tcheck\tCI\tCOMPLETED\tSUCCESS\thttps://github.com/o/r/actions/runs/100/job/200\t2026-10-30T10:00:00Z\t2026-10-30T10:01:23Z\n\
                    check\tmacos-app\tCI\tCOMPLETED\tFAILURE\thttps://github.com/o/r/actions/runs/100/job/201\t2026-10-30T10:00:00Z\t2026-10-30T10:05:00Z\n\
                    check\tvercel\t\tSUCCESS\t\thttps://vercel.com/x\t\t\n\
@@ -1799,6 +2052,51 @@ mod tests {
         assert_eq!(d.timeline[0].author, "carol");
         assert_eq!(d.timeline[0].body, "What about \\n?");
         assert_eq!(d.timeline[1].verdict, Some(Verdict::Approved));
+        assert_eq!(d.assignees, ["oyviba", "ada"]);
+        assert_eq!(d.labels, ["bug", "good first issue"]);
+    }
+
+    #[test]
+    fn pull_edits_come_to_gh_flags() {
+        let edit = PullEdit {
+            add_reviewers: vec!["ada".into(), " ".into(), "acme/web".into()],
+            remove_labels: vec!["wip".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            edit.args(),
+            ["--add-reviewer", "ada,acme/web", "--remove-label", "wip"]
+        );
+        assert!(PullEdit::default().is_empty());
+    }
+
+    #[test]
+    fn a_repository_keeps_its_pull_request_preset() {
+        let dir = std::env::temp_dir().join(format!("spor-preset-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let init = Command::new("git")
+            .current_dir(&dir)
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        assert!(init.success());
+        assert_eq!(PullPreset::load(&dir), PullPreset::default());
+
+        let preset = PullPreset {
+            draft: true,
+            reviewers: vec!["ada".into(), "acme/web".into()],
+            assignees: vec![],
+            labels: vec!["agent".into()],
+        };
+        preset.save(&dir).unwrap();
+        assert_eq!(PullPreset::load(&dir), preset);
+
+        // Emptied, it's unset again (and unsetting what isn't set is fine).
+        PullPreset::default().save(&dir).unwrap();
+        PullPreset::default().save(&dir).unwrap();
+        assert_eq!(PullPreset::load(&dir), PullPreset::default());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1845,6 +2143,7 @@ mod tests {
                 additions: 0,
                 deletions: 0,
                 url: "https://github.com/o/r/pull/12".into(),
+                reviewers: Vec::new(),
             },
             body: String::new(),
             mergeable: Mergeable::Yes,
@@ -1852,6 +2151,8 @@ mod tests {
             commits: 0,
             checks: Vec::new(),
             timeline,
+            assignees: Vec::new(),
+            labels: Vec::new(),
         }
     }
 

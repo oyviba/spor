@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { api } from "../../api";
+import { presetSummary } from "../work/PullDefaults";
 import { useChanged, useStored } from "../../shared/hooks";
-import type { SetupInfo, TaskDetail, TaskPull } from "../../types";
+import type { PullPreset, SetupInfo, TaskDetail, TaskPull } from "../../types";
 import { useShell } from "../../shared/app";
 import { Button } from "../../shared/Button";
 import { DetailsCard } from "../../shared/Layout";
@@ -26,7 +28,8 @@ import {
 export interface GithubActions {
   /** Its pull request, once it has one (#24, #47). */
   pull?: TaskPull;
-  onPublish: (draft: boolean, commitUncommitted: boolean) => unknown;
+  /** `draft` null: as the repository's pull request defaults say (#149). */
+  onPublish: (draft: boolean | null, commitUncommitted: boolean) => unknown;
   /** Push to its PR; with `commitUncommitted`, uncommitted work goes too. */
   onPush: (commitUncommitted: boolean) => unknown;
   onSendReview: () => unknown;
@@ -56,6 +59,8 @@ interface Props extends GithubActions {
   onSend: (text: string) => unknown;
   /** Start a new task from something the agent noticed. */
   onStartTask: (prompt: string) => unknown;
+  /** Its PR's reviewers, assignees and labels (#149), once loaded. */
+  people?: React.ReactNode;
 }
 
 /** The task's details pane, fixed beside the page. By default it has the work
@@ -75,6 +80,13 @@ export function Inspector({ detail, ...p }: Props) {
   const [includeUncommitted, setIncludeUncommitted] = useState(true);
   const [landMenu, setLandMenu] = useState(false);
   const [prMenu, setPrMenu] = useState(false);
+  // What its pull request would start with here (#149), read when the menu
+  // to publish could show.
+  const [preset, setPreset] = useState<PullPreset | null>(null);
+  const unpublished = !p.pull;
+  useEffect(() => {
+    if (unpublished) api.pullPreset().then(setPreset, () => setPreset(null));
+  }, [unpublished, shell.repo.root]);
   // What it's doing (publishing, landing…): that button spins, the others
   // that would change the task wait.
   const [working, setWorking] = useState<"publish" | "land" | "discard" | "merge" | null>(null);
@@ -269,6 +281,7 @@ export function Inspector({ detail, ...p }: Props) {
           </Button>
         </div>
       )}
+      {prOpen && p.people}
       {prOpen && (
         <div className="inspector-actions">
           {pr.state === "draft" && (
@@ -329,10 +342,18 @@ export function Inspector({ detail, ...p }: Props) {
                 className="ghost"
                 disabled={publishBlocked != null || (working != null && working !== "publish")}
                 busy={working === "publish"}
-                title={publishBlocked ?? `Push ${t.branch} and open a pull request into ${t.base}`}
-                onClick={() => work("publish", () => p.onPublish(false, includeUncommitted))}
+                title={
+                  publishBlocked ??
+                  [
+                    `Push ${t.branch} and open ${preset?.draft ? "a draft" : "a"} pull request into ${t.base}`,
+                    preset && presetSummary(preset),
+                  ]
+                    .filter(Boolean)
+                    .join(": ")
+                }
+                onClick={() => work("publish", () => p.onPublish(null, includeUncommitted))}
               >
-                <PullRequest size={12} /> Publish
+                <PullRequest size={12} /> {preset?.draft ? "Publish as draft" : "Publish"}
               </Button>
               <button
                 className="ghost split-more"
@@ -347,10 +368,20 @@ export function Inspector({ detail, ...p }: Props) {
                   <button
                     onClick={() => {
                       setPrMenu(false);
-                      work("publish", () => p.onPublish(true, includeUncommitted));
+                      const draft = !preset?.draft;
+                      work("publish", () => p.onPublish(draft, includeUncommitted));
                     }}
                   >
-                    Publish as a draft
+                    {preset?.draft ? "Publish ready for review" : "Publish as a draft"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setPrMenu(false);
+                      shell.openSettings("pulls");
+                    }}
+                    title={(preset && presetSummary(preset)) ?? "Draft, reviewers, assignees and labels for new pull requests"}
+                  >
+                    Pull request defaults…
                   </button>
                 </div>
               )}

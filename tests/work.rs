@@ -92,6 +92,7 @@ fn pull(number: u64, head: &str, author: &str) -> Pull {
         additions: 1,
         deletions: 0,
         url: format!("https://github.com/o/r/pull/{number}"),
+        reviewers: Vec::new(),
     }
 }
 
@@ -377,7 +378,10 @@ fn waiting_on_you_for_a_requested_review() {
     w.pulls.push(pull(5, "their-feat", "teammate"));
     let it = w.only();
     assert_eq!(it.owner, Owner::Teammate("teammate".into()));
-    assert_eq!(it.waiting_on, Some(Waiting::Teammate));
+    assert_eq!(
+        it.waiting_on,
+        Some(Waiting::Teammate(vec!["teammate".into()]))
+    );
 
     w.review_requested.push(5);
     assert_eq!(w.only().waiting_on, Some(Waiting::You(Why::Review)));
@@ -395,7 +399,10 @@ fn waiting_on_you_when_checks_fail_on_your_item() {
     let mut p = pull(1, "their", "teammate");
     p.checks = ChecksState::Failing;
     w.pulls.push(p);
-    assert_eq!(w.only().waiting_on, Some(Waiting::Teammate));
+    assert_eq!(
+        w.only().waiting_on,
+        Some(Waiting::Teammate(vec!["teammate".into()]))
+    );
 }
 
 #[test]
@@ -434,7 +441,33 @@ fn waiting_on_you_when_changes_are_requested() {
 fn waiting_on_a_teammate_to_review_your_pull() {
     let mut w = World::default();
     w.pulls.push(pull(1, "feat", ME));
-    assert_eq!(w.only().waiting_on, Some(Waiting::Teammate));
+    // Nobody asked yet: some reviewer.
+    assert_eq!(w.only().waiting_on, Some(Waiting::Teammate(vec![])));
+
+    // By name once reviews are requested (#149).
+    w.pulls[0].reviewers = vec!["ada".into(), "acme/web".into()];
+    let it = w.only();
+    assert_eq!(
+        it.waiting_on,
+        Some(Waiting::Teammate(vec!["ada".into(), "acme/web".into()]))
+    );
+    assert_eq!(
+        it.pull.unwrap().reviewers,
+        vec!["ada".to_string(), "acme/web".to_string()]
+    );
+}
+
+#[test]
+fn back_with_the_reviewer_once_review_is_requested_again() {
+    let mut w = World::default();
+    let mut p = pull(1, "feat", ME);
+    p.review = ReviewState::ChangesRequested;
+    p.reviewers = vec!["ada".into()];
+    w.pulls.push(p);
+    assert_eq!(
+        w.only().waiting_on,
+        Some(Waiting::Teammate(vec!["ada".into()]))
+    );
 }
 
 // ── Later work fits the same types ───────────────────────────────────────────
@@ -455,7 +488,7 @@ fn cloud_agents_are_items_without_a_folder() {
 
     // Once it's ready for review, it's waiting on a reviewer like any PR.
     w.pulls[0].state = PrState::Open;
-    assert_eq!(w.only().waiting_on, Some(Waiting::Teammate));
+    assert_eq!(w.only().waiting_on, Some(Waiting::Teammate(vec![])));
 
     assert_eq!(remote_agent("claude/x", None), Some("Claude Code"));
     assert_eq!(remote_agent("feat/x", Some("dependabot[bot]")), None);

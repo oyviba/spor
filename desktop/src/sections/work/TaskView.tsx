@@ -18,6 +18,7 @@ import { Conversation } from "../agents/Conversation";
 import { Inspector, type GithubActions } from "../agents/Inspector";
 import { WorkPage, shownTab, type WorkTab } from "./WorkPage";
 import { PullChecks, ReviewBox, Timeline, usePullDetail } from "./pull";
+import { PullPeople } from "./PullPeople";
 
 interface Props {
   repo: RepoInfo;
@@ -98,7 +99,10 @@ export const TaskView = forwardRef<ComposerHandle, Props>(function TaskView(p, c
     ...(pull ? [{ id: "discussion" as const }, { id: "checks" as const }] : []),
   ];
   const tab = shownTab(tabs, p.tab);
-  const { pr, reload } = usePullDetail(pull && (tab === "discussion" || tab === "checks") ? pull.number : null, false);
+  // Read whenever it's open, for its reviewers, assignees and labels in the
+  // details pane (#149); a settled one only on its own tabs.
+  const pullOpen = pull?.state === "open" || pull?.state === "draft";
+  const { pr, reload } = usePullDetail(pull && (pullOpen || tab === "discussion" || tab === "checks") ? pull.number : null, false);
 
   const composer = isOpen(t) && (
     <Composer
@@ -190,6 +194,7 @@ export const TaskView = forwardRef<ComposerHandle, Props>(function TaskView(p, c
           onSend={p.onSend}
           onStartTask={p.onStartTask}
           {...p.github}
+          people={pr && <PullPeople pr={pr} onChanged={reload} />}
         />
       }
       dock={dock}

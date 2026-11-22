@@ -113,6 +113,8 @@ pub(crate) struct ItemPull {
     review: String,
     author: String,
     url: String,
+    /// Whose review is requested and not given yet.
+    reviewers: Vec<String>,
 }
 
 /// Whose work it is.
@@ -131,6 +133,9 @@ pub(crate) struct ItemWaiting {
     who: &'static str,
     /// question, unseen, review, checksfailed, changesrequested, ready.
     why: Option<&'static str>,
+    /// The teammates it waits on, by login (or `org/team`); empty when
+    /// it's nobody in particular.
+    names: Vec<String>,
 }
 
 /// A work item as the UI reads it: `spor::work::WorkItem`, in words.
@@ -174,6 +179,7 @@ impl From<work::WorkItem> for Item {
                 review: crate::name_of(&p.review),
                 author: p.author,
                 url: p.url,
+                reviewers: p.reviewers,
             }),
             checks: w.checks.map(|c| match c {
                 Checks::Passed => "passed",
@@ -203,18 +209,22 @@ impl From<work::WorkItem> for Item {
                         Why::ChangesRequested => "changesrequested",
                         Why::Ready => "ready",
                     }),
+                    names: Vec::new(),
                 },
                 Waiting::Agent => ItemWaiting {
                     who: "agent",
                     why: None,
+                    names: Vec::new(),
                 },
-                Waiting::Teammate => ItemWaiting {
+                Waiting::Teammate(names) => ItemWaiting {
                     who: "teammate",
                     why: None,
+                    names,
                 },
                 Waiting::Ci => ItemWaiting {
                     who: "ci",
                     why: None,
+                    names: Vec::new(),
                 },
             }),
             updated: w.updated,
@@ -456,7 +466,8 @@ mod tests {
             farewell.waiting_on,
             Some(ItemWaiting {
                 who: "teammate",
-                why: None
+                why: None,
+                names: vec!["grace".into()],
             })
         );
         // A pull request waiting on your review, with no local branch.
@@ -465,7 +476,8 @@ mod tests {
             readme.waiting_on,
             Some(ItemWaiting {
                 who: "you",
-                why: Some("review")
+                why: Some("review"),
+                names: Vec::new(),
             })
         );
         // An issue assigned to you, with no branch yet; not a teammate's.

@@ -89,5 +89,10 @@ test("says who it's waiting on", () => {
   assert.equal(waitingText(item("i", { waiting_on: { who: "you", why: "checksfailed" } })), "Waiting on you: checks failed");
   assert.equal(waitingText(item("i", { owner: { kind: "agent", name: "Claude Code" }, waiting_on: { who: "agent", why: null } })), "Waiting on Claude Code");
   assert.equal(waitingText(item("i", { owner: { kind: "teammate", login: "ada" }, waiting_on: { who: "teammate", why: null } })), "Waiting on ada");
+  // Your pull request, by the reviewers asked (#149).
+  assert.equal(waitingText(item("i", { waiting_on: { who: "teammate", why: null, names: [] } })), "Waiting on a reviewer");
+  assert.equal(waitingText(item("i", { waiting_on: { who: "teammate", why: null, names: ["grace"] } })), "Waiting on grace");
+  assert.equal(waitingText(item("i", { waiting_on: { who: "teammate", why: null, names: ["grace", "acme/web"] } })), "Waiting on grace and acme/web");
+  assert.equal(waitingText(item("i", { waiting_on: { who: "teammate", why: null, names: ["a", "b", "c", "d"] } })), "Waiting on a, b and 2 more");
   assert.equal(waitingText(item("i", {})), null);
 });

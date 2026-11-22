@@ -921,12 +921,14 @@ impl Tasks {
     /// work in its folder is committed first; otherwise it's refused. With
     /// `describe`, Claude Code writes the PR's title and description from
     /// the work (and the agent's session); if it can't, the PR gets the
-    /// prompt's. The task remembers the PR. Returns its number and URL.
+    /// prompt's. `preset` says whether it's a draft and whom it asks to
+    /// review, assigns and labels. The task remembers the PR. Returns its
+    /// number and URL.
     pub fn publish(
         &self,
         task: &Task,
         remote: &str,
-        draft: bool,
+        preset: &crate::github::PullPreset,
         commit_uncommitted: bool,
         describe: bool,
     ) -> Result<(u64, String), String> {
@@ -968,7 +970,7 @@ impl Tasks {
             &task.base,
             &title,
             &task.pull_request_body(description),
-            draft,
+            preset,
         )?;
         self.save(&Task {
             pull: Some(number),

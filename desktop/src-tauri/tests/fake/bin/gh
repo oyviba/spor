@@ -107,6 +107,11 @@ def pulls(fixtures, state):
     return result
 
 
+def requested(p):
+    """The logins whose review a pull request asks for (gh gives objects)."""
+    return [r.get("login") for r in p.get("reviewRequests", []) if isinstance(r, dict)]
+
+
 def runs(fixtures, state):
     result = []
     for r in copy.deepcopy(fixtures["runs"]):
@@ -153,7 +158,7 @@ def main():
         if opts.get("author") == "@me":
             items = [p for p in items if p["author"]["login"] == fixtures["me"]]
         if "review-requested:@me" in str(opts.get("search", "")):
-            items = [p for p in items if fixtures["me"] in p.get("reviewRequests", [])]
+            items = [p for p in items if fixtures["me"] in requested(p)]
         out(items, opts)
     elif cmd == ["pr", "view"]:
         out(find(pulls(fixtures, state), "number", pos[2]), opts)
@@ -227,7 +232,7 @@ def main():
         items = [
             p
             for p in pulls(fixtures, state)
-            if p["state"] == "OPEN" and fixtures["me"] in p.get("reviewRequests", [])
+            if p["state"] == "OPEN" and fixtures["me"] in requested(p)
         ]
         for p in items:
             owner, name = p["url"].split("/")[3:5]

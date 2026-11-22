@@ -1311,12 +1311,14 @@ pub(crate) fn skip_setup(app: State<App>, id: String) -> Result<(), String> {
 
 // ---- Pull requests -------------------------------------------------------
 
-/// Push the task's branch and open a pull request for it into its base.
+/// Push the task's branch and open a pull request for it into its base,
+/// with the repository's reviewers, assignees and labels (#149). `draft`
+/// overrides the repository's default when given.
 #[tauri::command(async)]
 pub(crate) fn publish_task(
     app: State<App>,
     id: String,
-    draft: bool,
+    draft: Option<bool>,
     commit_uncommitted: bool,
 ) -> Result<String, String> {
     let (tasks, task) = app.task(&id)?;
@@ -1327,11 +1329,16 @@ pub(crate) fn publish_task(
         return Err("The agent is still working".into());
     }
     let remote = remote(&app)?;
+    let mut preset = spor::github::PullPreset::load(tasks.root());
+    if let Some(draft) = draft {
+        preset.draft = draft;
+    }
+    let draft = preset.draft;
     let (number, _) = tasks
         .publish(
             &task,
             &remote,
-            draft,
+            &preset,
             commit_uncommitted,
             agent::available("claude"),
         )

@@ -332,14 +332,14 @@ fn publish_pushes_the_branch_before_opening_a_pull_request() {
 
     let err = f
         .tasks
-        .publish(&task, "origin", false, false, false)
+        .publish(&task, "origin", &preset(false), false, false)
         .unwrap_err();
     assert!(err.contains("no commits"), "{err}");
 
     work(&task.worktree, "new.txt", "new\n", None);
     let err = f
         .tasks
-        .publish(&task, "origin", false, false, false)
+        .publish(&task, "origin", &preset(false), false, false)
         .unwrap_err();
     assert!(err.contains("uncommitted"), "{err}");
 
@@ -347,7 +347,7 @@ fn publish_pushes_the_branch_before_opening_a_pull_request() {
     // then the task has no PR.
     let err = f
         .tasks
-        .publish(&task, "origin", true, true, false)
+        .publish(&task, "origin", &preset(true), true, false)
         .unwrap_err();
     assert!(err.contains("GitHub"), "{err}");
     git(
@@ -721,7 +721,7 @@ fn a_new_task_has_no_branch_or_folder_until_it_writes() {
     assert!(f.tasks.land(&task, LandMode::Squash, false).is_err());
     assert!(f
         .tasks
-        .publish(&task, "origin", false, false, false)
+        .publish(&task, "origin", &preset(false), false, false)
         .is_err());
 }
 
@@ -767,4 +767,11 @@ fn the_branch_is_made_on_first_write_from_the_base_as_it_is_then() {
     work(&started.worktree, "parser.rs", "a\n", Some("parser"));
     f.tasks.land(&started, LandMode::Squash, false).unwrap();
     assert!(f.repo.root().join("parser.rs").exists());
+}
+
+fn preset(draft: bool) -> spor::github::PullPreset {
+    spor::github::PullPreset {
+        draft,
+        ..Default::default()
+    }
 }

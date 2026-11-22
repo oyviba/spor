@@ -429,6 +429,8 @@ export interface Pull {
   additions: number;
   deletions: number;
   url: string;
+  /** Whose review is requested and not given yet: logins, and teams as `org/slug`. */
+  reviewers?: string[];
 }
 
 export type CiStatus = "queued" | "running" | "success" | "failure" | "cancelled" | "skipped" | "neutral";
@@ -459,6 +461,33 @@ export interface PullDetail {
   commits: number;
   checks: Check[];
   timeline: PullComment[];
+  assignees?: string[];
+  labels?: string[];
+}
+
+/** What a PR's reviewers, assignees and labels can be picked from (#149). */
+export interface PullCandidates {
+  /** Collaborators, then teams as `org/slug`. */
+  people: string[];
+  labels: string[];
+}
+
+/** What to add to and take off a PR (#149). */
+export interface PullEdit {
+  add_reviewers?: string[];
+  remove_reviewers?: string[];
+  add_assignees?: string[];
+  remove_assignees?: string[];
+  add_labels?: string[];
+  remove_labels?: string[];
+}
+
+/** What a new pull request starts with in this repository (#149). */
+export interface PullPreset {
+  draft: boolean;
+  reviewers: string[];
+  assignees: string[];
+  labels: string[];
 }
 
 export interface Run {
@@ -609,6 +638,8 @@ export interface WorkItemInfo {
     review: "none" | "approved" | "changesrequested";
     author: string;
     url: string;
+    /** Whose review is requested and not given yet. */
+    reviewers?: string[];
   } | null;
   checks: "passed" | "failed" | "running" | null;
   owner: { kind: "you" } | { kind: "agent"; name: string } | { kind: "teammate"; login: string };
@@ -616,6 +647,8 @@ export interface WorkItemInfo {
   waiting_on: {
     who: "you" | "agent" | "teammate" | "ci";
     why: "question" | "unseen" | "review" | "checksfailed" | "changesrequested" | "ready" | null;
+    /** The teammates it waits on (reviewers asked, or the author); empty: nobody in particular. */
+    names?: string[];
   } | null;
   updated: number;
 }
