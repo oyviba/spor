@@ -37,6 +37,8 @@ import type {
   TranscriptHit,
 } from "./types";
 import type { Place } from "./shared/DiffView";
+import type { SyncAction } from "./shared/sync";
+export type { SyncAction };
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown> | Uint8Array) => Promise<T>;
 
@@ -44,6 +46,7 @@ type Invoke = <T>(cmd: string, args?: Record<string, unknown> | Uint8Array) => P
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 let invokeImpl: Invoke | null = null;
+
 
 async function call<T>(cmd: string, args?: Record<string, unknown> | Uint8Array): Promise<T> {
   if (!invokeImpl) {
@@ -156,7 +159,9 @@ export const api = {
   discard: (paths: string[]) => call<void>("discard", { paths }),
   commit: (message: string, amend: boolean) => call<string>("commit", { message, amend }),
   lastMessage: () => call<string>("last_message"),
-  sync: (action: "fetch" | "pull" | "push") => call<string>("sync", { action }),
+  sync: (action: SyncAction) => call<string>("sync", { action }),
+  /** Push (or publish) a branch that isn't checked out. */
+  pushBranch: (name: string) => call<string>("push_branch", { name }),
   stashes: () => call<StashInfo[]>("stashes"),
   stash: (message: string | null) => call<string>("stash", { message }),
   stashPop: (index: number) => call<string>("stash_pop", { index }),

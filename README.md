@@ -39,9 +39,9 @@ column or branch bar); a workspace's badge goes back into its repository,
 to the section you were last in there. The sections are ordered by the questions
 you come with: what needs me, what's in flight, what's in my checkout, what
 happened. Each
-is a list in the sidebar, a page, and a details card. What you follow is a
+is a list in the sidebar, a page, and a details pane. What you follow is a
 **work item** (a branch with its issue, task folder, agent, pull request and
-checks) moving from *Planned* to *Landed*, and every section uses the same
+checks) moving from *Planned* to *Merged*, and every section uses the same
 words for it: [docs/concepts.md](docs/concepts.md). [docs/journeys.md](docs/journeys.md)
 has five journeys through it, each with a budget of how often it changes
 section, run as end-to-end tests.
@@ -54,7 +54,8 @@ section, run as end-to-end tests.
 - **Agents** (⌘⇧A) — every agent task in every repository of every
   workspace, by status (needs you, working, ready for review, failed or
   stopped, idle) or by repository, with a table of counts per repository.
-  A row opens the task's conversation in its repository's Work. It sits on
+  A row opens the task's conversation right there, to answer or follow
+  up on, whichever repository it's in. It sits on
   the rail beside the Inbox, since it spans repositories, and reads nothing
   of its own: it's built on the Inbox's poll of the tasks
 - **Work** (⌘2) — every piece of work in flight, in one list: agents'
@@ -64,21 +65,16 @@ section, run as end-to-end tests.
   issue. An agent task gives a coding agent its own branch and folder so several can work at once
   without touching your checkout. A task is a prompt: spor creates
   `agent/<name>` from a base, checks it out in `<repo>.spor/<name>` beside
-  the repository, and starts Claude Code (or any command) there. Paste,
+  the repository, and starts Claude Code, GitHub Copilot CLI (or any command) there. Paste,
   drop or attach images (screenshots, mockups) into any prompt — a new
   task, an issue's, or a follow-up; they're kept in `.git/spor/attachments/`
   and the agent is told where to find them. Watch the conversation, answer its questions, steer it while it works, review its
-  changes with line comments, send feedback, undo a run, then **Land** it
+  changes with line comments, send feedback, undo a run, then **Merge** it
   (one squashed commit, or a merge commit), **Publish** it as a pull request
-  and land that, or **Discard** it. A work item's issue, pull request and CI runs all open here,
+  and merge that, or **Discard** it. A work item's issue, pull request and CI runs all open here,
   wherever you click them from. [docs/agents.md](docs/agents.md) has the
   design
-- **Changes** (⌘3) — staged and unstaged files; click lines in a diff (shift-click
-  to extend) to stage, unstage or discard just those. Commit with ⌘↩, or
-  amend. Fetch, Pull (rebasing) and Push or Publish, the branch's pull
-  request on GitHub, and stashes: stash (right-click for a message), pop,
-  apply and keep, drop
-- **History** (⌘4) — the commit graph with `main` / `master` / `trunk` pinned to
+- **History** (⌘3) — the commit graph with `main` / `master` / `trunk` pinned to
   the leftmost lane and branches colored by prefix (all `feat/*` share a
   hue). The search above the graph (⌘F or `/`) wants every word you type to
   match the message, author, hash, or a branch or tag name; it lists just the
@@ -89,22 +85,30 @@ section, run as end-to-end tests.
   away, and the sidebar pins it above the rest. The sidebar has local, agent
   and remote branches, tags and linked worktrees, with a filter on their
   names. Right-click a branch to check it out,
-  merge it, rebase onto it, rename or delete it, or delete it from the
+  merge it, rebase onto it, push or publish it (without checking it out),
+  rename or delete it, or delete it from the
   remote, or drag it onto another branch to merge it there or open a pull
   request between the two. Right-click a commit to branch or tag it, check
   it out detached, cherry-pick, revert, rebase onto it, reset to it (soft,
   mixed, or hard after asking), or **Rewrite after here** — an interactive
   rebase on screen: reorder, reword, squash, fix up or drop, then Rewrite
   history. **Blame** any file, at a commit or in the working tree. The ⚙
-  picks the graph's columns, row height and lane width
+  picks the graph's columns, row height and lane width.
+  The top row, **Uncommitted changes**, is your checkout: select it and the
+  panel on the right lists conflicts, staged and unstaged files, with the
+  commit box (⌘↩, or amend), Fetch, Pull (rebasing) and Push or Publish (see
+  *Pulling and pushing* below), the branch's pull request on GitHub, and
+  stashes: stash (right-click for a message), pop, apply and keep, drop.
+  Pick a file and its diff takes the page: click lines (shift-click to
+  extend) to stage, unstage or discard just those
 
 Below a divider, three browsers for GitHub, for what doesn't belong to a
 piece of work yet (an issue nobody has started, a run on `main`):
 
-- **Issues**, **Pull requests**, **Actions** (⌘5–⌘7) — through `gh`: an
+- **Issues**, **Pull requests**, **Actions** (⌘4–⌘6) — through `gh`: an
   issue and its comments (and *Start with agent* from it); a PR's
   conversation, files and checks, with comments, line comments, approve,
-  land, check out; a run's jobs and its log folded by step, re-run and
+  merge, check out; a run's jobs and its log folded by step, re-run and
   cancel. Branch labels in the graph carry their open PR's number, review
   state and CI (`#42✓`)
 
@@ -112,12 +116,12 @@ Across the app:
 
 - **Undo instead of confirmations.** Staging, discarding, committing,
   amending, pulling, switching, merging, cherry-picks, reverts, rebases,
-  resets, rewrites, renames, deleting a branch, tag or stash, and landing or
+  resets, rewrites, renames, deleting a branch, tag or stash, and merging or
   discarding a task all happen at once and can be taken back with ⌘Z or the
   toast's Undo. Pushing makes commits final: their undos go. Only what git
   can't take back asks first (a hard reset, deleting on the remote)
 - **One conflict banner.** A merge, rebase, cherry-pick or revert that stops
-  shows on every section, with *Resolve in Changes* — pick a side (or both)
+  shows on every section, with *Resolve conflicts* — pick a side (or both)
   for each conflict in a file, take one side for all of it, or edit it and
   mark it resolved — *Continue*, *Skip commit* and *Abort*
 - **Stash and switch.** A switch that uncommitted changes would block says
@@ -125,6 +129,28 @@ Across the app:
 - **Knowing when to pull.** The repository is fetched quietly every five
   minutes; when the upstream gains commits, a notification says so with a
   Pull button
+- **Pulling and pushing without a terminal.** The branch bar above every
+  section shows the one button that puts the branch in step:
+  - *Pull* rebases, stashing uncommitted changes around it (if they clash
+    with what came in, the conflicts are left in History's uncommitted changes and a copy stays
+    in the stash list). A branch with no upstream whose namesake is on the
+    remote gets linked to it first
+  - *Push* goes to the branch it tracks; *Publish* pushes a new branch
+    under its own name and tracks it. The remote is the branch's
+    `pushRemote`, `remote.pushDefault`, the remote it tracks, `origin`, or
+    the only remote — not always `origin`
+  - *Pull & push* when the branch and the remote have both moved on
+  - *Force push* when they've diverged only because you amended, rebased
+    or rewrote commits you'd already pushed (spor tells by the branch's
+    reflog). It's `--force-with-lease --force-if-includes`, so it refuses
+    if someone else pushed meanwhile, even after a background fetch
+  - *Fetch* also brings local branches that are only behind their
+    upstream (`main`, while you're on a feature branch) up to it, as
+    `git fetch origin main:main` would — never one that's checked out or
+    has commits of its own
+  - A push the remote refuses says why in words (the remote has commits
+    you don't, a protected branch, a tag that exists), and when it's
+    behind, the toast offers *Pull and push*. All of these are in ⌘K too
 - **Credentials.** The app has no terminal, so a passphrase, password or
   new-host question from git or ssh opens a dialog (an askpass bridge)
 - **Workspaces** — named, colored groups of repositories on the rail, like
@@ -157,10 +183,11 @@ output:
 - `src/askpass.rs` — credential prompts from git and ssh, handed to the app
   over a private socket, and running network git commands
 - `src/tasks.rs` — agent tasks: a prompt with its own branch and worktree;
-  creating, measuring, landing, discarding and restoring them
+  creating, measuring, merging, discarding and restoring them
 - `src/agent.rs`, `src/host.rs`, `src/checkpoint.rs` — running agents in
   task folders, the host that lets the app talk to a running Claude Code,
-  and per-run checkpoints
+  and per-run checkpoints; `src/agent/` has one adapter per agent (Claude
+  Code, Copilot CLI, a custom command) behind the `Adapter` trait
 - `src/work.rs` — work items: a pure join of tasks, branches, pull
   requests, runs and issues into one item per branch, with its stage and
   who it's waiting on

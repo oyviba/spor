@@ -68,6 +68,39 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"Done.","to
     });
 }
 
+/// A `copilot` that prints a canned JSONL event stream, records its
+/// arguments and the instructions it was pointed at, and keeps the session
+/// it was asked to resume.
+fn fake_copilot() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let bin = std::env::temp_dir().join(format!("spor-fake-copilot-{}", std::process::id()));
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = r#"#!/bin/sh
+printf '%s\n' "$@" > copilot-args.txt
+cat "$COPILOT_CUSTOM_INSTRUCTIONS_DIRS/AGENTS.md" > copilot-instructions.txt
+session=fresh-1
+for a in "$@"; do case "$a" in --resume=*) session="${a#--resume=}";; esac; done
+echo "copilot was here" >> agent.txt
+echo '{"type":"session.start","id":"e1","parentId":null,"timestamp":"t","data":{"sessionId":"'$session'","selectedModel":"gpt-5.6-sol"}}'
+echo '{"type":"tool.execution_start","id":"e2","parentId":"e1","timestamp":"t","data":{"toolCallId":"c1","toolName":"create","arguments":{"path":"agent.txt"}}}'
+echo '{"type":"assistant.message","id":"e3","parentId":"e2","timestamp":"t","data":{"messageId":"m1","content":"Wrote agent.txt."}}'
+echo '{"type":"result","timestamp":"t","sessionId":"'$session'","exitCode":0,"usage":{"premiumRequests":1,"sessionDurationMs":900}}'
+"#;
+        let path = bin.join("copilot");
+        std::fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let old = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(&old));
+        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+    });
+}
+
 fn fixture() -> Fixture {
     static N: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -1111,4 +1144,62 @@ fn without_a_limit_agents_just_start() {
     assert_eq!(f.tasks.running_agents(), 2);
     Runs::of(&f.tasks, &a).stop().unwrap();
     Runs::of(&f.tasks, &b).stop().unwrap();
+}
+
+#[test]
+fn copilot_runs_in_the_task_folder_and_resumes_its_session() {
+    fake_copilot();
+    let f = fixture();
+    let task = f
+        .tasks
+        .create("Leave a mark", "main")
+        .and_then(|t| f.tasks.start_branch(&t))
+        .unwrap();
+    let runs = Runs::of(&f.tasks, &task);
+    let wt = &task.worktree;
+    runs.start(
+        &task,
+        &AgentKind::Copilot,
+        "Leave a mark",
+        None,
+        NO_COMMANDS,
+    )
+    .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    let run = runs.latest().unwrap();
+    assert_eq!(run.kind, AgentKind::Copilot);
+    assert_eq!(run.session.as_deref(), Some("fresh-1"));
+    assert_eq!(run.init.unwrap().model, "gpt-5.6-sol");
+
+    let args = read(wt, "copilot-args.txt").unwrap();
+    assert!(args.contains("--output-format=json\n"));
+    assert!(args.contains("--allow-tool=write\n"));
+    assert!(args.contains("--deny-tool=shell(git push)\n"));
+    assert!(args.ends_with("-p\nLeave a mark\n"));
+    // What it's told comes as instructions, not in its prompt.
+    let told = read(wt, "copilot-instructions.txt").unwrap();
+    assert!(told.contains(&task.branch), "{told}");
+
+    let transcript = runs.transcript();
+    assert!(transcript.contains(&Entry::Tool {
+        name: "Write".into(),
+        detail: "agent.txt".into()
+    }));
+    assert!(transcript.contains(&Entry::Text("Wrote agent.txt.".into())));
+    assert!(matches!(
+        transcript.last(),
+        Some(Entry::Done { ok: true, .. })
+    ));
+
+    // A follow-up goes to Copilot and continues its session.
+    let plan = runs.plan(&task, Some("Again"), None).unwrap();
+    assert_eq!(plan.kind, AgentKind::Copilot);
+    assert_eq!(plan.resume.as_deref(), Some("fresh-1"));
+    runs.follow_up(&task, Some("Again"), None, NO_COMMANDS)
+        .unwrap();
+    assert_eq!(wait_until_done(&runs), RunState::Finished);
+    assert!(read(wt, "copilot-args.txt")
+        .unwrap()
+        .contains("--resume=fresh-1\n"));
+    assert_eq!(runs.session().as_deref(), Some("fresh-1"));
 }

@@ -3,6 +3,7 @@
 // transcript over time, and answers the same commands as src-tauri.
 
 import type { AgentChoice, Ask, Issue, IssueDetail, Item, Mode, Pull, RepoInfo, RunInfo, TaskDetail, TaskPull, TaskSummary, WorkBranch, WorkItemInfo } from "./types";
+import { agentName } from "./shared/agents";
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -33,7 +34,7 @@ const repo: RepoInfo = {
   branches: ["main", "release/1.4", "feat/share-links"],
   default_base: "main",
   default_start: "origin/main",
-  claude: true,
+  installed: ["claude", "copilot"],
 };
 
 const stats = (over: Partial<TaskSummary["stats"]> = {}): TaskSummary["stats"] => ({
@@ -70,7 +71,7 @@ const run = (over: Partial<RunInfo>): RunInfo => ({
 });
 
 /** A task's base and where it started, as the backend has them: one
- * started from `origin/main` lands on `main`. */
+ * started from `origin/main` merges into `main`. */
 const startOf = (base: string) => (base.startsWith("origin/") ? { base: base.slice("origin/".length), from: base } : { base, from: null });
 
 const summary = (id: string, prompt: string, created: number, over: Partial<TaskSummary> = {}): TaskSummary => ({
@@ -534,11 +535,15 @@ function start(t: MockTask, prompt: string, agent: AgentChoice) {
   if (t.summary.run?.state === "running") throw `An agent is already working on ${t.summary.id}`;
   const r = run({
     index: t.runs.length,
-    agent: agent.kind === "command" ? "command" : "claude",
+    agent: agent.kind === "none" ? "claude" : agent.kind,
     label:
       agent.kind === "command"
         ? "Custom command"
-        : ["Claude Code", agent.kind === "claude" && agent.model, agent.kind === "claude" && agent.effort && `${agent.effort} effort`]
+        : [
+            agentName(agent.kind === "none" ? "claude" : agent.kind),
+            agent.kind !== "none" && agent.model,
+            agent.kind !== "none" && agent.effort && `${agent.effort} effort`,
+          ]
             .filter(Boolean)
             .join(" · "),
     state: "running",
@@ -647,6 +652,14 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           listening: t.summary.run?.state === "running",
           debrief: null,
           wants_debrief: false,
+          surfaced:
+            t.summary.id === "dark-mode-dashboard"
+              ? [
+                  { kind: "link", title: "Preview", value: "https://example.com/preview" },
+                  { kind: "file", title: "Migration notes", value: "docs/theme-migration.md" },
+                  { kind: "note", title: "Heads up", value: "Two charts still hardcode their colours." },
+                ]
+              : [],
         };
         return structuredClone(detail);
       }
@@ -708,7 +721,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         if (t.summary.run?.state === "running") throw "Stop the agent first";
         const index = tasks.indexOf(t);
         const landing = cmd === "land_task";
-        const message = landing ? `Landed ${id} on ${t.summary.base}` : `Discarded ${id}`;
+        const message = landing ? `Merged ${id} into ${t.summary.base}` : `Discarded ${id}`;
         undoable = { message, task: structuredClone(t), index };
         if (landing) t.summary.landed = "a1b2c3d";
         else tasks.splice(index, 1);
@@ -933,8 +946,8 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
 
 // ---- Git and GitHub, from recordings ----------------------------------------
 //
-// src/fixtures.json is what the real backend answered on a demo repository
-// (e2e/record-fixtures.mjs). Times are moved up to now; changes to the
+// src/fixtures.json is what the real backend answered on a demo repository.
+// Times are moved up to now; changes to the
 // working tree are applied to an in-memory copy so the Changes section can
 // be clicked through.
 
@@ -1174,7 +1187,15 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
     case "last_message":
       return f.graph.rows.find((r: { head: boolean }) => r.head)?.subject ?? "";
     case "sync":
-      return { fetch: "Fetched", pull: "Pulled", push: "Pushed" }[args.action as string];
+      return {
+        fetch: "Fetched",
+        pull: "Pulled",
+        push: "Pushed",
+        "force-push": "Force-pushed",
+        sync: "Pulled, pushed",
+      }[args.action as string];
+    case "push_branch":
+      return `Pushed ${args.name}`;
     case "stashes":
       return f.stashes;
     case "stash":

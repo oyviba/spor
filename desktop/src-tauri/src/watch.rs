@@ -479,6 +479,9 @@ mod tests {
         wait_for(&[Change::Refs]);
 
         std::fs::create_dir_all(root.join(".git/spor/tasks")).unwrap();
+        // inotify starts watching a new folder only once it has seen it
+        // created, so a file written at once can be missed.
+        std::thread::sleep(Duration::from_millis(500));
         std::fs::write(root.join(".git/spor/tasks/fix"), "task").unwrap();
         wait_for(&[Change::Tasks]);
 

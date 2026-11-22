@@ -1,7 +1,8 @@
 // Small stroke icons (24-unit grid), drawn after Lucide (ISC, see
 // LICENSE-LUCIDE beside this file), so the app has no icon dependency.
 
-import type { SVGProps } from "react";
+import type { ReactElement, SVGProps } from "react";
+import type { AgentId, AgentName } from "../types";
 
 type P = SVGProps<SVGSVGElement> & { size?: number };
 
@@ -67,6 +68,7 @@ export const Merge = (p: P) => (
 export const PanelRight = (p: P) => (
   <Svg {...p}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M15 3v18" /></Svg>
 );
+export const More = (p: P) => <Svg {...p}><path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth={3} /></Svg>;
 export const Trash = (p: P) => (
   <Svg {...p}><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></Svg>
 );
@@ -136,9 +138,26 @@ export const ClaudeMark = ({ size = 14, ...rest }: P) => (
   </svg>
 );
 
-export function AgentIcon({ agent, size = 13 }: { agent: "claude" | "command" | null; size?: number }) {
-  if (agent === "claude") return <ClaudeMark size={size} />;
+/** Copilot CLI, simplified: a face with goggles, in GitHub's neutral ink. */
+export const CopilotMark = ({ size = 14, ...rest }: P) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden {...rest}>
+    <path d="M4 12.5V17c0 1.5 3.6 3 8 3s8-1.5 8-3v-4.5" />
+    <rect x="3" y="5" width="8" height="7" rx="3" />
+    <rect x="13" y="5" width="8" height="7" rx="3" />
+    <path d="M10 16v1M14 16v1" />
+  </svg>
+);
+
+/** Each agent's mark, by its id (shared/agents.ts). */
+const AGENT_MARKS: Record<AgentId, (p: P) => ReactElement> = {
+  claude: ClaudeMark,
+  copilot: CopilotMark,
+};
+
+export function AgentIcon({ agent, size = 13 }: { agent: AgentName | null; size?: number }) {
   if (agent === "command") return <Terminal size={size} className="muted-icon" />;
+  const Mark = agent ? AGENT_MARKS[agent] : undefined;
+  if (Mark) return <Mark size={size} />;
   return <Bot size={size} className="muted-icon" />;
 }
 

@@ -6,14 +6,13 @@ import { createContext, useContext } from "react";
 import type { RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "../types";
 import type { MenuItem } from "./Overlay";
 
-export type SectionId = "inbox" | "agents" | "changes" | "history" | "issues" | "pulls" | "actions" | "work";
+export type SectionId = "inbox" | "agents" | "history" | "issues" | "pulls" | "actions" | "work";
 
 /** Where to go: a section, and what to open there. */
 export type Target =
   | { section: "inbox" }
   | { section: "agents" }
-  | { section: "changes"; path?: string }
-  | { section: "history"; hash?: string; branch?: string; blame?: { path: string; rev: string | null } }
+  | { section: "history"; hash?: string; branch?: string; /** The working tree (uncommitted changes), and a file in it. */ working?: boolean; path?: string; blame?: { path: string; rev: string | null } }
   | { section: "issues"; number?: number }
   | { section: "pulls"; number?: number; /** Its head, to find its work item. */ branch?: string }
   | { section: "actions"; runId?: number; jobId?: number; /** The run's branch, to find its work item. */ branch?: string }

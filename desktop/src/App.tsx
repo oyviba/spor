@@ -1,12 +1,12 @@
 import { Activity, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, errorText } from "./api";
+import { api, errorText, type SyncAction } from "./api";
 import type { BranchInfo, Credential, RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "./types";
 import { KeepScroll, usePoll, useRepoChanges, useStored } from "./shared/hooks";
 import { ShellContext, useShell, type SectionId, type Shell, type Target, type ToastAction } from "./shared/app";
-import { Alert, Bot, Branch, FileIcon, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, Sparkle, X } from "./shared/Icons";
+import { Alert, Bot, Branch, Gear, History as HistoryIcon, InboxIcon, IssueIcon, Play, PullRequest, Sparkle, X } from "./shared/Icons";
 import { Button } from "./shared/Button";
 import { RepoPanel } from "./shared/Layout";
-import { BranchBar } from "./shared/BranchBar";
+import { BranchBar, runSync } from "./shared/BranchBar";
 import { DiffSettings, SettingsDialog, type SettingsPage } from "./shared/SettingsDialog";
 import { AgentLimit } from "./sections/agents/AgentLimit";
 import { GraphOptionsPanel } from "./sections/history/GraphOptions";
@@ -39,7 +39,6 @@ import {
 import { CredentialDialog, DialogView, MenuView, Palette, type Command, type DialogSpec, type MenuItem, type MenuSpec } from "./shared/Overlay";
 import { WorkSection } from "./sections/work/WorkSection";
 import { HistorySection } from "./sections/history/HistorySection";
-import { ChangesSection } from "./sections/changes/ChangesSection";
 import { IssuesSection } from "./sections/issues/IssuesSection";
 import { PullsSection } from "./sections/pulls/PullsSection";
 import { ActionsSection } from "./sections/actions/ActionsSection";
@@ -85,11 +84,10 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode; key: stri
   { id: "inbox", label: "Inbox", icon: <InboxIcon size={17} />, key: "Mod+1", global: true },
   { id: "agents", label: "Agents", icon: <Sparkle size={17} />, key: "Mod+Shift+A", global: true },
   { id: "work", label: "Work", icon: <Bot size={17} />, key: "Mod+2" },
-  { id: "changes", label: "Changes", icon: <FileIcon size={17} />, key: "Mod+3" },
-  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+4" },
-  { id: "issues", label: "Issues", icon: <IssueIcon size={15} />, key: "Mod+5", browser: true },
-  { id: "pulls", label: "Pull requests", icon: <PullRequest size={15} />, key: "Mod+6", browser: true },
-  { id: "actions", label: "Actions", icon: <Play size={15} />, key: "Mod+7", browser: true },
+  { id: "history", label: "History", icon: <HistoryIcon size={17} />, key: "Mod+3" },
+  { id: "issues", label: "Issues", icon: <IssueIcon size={15} />, key: "Mod+4", browser: true },
+  { id: "pulls", label: "Pull requests", icon: <PullRequest size={15} />, key: "Mod+5", browser: true },
+  { id: "actions", label: "Actions", icon: <Play size={15} />, key: "Mod+6", browser: true },
 ];
 
 /** Is the task open on screen (Work, its page)? Then it needs no toast. */
@@ -97,7 +95,9 @@ function viewing(taskId: string): boolean {
   try {
     const section = JSON.parse(localStorage.getItem("spor.section") ?? "null");
     const view = JSON.parse(localStorage.getItem("spor.work.view") ?? "null");
-    return section === "work" && view?.kind === "task" && view.id === taskId && document.hasFocus();
+    const agents = JSON.parse(localStorage.getItem("spor.agents.open") ?? "null");
+    const open = (section === "work" && view?.kind === "task" && view.id === taskId) || (section === "agents" && agents?.taskId === taskId);
+    return open && document.hasFocus();
   } catch {
     return false;
   }
@@ -118,15 +118,19 @@ interface AppCommand {
 
 /** What can be done to the open repository, for the palette and shortcuts. */
 function repoCommands(shell: Shell): AppCommand[] {
-  const sync = (what: "fetch" | "pull" | "push") => () =>
-    shell.act(() => api.sync(what), {
-      undo: what === "pull",
-      pending: { fetch: "Fetching…", pull: "Pulling…", push: shell.state?.upstream ? "Pushing…" : "Publishing…" }[what],
-    });
+  const sync = (what: SyncAction) => () => void runSync(shell, what);
   return [
-    { id: "fetch", label: "Fetch", hint: "all remotes", group: "Git", run: sync("fetch") },
-    { id: "pull", label: "Pull", hint: "with rebase", group: "Git", run: sync("pull") },
+    { id: "fetch", label: "Fetch", hint: "all remotes, and fast-forward branches behind", group: "Git", run: sync("fetch") },
+    { id: "pull", label: "Pull", hint: "with rebase, stashing changes around it", group: "Git", run: sync("pull") },
     { id: "push", label: shell.state?.upstream ? "Push" : "Publish branch", group: "Git", run: sync("push") },
+    { id: "sync", label: "Pull and push", hint: "rebase onto the remote, then push", group: "Git", run: sync("sync") },
+    {
+      id: "force-push",
+      label: "Force push",
+      hint: "after amend or rebase — refused if someone else pushed",
+      group: "Git",
+      run: sync("force-push"),
+    },
     { id: "stash", label: "Stash changes", group: "Git", run: () => shell.act(() => api.stash(null), { undo: false, pending: "Stashing…" }) },
     {
       id: "pr",
@@ -167,12 +171,19 @@ export function App() {
     [], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const [state, setState] = useState<RepoState | null>(null);
-  const [section, setSection] = useStored<SectionId>("section", "inbox");
+  /** The open repository, for callbacks that outlive a render. */
+  const here = useRef<string | undefined>(undefined);
+  here.current = repo?.root;
+  const [storedSection, setSection] = useStored<SectionId>("section", "inbox");
+  // Changes is gone (it's History's uncommitted-changes panel now): a
+  // section stored before that opens History.
+  const section = SECTIONS.some((s) => s.id === storedSection) ? storedSection : "history";
   // The Inbox and Agents span every repository: open, they show no
   // repository (no column, branch bar or repository header), and a
   // workspace's badge goes back to the section last open in its repository.
   const global = !!SECTIONS.find((s) => s.id === section)?.global;
-  const [repoSection, setRepoSection] = useStored<SectionId>("section.repo", "work");
+  const [storedRepoSection, setRepoSection] = useStored<SectionId>("section.repo", "work");
+  const repoSection = SECTIONS.some((s) => s.id === storedRepoSection) ? storedRepoSection : "history";
   useEffect(() => {
     if (!global) setRepoSection(section);
   }, [section]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -322,6 +333,8 @@ export function App() {
         toast(`${t.title} is waiting for you`, "ok", false, {
           label: "Answer",
           run: () => {
+            // From Agents, answer there, not in the repository's Work.
+            if (localStorage.getItem("spor.section") === '"agents"' && here.current) return setAgentOpen({ repo: here.current, taskId: t.id });
             setSection("work");
             setTarget((old) => ({ section: "work", taskId: t.id, seq: old.seq + 1 }));
           },
@@ -387,6 +400,18 @@ export function App() {
     setSection(to.section);
     setTarget((old) => ({ ...to, seq: old.seq + 1 }));
   };
+
+  // The task open in Agents. Its repository is opened for it, behind the
+  // view, so answering needs no trip to the repository.
+  const [agentOpen, setAgentOpen] = useStored<{ repo: string; taskId: string } | null>("agents.open", null);
+  useEffect(() => {
+    if (section !== "agents" || !agentOpen || !repo || repo.root === agentOpen.repo) return;
+    openRepo(agentOpen.repo).then((ok) => {
+      if (!ok) return setAgentOpen(null);
+      const owner = workspaces.list.find((w) => w.repos.includes(agentOpen.repo));
+      if (owner && owner.id !== workspaces.active) switchTo(owner.id);
+    });
+  }, [section, agentOpen?.repo, repo?.root]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const shell: Shell | null = useMemo(
     () =>
@@ -615,7 +640,7 @@ export function App() {
     }
     // Nothing to move for someone opening spor for the first time.
     if (firstRun) return;
-    const under = "Work, Changes, History and the browsers now sit under the open repository; the rail has the Inbox and Agents, across every repository.";
+    const under = "Work, History and the browsers now sit under the open repository; the rail has the Inbox and Agents, across every repository.";
     // Only the layout moved since #83; the shortcuts are as they were.
     if (was === "2") {
       toast(under);
@@ -859,7 +884,18 @@ export function App() {
                 agents: (
                   <AgentsSection
                     inbox={inbox}
-                    onOpen={(r, taskId) => openItem({ repo: r, target: { section: "work", taskId } })}
+                    selected={agentOpen}
+                    page={
+                      agentOpen && agentOpen.repo === repo.root ? (
+                        <WorkSection key={agentOpen.taskId} embedded={{ taskId: agentOpen.taskId, onGone: () => setAgentOpen(null) }} />
+                      ) : (
+                        <main className="main">
+                          <div className="boot" />
+                        </main>
+                      )
+                    }
+                    onOpen={(r, taskId) => setAgentOpen({ repo: r, taskId })}
+                    onClose={() => setAgentOpen(null)}
                     onOpenRepo={(r) => openItem({ repo: r, target: { section: "work" } })}
                   />
                 ),
@@ -877,7 +913,6 @@ export function App() {
 type GlobalId = "inbox" | "agents";
 
 const SECTION_VIEWS: Record<Exclude<SectionId, GlobalId>, () => React.ReactNode> = {
-  changes: ChangesSection,
   history: HistorySection,
   issues: IssuesSection,
   pulls: PullsSection,
@@ -926,8 +961,8 @@ function OperationBanner({ state }: { state: RepoState }) {
       </span>
       <span className="flex-1" />
       {n > 0 ? (
-        <button className="ghost small" onClick={() => shell.go({ section: "changes", path: state.conflicts[0] })}>
-          Resolve in Changes
+        <button className="ghost small" onClick={() => shell.go({ section: "history", working: true, path: state.conflicts[0] })}>
+          Resolve conflicts
         </button>
       ) : (
         <Button

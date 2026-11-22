@@ -1,6 +1,6 @@
 # Spor for parallel coding agents
 
-A design for making spor the place where you run, watch, review and land
+A design for making spor the place where you run, watch, review and merge
 the work of several coding agents at once. **Phases 1 and 2 are built**,
 with most of 3 and the conflict radar from 4 (see the README); the rest is
 the plan.
@@ -19,7 +19,7 @@ Running one coding agent is easy. Running four is a mess:
   read it. Reading a diff, saying "not like that, like this", and getting a
   second attempt is slow when the diff, the conversation and the terminal
   are in three places.
-- **Landing is manual.** Rebasing each branch on a moving main, resolving
+- **Merging is manual.** Rebasing each branch on a moving main, resolving
   conflicts between two agents' work, running the tests after each merge.
 - **The why gets lost.** A month later, `git blame` points at a commit an
   agent made. The conversation that explains it is gone.
@@ -46,12 +46,12 @@ The groundwork this needs is now in the core (`src/git.rs`):
 
 - **Every git call runs in its own repository.** `git::Repo` carries a
   root, so a worktree is just another `Repo`. A job started for one task
-  can't land in another, which was impossible while git ran in the
+  can't merge in another, which was impossible while git ran in the
   process's working directory.
 - **Worktrees.** `worktrees()`, `add_worktree(path, branch, base)` and
   `remove_worktree(path, force)`, and the branch list shows linked
   worktrees.
-- **Landing.** `merge`, `rebase`, `cherry_pick` and `rebase_interactive`
+- **Merging.** `merge`, `rebase`, `cherry_pick` and `rebase_interactive`
   return an `Outcome`: done, or stopped on conflicts. `operation()`,
   `conflicts()`, `continue_operation()` and `abort_operation()` handle the
   stopped case, and the app has a banner and a resolver for it.
@@ -101,12 +101,27 @@ Spor runs agents rather than reimplementing them. Each adapter answers four
 questions: how to start the agent, how to tell its state, how to send it a
 follow-up, and how to answer its questions.
 
-| | Generic command | Claude Code |
-|---|---|---|
-| Start | a command template, `{prompt}` filled in, run in the worktree | `claude -p "{prompt}" --output-format stream-json` |
-| State | process alive or exited, plus git activity | the stream's events: tool calls, messages, the final result with cost |
-| Follow-up | start the command again with the feedback | `claude -p "{feedback}" --resume {session}` |
-| Questions | none, so give the agent a permission mode that never asks | a hook forwards permission requests to spor (below) |
+| | Generic command | Claude Code | Copilot CLI |
+|---|---|---|---|
+| Start | a command template, `{prompt}` filled in, run in the worktree | `claude -p "{prompt}" --output-format stream-json` | `copilot -p "{prompt}" --output-format=json` |
+| State | process alive or exited, plus git activity | the stream's events: tool calls, messages, the final result with cost | its JSONL session events: tool calls, messages, token use, the final result (no cost: Copilot spends premium requests) |
+| Follow-up | start the command again with the feedback | `claude -p "{feedback}" --resume {session}` | `copilot -p "{feedback}" --resume={session}` |
+| Questions | none, so give the agent a permission mode that never asks | a hook forwards permission requests to spor (below) | none: prompt mode can't ask, so what the mode doesn't allow is refused |
+
+In the code each column is an `Adapter` (`src/agent/adapter.rs`), one file
+per agent in `src/agent/`: `claude.rs`, `copilot.rs`, `command.rs`. An
+adapter builds the command line (`command`), gives the agent what it's told
+and spor's MCP server the way that agent takes them (`prepare`: flags, or
+files beside the run), says whether it can run under the host
+(`hosted_args`), and reads its log back: the transcript (`parse`), session,
+cost and token use (`stats`), and what it's doing now (`progress`). `Runs`
+calls only these, so nothing outside an adapter checks which agent a run
+has. The UI's half is `desktop/src/shared/agents.ts`: each agent's name,
+models and how its permission modes read, plus its mark in `Icons.tsx`.
+
+To add an agent: a variant in `AgentKind` (with `AgentKind::KNOWN` and
+`adapter()`), its adapter file, and its entry in `shared/agents.ts` and
+`AGENT_MARKS`. The UI offers it once it's on the PATH (`RepoInfo.installed`).
 
 The generic adapter is what makes this useful on day one with any agent,
 including ones run by hand in the worktree. With no adapter at all, a task
@@ -158,11 +173,11 @@ Two other questions come the same way, and get their own answers:
     (the diff component already supports line annotations) are gathered
     into it as `file:line — comment`, so review reads like a PR review and
     goes back as one message
-  - **Land**: squash or merge into the base (rebasing first when the base
+  - **Merge**: squash or merge into the base (rebasing first when the base
     moved), or **Open Pull Request**, or **Discard**, which removes the
     worktree and branch and can be undone while spor is open
 
-### Landing many at once
+### Merging many at once
 
 - **Collision radar.** In the background, spor does a trial merge of each
   active agent branch against the base and against every other agent
@@ -178,21 +193,21 @@ Two other questions come the same way, and get their own answers:
 - **Don't undo the base.** A merge that doesn't conflict can still take
   work back out: an agent that rebases or merges the base in, then writes
   files back from the copy it started with, reverts everything that came
-  in meanwhile (that's how landing #81 undid the Inbox and five other
+  in meanwhile (that's how merging #81 undid the Inbox and five other
   changes). `Tasks::undoes` finds it: the lines the trial merge would drop
   from the base, blamed on the base, that came from commits made after the
   branch was created (its reflog's first entry), leaving out lines that
   moved elsewhere. The task's card says "Would undo 109 lines that reached
   main after it started, in App.tsx…", with *Ask agent to put them back*,
-  and landing or opening a pull request asks first.
-- **Land in order.** Pick the tasks that are ready and spor lands them one
+  and merging or opening a pull request asks first.
+- **Merge in order.** Pick the tasks that are ready and spor merges them one
   at a time: rebase, run the checks, merge, next. It stops at the first
   failure and says which. It's a small local merge queue.
 
 ### Remembering why
 
 Each task keeps its transcript (in `.git/spor/tasks/<id>/`) and the commits
-it produced. When a task lands, the squash commit's message gets a
+it produced. When a task merges, the squash commit's message gets a
 `Spor-Task: <id>` trailer. Commit details in History, and later blame, can
 then open the conversation behind a line. "Why does this exist?" gets an
 answer from the agent's own reasoning, not just a name and a date.
@@ -200,7 +215,7 @@ answer from the agent's own reasoning, not just a name and a date.
 ### Safety
 
 - Agents never push. Publishing is always a human click: Open Pull Request
-  or Land. The Claude Code adapter starts agents with `git push` denied in
+  or Merge. The Claude Code adapter starts agents with `git push` denied in
   their permissions.
 - Worktrees share the repository's refs, so an agent could still move or
   delete another branch. Spor notices when a task's branch moves in a way
@@ -217,9 +232,9 @@ Each phase is useful on its own.
 1. **Tasks without agents** — *done*. New Task… creates a branch and a worktree from
    a base. The Agents panel lists tasks with state taken from git (dirty,
    commits ahead, last change). A task page shows the diff against the base,
-   with Land, Open Pull Request and Discard. That's already a better way to
+   with Merge, Open Pull Request and Discard. That's already a better way to
    run agents by hand: start a task, run your agent in its folder, review
-   and land in spor.
+   and merge in spor.
 2. **Launch and watch** — *done*. The generic command adapter and the Claude Code
    adapter: spawn in the worktree, stream the transcript, states from the
    process and the stream, a notification when a task finishes or fails.
@@ -229,7 +244,7 @@ Each phase is useful on its own.
    permissions are set when it starts.
 4. **Many at once** — *collision radar done*, with *Ask Agent to Rebase*
    for conflicts with the base. Still to do: Rebase All with conflicts handed back
-   to the agent, and landing in order with checks.
+   to the agent, and merging in order with checks.
 
    **From issues** (#47): a task can start from a GitHub issue (the
    issue is its prompt), opens its pull request with `Closes #n`, follows
@@ -242,30 +257,41 @@ Each phase is useful on its own.
 **Spor as an MCP server** (#106): each Claude Code run gets a stdio MCP
 server (`--mcp-config` names a file in the run directory; the server is
 the app's executable started with `__spor-mcp`). Tools: `ask` (a question
-for the Inbox, answered inside the turn), `report_progress`,
+for the Inbox, answered inside the turn), `report_progress`, `surface`
+(a link, a file or a note for the task's panel while the agent works),
 `other_tasks` (with the files you share), `pr_comments` (unresolved
 threads), `ci_log` (failing jobs, folded to the failure) and `why` (blame
 a line; if the commit has a `Spor-Task` trailer, that task's prompt and
 what its agent did to the file). Everything but `ask` is pre-approved and
-read-only, apart from `report_progress` writing to the run's log. Still to
+read-only, apart from `report_progress` and `surface` writing to the
+run's log. Still to
 do: `checks()` (#43). `ask` isn't asked in `bypassPermissions` mode, where
 Claude Code doesn't prompt for any tool.
 
 ## Decisions to make
 
 - **Which agents first.** Claude Code has a structured stream and hooks,
-  so it can do everything above. The generic adapter covers the rest with
-  less detail. Codex and others could get adapters later.
+  so it can do everything above. Copilot CLI has an adapter too (below).
+  The generic adapter covers the rest with less detail. Codex and others
+  could get adapters later.
 - **Headless or a terminal.** Phase 2 is headless (structured output and
   logs). Some people want to watch the agent's own terminal UI. That needs
   a terminal emulator in the app (xterm.js in the web view, over a pty in
   the backend), which is a project of its own.
-- **Squash or merge by default** when landing. Squash keeps main readable
+- **Squash or merge by default** when merging. Squash keeps main readable
   and puts the trailer in one place. Merge keeps the agent's individual
   commits.
 - **Where task state lives.** `.git/spor/` is per-clone and invisible to
   collaborators. Sharing tasks across machines would mean a server, which
   is out of scope for now.
+
+## Copilot CLI
+
+GitHub's [Copilot CLI](https://github.com/github/copilot-cli) (`copilot`) runs headless with `-p` and `--output-format=json`, a JSONL stream of its session events. `parse_copilot` reads them into the same transcript as Claude's: its tools take Claude's names (`bash` is `Bash`, `view` is `Read`, `edit` is `Edit`, `task` a subagent), so icons, folded command output and the *Tests ✓ · Build ✓* line work alike, and `report_intent` stays out. The session id comes from `session.start` and the final `result`; context fill from `session.usage_info`.
+
+Prompt mode can't ask, so each mode becomes allow rules, and the rest is refused: *Read only* (no rules: read-only commands still run), *Auto-accept edits* (`--allow-tool=write`), *Auto* (`--assisted-approval`, Copilot's safety judge), *Full access* (`--allow-all-tools`) and *Plan first* (`--plan`; follow up to start the work). `--deny-tool=shell(git push)` goes on every run. Copilot has no flag to add to its system prompt, so what the agent is told (below) goes in an `AGENTS.md` in the run directory, named by `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`. Spor's MCP server comes with `--additional-mcp-config`, without `ask`.
+
+Not yet: Copilot can't fork a session, so undoing a run takes back its changes but not the conversation; there's no Needs-you bridge, no stop hook for `.spor/checks`, no steering while it works; and the PR description, debrief and rules search still ask Claude Code.
 
 ## What the agent is told (#105)
 
@@ -289,7 +315,7 @@ When the latest Claude run's context is 80% full or more, the composer offers *S
 
 ## Finding the conversation behind a line (#108)
 
-A commit landed by a task carries a `Spor-Task: <id>` trailer. History's commit card says which task made it, with *Open conversation*; Blame shows *Why?* by the first line of each group whose commit has one. Landed tasks keep their transcripts (clean-up only deletes the transcripts of discarded tasks). ⌘K also searches what was said across all of a repository's tasks, landed ones included: prompts, follow-ups, the agent's words, steering and debriefs. A result opens the task; it doesn't yet scroll to the run it was found in.
+A commit merged by a task carries a `Spor-Task: <id>` trailer. History's commit card says which task made it, with *Open conversation*; Blame shows *Why?* by the first line of each group whose commit has one. Merged tasks keep their transcripts (clean-up only deletes the transcripts of discarded tasks). ⌘K also searches what was said across all of a repository's tasks, merged ones included: prompts, follow-ups, the agent's words, steering and debriefs. A result opens the task; it doesn't yet scroll to the run it was found in.
 
 ## Agents at once
 

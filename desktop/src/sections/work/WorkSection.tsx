@@ -4,7 +4,7 @@ import type { LineComment, Pull, RunPatch, TaskDetail, TaskPull, TaskSummary, Wo
 import { activityAt, matches, moveTo, shelve, workItems, type Filter, type WorkItem } from "./items";
 import { isOpen } from "../agents/status";
 import { catchUpPrompt, restorePrompt } from "../agents/prompts";
-import { useChanged, usePoll, useRepoChanges, useStored } from "../../shared/hooks";
+import { useChanged, usePoll, useRepoChanges, useStored, GITHUB_POLL_MS, GITHUB_LIVE_MS } from "../../shared/hooks";
 import { useShell } from "../../shared/app";
 import { EmptyState } from "../../shared/Layout";
 import { Sidebar } from "./Sidebar";
@@ -37,16 +37,27 @@ interface GitHub {
 }
 const NO_GITHUB: GitHub = { pulls: [], yours: new Set(), review: new Set() };
 
+/** Work's page for one task, without the list: Agents shows it in its own
+ * view, so a follow-up is answered there, not in the task's repository. */
+export interface EmbeddedTask {
+  taskId: string;
+  /** The task is gone (landed, discarded) or the page was left. */
+  onGone: () => void;
+}
+
 /** Work: every piece of work in the repository (agents' tasks, your
  * branches, everyone's pull requests) in one list, and the selected one's
  * page. */
-export function WorkSection() {
+export function WorkSection({ embedded }: { embedded?: EmbeddedTask } = {}) {
   const shell = useShell();
   const { repo, fail, toast } = shell;
   // The shell's list, with the open task's row kept in step with its detail.
   const [tasks, setTasks] = useState<TaskSummary[]>(shell.tasks);
   useEffect(() => setTasks(shell.tasks), [shell.tasks]);
-  const [view, setView] = useStored<View>("work.view", { kind: "new" });
+  const [stored, setStored] = useStored<View>("work.view", { kind: "new" });
+  // Embedded, the task is the whole page: another view means it's over.
+  const view: View = embedded ? { kind: "task", id: embedded.taskId } : stored;
+  const setView = (v: View) => (embedded ? (v.kind === "task" && v.id === embedded.taskId ? undefined : embedded.onGone()) : setStored(v));
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
   // The Changes tab: everything against the base, or one run's changes.
@@ -70,7 +81,7 @@ export function WorkSection() {
   // Another section sent us to a task, a pull request or a branch.
   useChanged(() => {
     const t = shell.target;
-    if (t.section !== "work") return;
+    if (embedded || t.section !== "work") return;
     if (t.taskId) setView({ kind: "task", id: t.taskId });
     else if (t.number) setView({ kind: "pull", number: t.number });
     else if (t.branch) setView({ kind: "branch", name: t.branch });
@@ -97,7 +108,7 @@ export function WorkSection() {
       setHub(NO_GITHUB);
     }
   }, []);
-  usePoll(refreshGithub, 60_000, [repo.root]);
+  usePoll(refreshGithub, GITHUB_POLL_MS, [repo.root], true, true);
 
   const refreshTasks = shell.reloadTasks;
 
@@ -118,7 +129,7 @@ export function WorkSection() {
       for (const p of list)
         if (now.has(p.task) && !merged.current.has(p.task))
           toast(
-            `#${p.pull.number} ${p.pull.state === "merged" ? "landed" : "was closed"} — ${p.task} can be cleaned up`,
+            `#${p.pull.number} ${p.pull.state === "merged" ? "merged" : "was closed"} — ${p.task} can be cleaned up`,
             "ok",
             false,
             p.pull.state === "merged"
@@ -127,7 +138,7 @@ export function WorkSection() {
           );
     merged.current = now;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  usePoll(refreshPulls, 30_000, [repo.root, openTasks], openTasks > 0);
+  usePoll(refreshPulls, GITHUB_LIVE_MS, [repo.root, openTasks], openTasks > 0, true);
 
   const items = useMemo(
     () => workItems({ tasks, taskPulls: pulls, branches, pulls: hub.pulls, yours: hub.yours, review: hub.review, seen }),
@@ -163,7 +174,7 @@ export function WorkSection() {
       // Keep its row in step with the detail.
       setTasks((ts) => ts.map((t) => (t.id === d.task.id ? d.task : t)));
     } catch (e) {
-      // The task was landed or discarded elsewhere.
+      // The task was merged or discarded elsewhere.
       if (String(e).startsWith("No task")) setView({ kind: "new" });
     }
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -254,7 +265,7 @@ export function WorkSection() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key === "n") {
+      if (e.key === "n" && !embedded) {
         e.preventDefault();
         const r = document.querySelector(".new-work")?.getBoundingClientRect();
         newMenu({ clientX: r?.left ?? 80, clientY: (r?.bottom ?? 40) + 4 });
@@ -335,17 +346,17 @@ export function WorkSection() {
           pending: commitUncommitted ? "Committing and pushing…" : "Pushing…",
         })
         .then(afterChange),
-    // From prompt to landed in one place: merge on GitHub, then clean up
+    // From prompt to merged in one place: merge on GitHub, then clean up
     // at once (⌘Z brings its folder and branch back).
     onMerge: async () => {
       const pr = pulls[id]?.pull;
       if (!pr) return;
       const ok = await shell.act(() => api.pullAction(pr.number, "squash"), {
         undo: false,
-        pending: `Landing #${pr.number} on GitHub…`,
+        pending: `Merging #${pr.number} on GitHub…`,
       });
       if (!ok) return;
-      // Cleaned up here, so no "landed — can be cleaned up" note follows.
+      // Cleaned up here, so no "merged — can be cleaned up" note follows.
       merged.current?.add(id);
       const list = await api.taskPulls().catch(() => [] as TaskPull[]);
       await settle(id, list.find((p) => p.task === id)?.merge_commit ?? `#${pr.number}`);
@@ -371,7 +382,7 @@ export function WorkSection() {
     onClose: () => close(id),
   });
 
-  // Landing or publishing work that would take back what reached the base
+  // Merging or publishing work that would take back what reached the base
   // since (#81 did, by writing back old copies of files): say so first.
   const undoesOk = async (title: string) => {
     if (!shown || shown.undoes.length === 0) return true;
@@ -400,6 +411,7 @@ export function WorkSection() {
 
   return (
     <>
+      {!embedded && (
       <Sidebar
         shelves={shelves}
         any={items.length > 0}
@@ -415,6 +427,7 @@ export function WorkSection() {
         onCleanUp={() => api.cleanUpTasks().then((msg) => toast(msg), fail)}
         spent={{ usd: tasks.reduce((n, t) => n + t.spent, 0), tokens: tasks.reduce((n, t) => n + t.tokens, 0) }}
       />
+      )}
       <main className="main">
         {view.kind === "new" ? (
           view.what === "issue" ? (
@@ -527,8 +540,8 @@ export function WorkSection() {
             onSend={send}
             onStop={() => api.stopAgent(shown.task.id).then(afterChange, fail)}
             onLand={async (merge, commitUncommitted) =>
-              (await undoesOk(`Land on ${shown.task.base} anyway?`)) &&
-              shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted), { pending: `Landing on ${shown.task.base}…` }).then(afterChange)
+              (await undoesOk(`Merge into ${shown.task.base} anyway?`)) &&
+              shell.act(() => api.landTask(shown.task.id, merge, commitUncommitted), { pending: `Merging into ${shown.task.base}…` }).then(afterChange)
             }
             onDiscard={() =>
               shell.act(() => api.discardTask(shown.task.id), { pending: "Discarding…" }).then((ok) => {

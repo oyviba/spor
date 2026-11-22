@@ -14,6 +14,7 @@ mod watch;
 mod work;
 
 use serde::Serialize;
+use spor::agent::AgentKind;
 use spor::git::Repo;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -53,7 +54,8 @@ struct RepoInfo {
     /// Where new tasks start unless another branch is picked: origin's
     /// copy of the default branch (`origin/main`) when there is one.
     default_start: Option<String>,
-    claude: bool,
+    /// The agents spor knows that are installed (on the PATH), by id.
+    installed: Vec<&'static str>,
 }
 
 fn repo_info(repo: &Repo) -> RepoInfo {
@@ -76,7 +78,11 @@ fn repo_info(repo: &Repo) -> RepoInfo {
         branches,
         default_base: repo.default_base_branch(),
         default_start: repo.default_start(),
-        claude: spor::agent::available("claude"),
+        installed: AgentKind::KNOWN
+            .iter()
+            .filter(|k| spor::agent::missing(k).is_none())
+            .map(AgentKind::id)
+            .collect(),
     }
 }
 
@@ -155,6 +161,14 @@ struct RepoState {
     upstream: Option<String>,
     ahead: usize,
     behind: usize,
+    /// Diverged because the branch was rewritten (amended, rebased) after
+    /// it was pushed: force-push, don't pull.
+    rewritten: bool,
+    /// No upstream, but the remote has a branch by this name (`origin/x`):
+    /// Pull links them.
+    unlinked: Option<String>,
+    /// The remote a push goes to, None without one.
+    remote: Option<String>,
     /// "merge", "rebase", "cherrypick" or "revert" while one is stopped.
     operation: Option<String>,
     conflicts: Vec<String>,
@@ -187,7 +201,21 @@ fn repo_state(app: State<App>) -> Result<RepoState, String> {
     let index_mtime = std::fs::metadata(git_dir.join("index"))
         .and_then(|m| m.modified())
         .ok();
+    let rewritten = match (&tracking.branch, &tracking.upstream) {
+        (Some(b), Some(up)) if tracking.ahead > 0 && tracking.behind > 0 => {
+            repo.rewrote_upstream(b, up)
+        }
+        _ => false,
+    };
+    let unlinked = match (&tracking.branch, &tracking.upstream) {
+        (Some(b), None) => repo.unlinked_remote_branch(b),
+        _ => None,
+    };
+    let remote = tracking.branch.as_deref().and_then(|b| repo.push_remote(b));
     Ok(RepoState {
+        rewritten,
+        unlinked,
+        remote,
         branch: tracking.branch,
         upstream: tracking.upstream,
         ahead: tracking.ahead,
@@ -535,6 +563,7 @@ pub fn run() {
             changes::commit,
             changes::last_message,
             changes::sync,
+            changes::push_branch,
             changes::stashes,
             changes::stash,
             changes::stash_pop,

@@ -1,7 +1,9 @@
 // Every agent task in every repository of every workspace, in one list:
-// what each is doing, and a click away from its conversation. Built on the
-// Inbox's poll of the tasks, so it reads nothing of its own.
+// what each is doing. A click opens its conversation right here, to answer
+// or follow up on, whichever repository it's in. Built on the Inbox's poll of
+// the tasks, so the list reads nothing of its own.
 
+import type { ReactNode } from "react";
 import { EmptyState, PageHeader, ScopeHeader } from "../../shared/Layout";
 import { useStored } from "../../shared/hooks";
 import { StatusPill } from "../../shared/StatusPill";
@@ -20,12 +22,21 @@ const tone = (state: AgentState) => STATES.find((s) => s.state === state)!.tone;
 
 export function AgentsSection({
   inbox,
+  selected,
+  page,
   onOpen,
+  onClose,
   onOpenRepo,
 }: {
   inbox: Inbox;
-  /** Open a task's page in Work, in its repository. */
+  /** The task open on the right. */
+  selected: { repo: string; taskId: string } | null;
+  /** Its page (null while its repository opens); replaces the overview. */
+  page: ReactNode;
+  /** Open a task's conversation on the right. */
   onOpen: (repo: string, taskId: string) => void;
+  /** Back to the overview. */
+  onClose: () => void;
   /** Open a repository's Work. */
   onOpenRepo: (repo: string) => void;
 }) {
@@ -40,6 +51,11 @@ export function AgentsSection({
     <>
       <aside className="sidebar">
         <ScopeHeader title="Agents" scope="Every repository, every workspace" />
+        {selected && (
+          <button className="ghost small" onClick={onClose}>
+            ← Overview
+          </button>
+        )}
         <div className="segmented">
           {BY.map((b) => (
             <button key={b.id} aria-pressed={by === b.id} onClick={() => setBy(b.id)}>
@@ -62,7 +78,7 @@ export function AgentsSection({
                 return (
                   <button
                     key={`${r.task.repo}:${r.task.id}`}
-                    className="task-row"
+                    className={`task-row${selected?.repo === r.task.repo && selected.taskId === r.task.id ? " selected" : ""}`}
                     onClick={() => onOpen(r.task.repo, r.task.id)}
                     title={`${r.task.title} — ${r.task.repo}`}
                   >
@@ -86,6 +102,9 @@ export function AgentsSection({
           ))}
         </div>
       </aside>
+      {selected ? (
+        page
+      ) : (
       <main className="main">
         <PageHeader title="Agents" />
         <EmptyState
@@ -97,7 +116,7 @@ export function AgentsSection({
                 : `${tasks.length} ${tasks.length === 1 ? "agent task" : "agent tasks"} in ${counts.length} ${counts.length === 1 ? "repository" : "repositories"}${working > 0 ? `, ${working} working` : ""}`
           }
         >
-          <p>Every agent task in every repository of every workspace. Click one to open its conversation in Work.</p>
+          <p>Every agent task in every repository of every workspace. Click one to open its conversation here.</p>
           {counts.length > 0 && (
             <table className="agents-overview">
               <thead>
@@ -128,6 +147,7 @@ export function AgentsSection({
           )}
         </EmptyState>
       </main>
+      )}
     </>
   );
 }
