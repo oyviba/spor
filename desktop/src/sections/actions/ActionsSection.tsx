@@ -3,6 +3,7 @@ import { api, errorText } from "../../api";
 import type { Job, LogLine, Run, RunDetail, TaskSummary } from "../../types";
 import { Button } from "../../shared/Button";
 import { useShell } from "../../shared/app";
+import { issueFrom } from "../../shared/newIssue";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromBranch } from "../../shared/work";
 import { useChanged, useNow, usePoll, useStored } from "../../shared/hooks";
@@ -302,6 +303,28 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
     if (ok) shell.go({ section: "work", taskId: task.id });
   };
 
+  // File the failure as an issue (#148): its failing step and the end of
+  // its log, with a link to the run.
+  const fileIssue = async () => {
+    const failedJob = job?.status === "failure" ? job : run.jobs.find((j) => j.status === "failure");
+    if (!failedJob) return;
+    try {
+      // Without the line that tells an agent what to do about it.
+      const text = (await api.jobFeedback(r.id, failedJob.id)).replace(/\n+Find the cause, fix it[^\n]*$/, "");
+      shell.newIssue(
+        issueFrom({
+          task: task && { id: task.id, branch: task.branch },
+          what: "a failed check",
+          title: `${r.workflow}: ${failedJob.name} fails on ${r.branch}`,
+          url: r.url,
+          text,
+        }),
+      );
+    } catch (e) {
+      shell.fail(e);
+    }
+  };
+
   return (
     <DetailsCard>
       <WorkCard item={item} from="actions" />
@@ -340,6 +363,11 @@ function RunCard({ run, job, task, onChanged }: { run: RunDetail; job: Job | nul
             <Button className="ghost" onClick={() => act("rerun")}>
               Re-run all
             </Button>
+            {failed && (
+              <Button className="ghost" onClick={fileIssue} title="Open a GitHub issue with the failing step and the end of its log">
+                File as issue
+              </Button>
+            )}
           </>
         )}
         <Button className="icon-button" title="Open on GitHub" onClick={() => api.openUrl(r.url).catch(shell.fail)}>

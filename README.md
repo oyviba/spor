@@ -99,7 +99,11 @@ Below a divider, three browsers for GitHub, for what doesn't belong to a
 piece of work yet (an issue nobody has started, a run on `main`):
 
 - **Issues**, **Pull requests**, **Actions** (⌘4–⌘6) — through `gh`: an
-  issue and its comments (and *Start with agent* from it); a PR's
+  issue and its comments (and *Start with agent* from it), and *New issue*
+  (here, in Work's New… menu and ⌘K; ⌘Z closes it again). *File as issue*
+  on a debrief's risk, open question or follow-up, an agent's message or a
+  failed run opens one prefilled, linking back to the task (`Spor-Task`);
+  assigned to you, it shows up in Work as *Planned*. A PR's
   conversation, files and checks, with comments, line comments, approve,
   land, check out; a run's jobs and its log folded by step, re-run and
   cancel. Branch labels in the graph carry their open PR's number, review

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { Button } from "../../shared/Button";
+import { useShell } from "../../shared/app";
+import { issueFrom } from "../../shared/newIssue";
 import type { Debrief as DebriefData, TaskDetail } from "../../types";
 
 /** The debrief's open questions as one follow-up, unanswered ones left out. */
@@ -29,6 +31,14 @@ export function Debrief({ detail, onSend, onStartTask }: Props) {
   const [asking, setAsking] = useState(false);
   const [answers, setAnswers] = useState<string[]>([]);
   const wants = detail.wants_debrief;
+  const shell = useShell();
+  const task = { id, branch: detail.task.branch };
+  /** "File as issue" (#148): the item, with a link back to the task. */
+  const file = (what: string, text: string) => (
+    <Button className="link small-text" onClick={() => shell.newIssue(issueFrom({ task, what, text }))} title="Open a GitHub issue for this">
+      File as issue
+    </Button>
+  );
   useEffect(() => {
     if (!wants || run == null) return;
     let live = true;
@@ -66,7 +76,8 @@ export function Debrief({ detail, onSend, onStartTask }: Props) {
           <ul className="small-text">
             {d.risks.map((r, i) => (
               <li key={i}>
-                {r.path && <code>{r.path}</code>} {r.note}
+                {r.path && <code>{r.path}</code>} {r.note}{" "}
+                {file("a risk in the debrief", r.path ? `\`${r.path}\` ${r.note}` : r.note)}
               </li>
             ))}
           </ul>
@@ -76,14 +87,17 @@ export function Debrief({ detail, onSend, onStartTask }: Props) {
         <>
           <b className="small-text">Open questions</b>
           {d.open_questions.map((q, i) => (
-            <label key={i} className="small-text debrief-question">
-              {q}
+            <div key={i} className="small-text debrief-question">
+              <span>
+                {q} {file("an open question in the debrief", q)}
+              </span>
               <input
                 value={answers[i] ?? ""}
                 onChange={(e) => setAnswers((a) => Object.assign([...a], { [i]: e.target.value }))}
                 placeholder="Your answer"
+                aria-label={`Your answer to: ${q}`}
               />
-            </label>
+            </div>
           ))}
           <Button disabled={!message} onClick={() => message && onSend(message)}>
             Send answers
@@ -95,7 +109,9 @@ export function Debrief({ detail, onSend, onStartTask }: Props) {
           <b className="small-text">Follow-ups</b>
           {d.follow_ups.map((f, i) => (
             <div key={i} className="small-text debrief-followup">
-              <span>{f}</span>
+              <span>
+                {f} {file("a follow-up in the debrief", f)}
+              </span>
               <Button className="ghost" onClick={() => onStartTask(f)} title="Start a new task for this">
                 New task
               </Button>

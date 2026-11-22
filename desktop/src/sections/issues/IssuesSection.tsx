@@ -14,7 +14,7 @@ import { ago } from "../agents/transcript";
 import { isOpen } from "../agents/status";
 import { AgentSelect, ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
 import { isAgentId } from "../../shared/agents";
-import { ArrowUp, Bot, External, MessageSquare, Tag, Users } from "../../shared/Icons";
+import { ArrowUp, Bot, External, MessageSquare, Plus, Tag, Users } from "../../shared/Icons";
 import { BasePicker, defaultStart } from "../../shared/BasePicker";
 
 type Filter = "assigned" | "yours" | "open" | "closed";
@@ -62,7 +62,8 @@ export function IssuesSection() {
       }
     },
     60_000,
-    [filter],
+    // Sent to an issue (one just opened, say): read the list again.
+    [filter, shell.target.seq],
   );
   useChanged(() => {
     if (shell.target.section === "issues" && shell.target.number) setSelected(shell.target.number);
@@ -88,7 +89,11 @@ export function IssuesSection() {
   return (
     <>
       <aside className="sidebar">
-        <SidebarHeader />
+        <SidebarHeader>
+          <button className="icon-button new-work" onClick={() => shell.newIssue()} title="New issue" aria-label="New issue">
+            <Plus />
+          </button>
+        </SidebarHeader>
         <div className="segmented">
           {FILTERS.map((f) => (
             <button

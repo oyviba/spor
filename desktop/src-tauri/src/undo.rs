@@ -45,6 +45,8 @@ pub(crate) enum Undo {
     /// A branch handed to an agent: stop the agent, and take the branch
     /// back (into the main checkout, with `checkout`, where it came from).
     HandedOver { task: String, checkout: bool },
+    /// An issue just opened: close it again.
+    IssueOpened { number: u64 },
 }
 
 struct Entry {
@@ -162,6 +164,7 @@ fn apply(repo: &Repo, undo: Undo) -> Result<(), String> {
         Undo::TagCreated { name } => repo.delete_tag(&name),
         Undo::Renamed { old, new } => repo.rename_branch(&new, &old),
         Undo::StashDropped(stash) => repo.restore_stash(&stash),
+        Undo::IssueOpened { number } => spor::github::set_issue_open(repo.root(), number, false),
         Undo::HandedOver { task, checkout } => {
             let tasks = Tasks::open(repo)?;
             let task = tasks.get(&task).ok_or("The task is gone")?;

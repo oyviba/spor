@@ -244,6 +244,7 @@ export function WorkSection({ embedded }: { embedded?: EmbeddedTask } = {}) {
       { label: "Branch…", run: newBranch },
       { label: "Agent task", run: () => setView({ kind: "new", what: "agent" }) },
       { label: "From issue…", run: () => setView({ kind: "new", what: "issue" }) },
+      { label: "New issue…", run: () => shell.newIssue() },
     ]);
   const newBranch = async () => {
     const base = repo.default_base ?? repo.branches[0] ?? "main";

@@ -235,7 +235,10 @@ fn repo_state(app: State<App>) -> Result<RepoState, String> {
 #[tauri::command(async)]
 fn undo(app: State<App>) -> Result<String, String> {
     let repo = app.repo()?;
-    app.undo.pop(&repo)
+    let result = app.undo.pop(&repo);
+    // It may have closed an issue just opened: its work item goes.
+    app.github.clear(repo.root());
+    result
 }
 
 /// Open a web page (a PR or a run on GitHub) in the default browser. Only
@@ -589,6 +592,7 @@ pub fn run() {
             github::issues,
             github::issue_detail,
             github::issue_action,
+            github::create_issue,
             work::work_branches,
             work::branch_patch,
             work::work_items,

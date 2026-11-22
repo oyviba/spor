@@ -16,6 +16,8 @@ import { useApplyTheme } from "./shared/theme";
 import { display, effective, isMac, keepChanges, lookup, shortcutOf } from "./shared/keys";
 import { getSettings, setSettings, useSettings } from "./shared/settings";
 import { resolveTarget } from "./shared/targets";
+import { NewIssueDialog } from "./shared/NewIssue";
+import { blankIssue, type IssueDraft } from "./shared/newIssue";
 import {
   WORKSPACE_COLORS,
   activeWorkspace,
@@ -131,6 +133,7 @@ function repoCommands(shell: Shell): AppCommand[] {
       group: "Git",
       run: sync("force-push"),
     },
+    { id: "new-issue", label: "New issue…", hint: "on GitHub, through gh", group: "GitHub", run: () => shell.newIssue() },
     { id: "stash", label: "Stash changes", group: "Git", run: () => shell.act(() => api.stash(null), { undo: false, pending: "Stashing…" }) },
     {
       id: "pr",
@@ -156,6 +159,8 @@ export function App() {
   const recent = ws.repos;
   const [menu, setMenu] = useState<MenuSpec | null>(null);
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
+  /** The New issue dialog's starting point, while it's open. */
+  const [issueDraft, setIssueDraft] = useState<IssueDraft | null>(null);
   const [credential, setCredential] = useState<Credential | null>(null);
   const [palette, setPalette] = useState<{ branches: BranchInfo[] } | null>(null);
   /** The Settings page open, if Settings is. */
@@ -480,6 +485,7 @@ export function App() {
             },
             prompt: (spec) => new Promise((resolve) => setDialog({ kind: "prompt", ...spec, resolve })),
             confirm: (spec) => new Promise((resolve) => setDialog({ kind: "confirm", ...spec, resolve })),
+            newIssue: (draft) => setIssueDraft(draft ?? blankIssue()),
           }
         : null,
     [repo, state, refresh, tasks, work, toast, fail, undo, track, target, workspaces], // eslint-disable-line react-hooks/exhaustive-deps
@@ -742,6 +748,25 @@ export function App() {
       {settingsPage && <SettingsDialog pages={settingsPages} initial={settingsPage} onClose={() => setSettingsPage(null)} />}
       {menu && <MenuView spec={menu} onClose={() => setMenu(null)} />}
       {dialog && <DialogView spec={dialog} onClose={() => setDialog(null)} />}
+      {issueDraft && shell && (
+        <NewIssueDialog
+          draft={issueDraft}
+          onClose={() => setIssueDraft(null)}
+          onCreate={async (d) => {
+            let opened: number | null = null;
+            const ok = await shell.act(
+              () =>
+                api.createIssue(d.title, d.body, d.labels, d.assignees).then((c) => {
+                  opened = c.number;
+                  return c.message;
+                }),
+              { pending: "Opening the issue…" },
+            );
+            if (ok && opened != null) shell.go({ section: "issues", number: opened }, { browse: true });
+            return ok;
+          }}
+        />
+      )}
       {palette && <Palette
           commands={commands(palette.branches)}
           onClose={() => setPalette(null)}

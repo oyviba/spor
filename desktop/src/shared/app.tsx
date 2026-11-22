@@ -5,6 +5,7 @@
 import { createContext, useContext } from "react";
 import type { RepoInfo, RepoState, TaskSummary, WorkItemInfo } from "../types";
 import type { MenuItem } from "./Overlay";
+import type { IssueDraft } from "./newIssue";
 
 export type SectionId = "inbox" | "agents" | "history" | "issues" | "pulls" | "actions" | "work";
 
@@ -83,6 +84,9 @@ export interface Shell {
     action: string;
     extra?: { placeholder: string };
   }) => Promise<{ value: string; extra: string } | null>;
+  /** The New issue dialog, blank or prefilled (#148). Once opened, the
+   * issue is shown; ⌘Z closes it again. */
+  newIssue: (draft?: IssueDraft) => void;
   /** Ask before something that can't be undone. */
   confirm: (spec: { title: string; detail?: string; action: string; danger?: boolean }) => Promise<boolean>;
 }

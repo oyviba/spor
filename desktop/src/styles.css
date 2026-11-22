@@ -4320,3 +4320,38 @@ body.resizing * {
 .inspector-commit .composer-footer {
   flex-wrap: wrap;
 }
+.dialog.new-issue {
+  max-width: 560px;
+}
+.dialog.new-issue label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dialog textarea {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 8px 10px;
+  font: inherit;
+  resize: vertical;
+  min-height: 120px;
+}
+/* "File as issue" on an agent's message (#148): there on hover. */
+.text-block {
+  position: relative;
+}
+.text-block .block-action {
+  position: absolute;
+  right: 0;
+  bottom: -2px;
+  padding: 0 4px;
+  background: var(--bg);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.text-block:hover .block-action,
+.text-block .block-action:focus-visible {
+  opacity: 1;
+}

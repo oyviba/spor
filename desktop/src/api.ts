@@ -10,6 +10,7 @@ import type {
   Graph,
   InboxGithub,
   InboxTask,
+  CreatedIssue,
   Issue,
   IssueDetail,
   LogLine,
@@ -194,6 +195,9 @@ export const api = {
   issueDetail: (number: number) => call<IssueDetail>("issue_detail", { number }),
   issueAction: (number: number, action: "comment" | "close" | "reopen", body?: string) =>
     call<string>("issue_action", { number, action, body: body ?? null }),
+  /** Open an issue; ⌘Z closes it again. */
+  createIssue: (title: string, body: string, labels: string[], assignees: string[]) =>
+    call<CreatedIssue>("create_issue", { title, body, labels, assignees }),
 
   // Agents
   listTasks: () => call<TaskSummary[]>("list_tasks"),

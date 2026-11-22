@@ -2,6 +2,7 @@
 //! (`spor::github`). Every call says plainly why it can't work (no origin,
 //! not GitHub, no `gh`) so the sections can show that instead of a list.
 
+use crate::undo::Undo;
 use crate::{first_line, name_of, App};
 use serde::Serialize;
 use spor::github as gh;
@@ -425,6 +426,43 @@ pub(crate) fn issue_detail(app: State<App>, number: u64) -> Result<IssueDetail, 
             })
             .collect(),
         prompt,
+    })
+}
+
+#[derive(Serialize)]
+pub(crate) struct CreatedIssue {
+    number: u64,
+    url: String,
+    /// For the toast.
+    message: String,
+}
+
+/// Open an issue; ⌘Z closes it again.
+#[tauri::command(async)]
+pub(crate) fn create_issue(
+    app: State<App>,
+    title: String,
+    body: String,
+    labels: Vec<String>,
+    assignees: Vec<String>,
+) -> Result<CreatedIssue, String> {
+    let dir = root(&app)?;
+    let issue = gh::NewIssue {
+        title,
+        body,
+        labels,
+        assignees,
+    };
+    let result = gh::create_issue(&dir, &issue);
+    // Assigned to you, it's a Planned work item now: read the list again.
+    app.github.clear(&dir);
+    let (number, url) = result.map_err(|e| first_line(&e))?;
+    let message = format!("Opened #{number}");
+    app.undo.push(message.clone(), Undo::IssueOpened { number });
+    Ok(CreatedIssue {
+        number,
+        url,
+        message,
     })
 }
 

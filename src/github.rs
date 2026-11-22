@@ -1206,6 +1206,74 @@ pub fn comment_on_issue(dir: &Path, number: u64, body: &str) -> Result<(), Strin
     .map(drop)
 }
 
+/// What a new issue says, and who and what it's tagged with.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NewIssue {
+    pub title: String,
+    pub body: String,
+    pub labels: Vec<String>,
+    /// Logins, or `@me`.
+    pub assignees: Vec<String>,
+}
+
+impl NewIssue {
+    /// The `gh issue create` arguments for it. Blank labels and assignees
+    /// are left out; the body is always passed, so `gh` never opens an
+    /// editor.
+    fn args(&self) -> Vec<String> {
+        let mut args: Vec<String> = [
+            "issue",
+            "create",
+            "--title",
+            self.title.trim(),
+            "--body",
+            &self.body,
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let named = |list: &[String]| -> Vec<String> {
+            list.iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        };
+        for label in named(&self.labels) {
+            args.extend(["--label".to_string(), label]);
+        }
+        for who in named(&self.assignees) {
+            args.extend(["--assignee".to_string(), who]);
+        }
+        args
+    }
+}
+
+/// Open an issue; its number and URL.
+pub fn create_issue(dir: &Path, issue: &NewIssue) -> Result<(u64, String), String> {
+    if issue.title.trim().is_empty() {
+        return Err("Give the issue a title".into());
+    }
+    let repo = repo(dir)?;
+    let args = issue.args();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = gh(dir, &repo, &args)?;
+    // `gh issue create` prints the new issue's URL.
+    let url = out
+        .lines()
+        .map(str::trim)
+        .rfind(|l| l.starts_with("https://"))
+        .ok_or("gh didn't say which issue it opened")?
+        .to_string();
+    let number = issue_number_from_url(&url).ok_or_else(|| format!("Couldn't read {url}"))?;
+    Ok((number, url))
+}
+
+/// `https://github.com/o/r/issues/12` → 12.
+fn issue_number_from_url(url: &str) -> Option<u64> {
+    let (_, rest) = url.split_once("/issues/")?;
+    rest.split(['/', '#', '?']).next()?.parse().ok()
+}
+
 /// Close an issue (as completed), or reopen a closed one.
 pub fn set_issue_open(dir: &Path, number: u64, open: bool) -> Result<(), String> {
     let repo = repo(dir)?;
@@ -1923,6 +1991,38 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert!(!list[0].open);
         assert!(list[0].labels.is_empty());
+    }
+
+    #[test]
+    fn new_issue_arguments() {
+        let issue = NewIssue {
+            title: "  Flaky login test ".into(),
+            body: "".into(),
+            labels: vec!["bug".into(), " ".into(), " ui ".into()],
+            assignees: vec!["@me".into()],
+        };
+        assert_eq!(
+            issue.args(),
+            [
+                "issue",
+                "create",
+                "--title",
+                "Flaky login test",
+                "--body",
+                "",
+                "--label",
+                "bug",
+                "--label",
+                "ui",
+                "--assignee",
+                "@me"
+            ]
+        );
+        assert_eq!(
+            issue_number_from_url("https://github.com/o/r/issues/148"),
+            Some(148)
+        );
+        assert_eq!(issue_number_from_url("https://github.com/o/r/pull/3"), None);
     }
 
     #[test]

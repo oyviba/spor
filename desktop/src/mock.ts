@@ -374,6 +374,8 @@ const tasks: MockTask[] = [
 ];
 
 let undoable: { message: string; task: MockTask; index: number } | null = null;
+/** An issue just opened here: undo closes it. */
+let issueOpened: number | null = null;
 
 // ---- Issues and the tasks' pull requests ----
 
@@ -584,6 +586,7 @@ const SLOW: Record<string, number> = {
   land_task: 1000,
   pull_action: 1500,
   issue_action: 1200,
+  create_issue: 1200,
   run_action: 1200,
   review_feedback: 800,
   check_feedback: 900,
@@ -728,6 +731,12 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         return message;
       }
       case "undo": {
+        if (issueOpened != null) {
+          const n = issueOpened;
+          issueOpened = null;
+          issues.find((d) => d.issue.number === n)!.issue.open = false;
+          return `Undid: Opened #${n}`;
+        }
         if (!undoable) throw "Nothing to undo";
         const { message, task, index } = undoable;
         undoable = null;
@@ -811,6 +820,17 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         }
         d.issue.open = args.action === "reopen";
         return `${d.issue.open ? "Reopened" : "Closed"} #${args.number}`;
+      }
+      case "create_issue": {
+        const title = (args.title as string).trim();
+        if (!title) throw "Give the issue a title";
+        const number = Math.max(...issues.map((d) => d.issue.number)) + 1;
+        const assignees = (args.assignees as string[]).map((a) => (a === "@me" ? "you" : a));
+        const i = issue(number, title, { author: "you", labels: args.labels as string[], assignees, updated: now() });
+        const body = args.body as string;
+        issues.push({ issue: i, body, comments: [], prompt: `${title} (#${number})\n\nGitHub issue #${number}: ${i.url}\n\n${body}` });
+        issueOpened = number;
+        return { number, url: i.url, message: `Opened #${number}` } as T;
       }
       case "create_issue_task": {
         const n = args.number as number;
@@ -1132,7 +1152,7 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
       return f.state;
     case "undo": {
       // A landed or discarded mock task is undone by the agent mock above.
-      if (undoable) return undefined;
+      if (undoable || issueOpened != null) return undefined;
       const label = undoStack.pop();
       if (!label) throw "Nothing to undo";
       return `Undid: ${label}`;

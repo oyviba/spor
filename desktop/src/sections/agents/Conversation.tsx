@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
 import type { Item, Progress, RunInfo, TaskDetail, Todo } from "../../types";
 import { liveLine } from "./progress";
 import { duration, runs as toRuns, stoppedLabel, subagentsWorking, summarize, tokens, type Block, type RunView, type Tool } from "./transcript";
@@ -7,6 +7,11 @@ import { Button } from "../../shared/Button";
 import { Markdown } from "../../shared/Markdown";
 import { Alert, Check, Chevron, Circle, MessageSquare, Square, Terminal, ToolIcon, X } from "../../shared/Icons";
 import { verbOf } from "./Composer";
+import { useShell } from "../../shared/app";
+import { issueFrom } from "../../shared/newIssue";
+
+/** Opens the New issue dialog with an agent's message in it (#148). */
+const FileIssue = createContext<((text: string) => void) | null>(null);
 
 interface Props {
   detail: TaskDetail;
@@ -24,6 +29,9 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetryS
   const latest = detail.runs.at(-1);
   const running = latest?.state === "running";
   const views = toRuns(detail.transcript, running);
+  const shell = useShell();
+  const task = { id: detail.task.id, branch: detail.task.branch };
+  const fileIssue = (text: string) => shell.newIssue(issueFrom({ task, what: "a message in the conversation", text }));
   // Which folds and tool groups are open, kept per task while the app runs.
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (key: string) =>
@@ -62,6 +70,7 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetryS
   }
 
   return (
+    <FileIssue.Provider value={fileIssue}>
     <div
       className="conversation"
       ref={scroller}
@@ -97,6 +106,7 @@ export function Conversation({ detail, onStop, onRunChanges, onUndoRun, onRetryS
         )}
       </div>
     </div>
+    </FileIssue.Provider>
   );
 }
 
@@ -233,6 +243,8 @@ function BlockView({
   toggle: (key: string) => void;
   setup?: { onRetrySetup: () => unknown; onSkipSetup: () => unknown } | null;
 }) {
+  const fileIssue = useContext(FileIssue);
+  const shell = useShell();
   if (block.kind === "compacted") {
     return (
       <div className="compacted" role="separator">
@@ -284,7 +296,25 @@ function BlockView({
       </div>
     );
   }
-  if (block.kind === "text") return <Markdown text={block.text} />;
+  if (block.kind === "text") {
+    if (!fileIssue || live) return <Markdown text={block.text} />;
+    const file = () => fileIssue(block.text);
+    return (
+      <div
+        className="text-block"
+        onContextMenu={(e) => {
+          // Keep the browser's menu when there's a selection to copy.
+          if (window.getSelection()?.toString()) return;
+          shell.menu(e, [{ label: "File as issue…", run: file }]);
+        }}
+      >
+        <Markdown text={block.text} />
+        <button className="link small-text block-action" onClick={file} title="Open a GitHub issue with this message in it">
+          File as issue
+        </button>
+      </div>
+    );
+  }
   if (block.kind === "steer")
     return (
       <div className="bubble-row">

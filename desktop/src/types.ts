@@ -516,6 +516,14 @@ export interface Issue {
   url: string;
 }
 
+/** An issue just opened (#148). */
+export interface CreatedIssue {
+  number: number;
+  url: string;
+  /** For the toast ("Opened #12"). */
+  message: string;
+}
+
 export interface IssueDetail {
   issue: Issue;
   body: string;
