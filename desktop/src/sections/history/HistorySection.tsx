@@ -51,10 +51,10 @@ export function HistorySection() {
   const w = useWorktree();
   const working = selected === WORKING;
   const now = useNow(60_000);
-  const selectedRow = selected && !working ? graph?.rows.find((r) => r.hash === selected) : undefined;
+  const selectedCommit = selected && !working ? graph?.rows.find((r) => r.hash === selected) : undefined;
   useHere(
     working ? { section: "history", working: true } : selected ? { section: "history", hash: selected } : { section: "history" },
-    working ? "Uncommitted changes" : selectedRow ? selectedRow.subject : "",
+    working ? "Uncommitted changes" : selectedCommit ? selectedCommit.subject : "",
   );
 
   // Reload when any ref moves (commit, checkout, fetch, agent commits…).
