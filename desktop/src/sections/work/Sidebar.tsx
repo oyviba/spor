@@ -1,5 +1,6 @@
 import type { WorkItem, Shelf, Filter } from "./items";
 import { RulesPanel } from "./RulesPanel";
+import { AutomationsPanel } from "./AutomationsPanel";
 import { unseen } from "./items";
 import { isOpen, statusOf } from "../agents/status";
 import { doing } from "../agents/progress";
@@ -182,6 +183,7 @@ export function Sidebar(p: Props) {
           </div>
         )}
       </div>
+      <AutomationsPanel />
       <RulesPanel />
       {p.spent && p.spent.usd > 0 && (
         <div className="sidebar-foot num" title="What the agents' runs on this repository's tasks have cost so far">

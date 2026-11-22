@@ -151,6 +151,33 @@ src/
 `src-tauri` is its own Cargo workspace, so the root crate stays a
 dependency-free library.
 
+## Releasing and updates
+
+The app can update itself (#152) from GitHub releases, with Tauri's updater.
+Updates are signed with their own key pair, apart from Apple's signing
+(#62). A build without the public key (`pnpm tauri dev`, CI's builds) has no
+updater: Settings → Updates says so.
+
+One-time setup:
+
+```sh
+pnpm tauri signer generate -w ~/.tauri/spor.key    # keep the private key safe
+```
+
+- the private key's contents as the repository secret
+  `TAURI_SIGNING_PRIVATE_KEY` (and its password, if it has one, as
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`)
+- the public key as the repository **variable** `SPOR_UPDATER_PUBKEY`. It's
+  compiled into the app (`option_env!`), so it never lives in the repository
+
+To release, push a tag: `git tag v0.2.0 && git push origin v0.2.0`. The
+`Release` workflow sets the version from the tag, builds the universal
+`Spor.app`, signs the update and makes a *draft* release with the bundle,
+its signature and `latest.json`. Publish the draft when it looks right:
+running copies read `latest.json` from the latest published release. They
+check on start and daily, and never install while an agent is running (the
+restart would stop it): *Update when idle* waits for them.
+
 ## Not here yet
 
 A signed, notarized Mac app (#62): CI's `Spor.app` is ad-hoc signed.
