@@ -545,11 +545,21 @@ fn search_matches_every_word_anywhere() {
     f.commit_file("b.txt", "2\n", "Fix the signup page");
     f.repo.create_tag("v1-login", &a, None).unwrap();
     // Words can be far apart, and in any order.
-    assert_eq!(f.repo.search_commits("page login", 10).unwrap(), vec![a.clone()]);
+    assert_eq!(
+        f.repo.search_commits("page login", 10).unwrap(),
+        vec![a.clone()]
+    );
     assert_eq!(f.repo.search_commits("the  PAGE", 10).unwrap().len(), 2);
-    assert!(f.repo.search_commits("login signup", 10).unwrap().is_empty());
+    assert!(f
+        .repo
+        .search_commits("login signup", 10)
+        .unwrap()
+        .is_empty());
     // The name of a tag finds the commit it points at.
-    assert_eq!(f.repo.search_commits("v1-login", 10).unwrap(), vec![a.clone()]);
+    assert_eq!(
+        f.repo.search_commits("v1-login", 10).unwrap(),
+        vec![a.clone()]
+    );
     // So does a branch name.
     let b = f.repo.head_sha().unwrap();
     f.repo.create_branch_at("feature/avatars", &b).unwrap();

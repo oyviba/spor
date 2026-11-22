@@ -551,7 +551,8 @@ impl Repo {
             found = Some(match found {
                 None => these,
                 Some(before) => {
-                    let keep: std::collections::HashSet<&str> = these.iter().map(String::as_str).collect();
+                    let keep: std::collections::HashSet<&str> =
+                        these.iter().map(String::as_str).collect();
                     before
                         .into_iter()
                         .filter(|h| keep.contains(h.as_str()))
