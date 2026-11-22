@@ -33,10 +33,10 @@ const TRACK: { stage: WorkItemInfo["stage"]; label: string }[] = [
   { stage: "planned", label: "Planned" },
   { stage: "inprogress", label: "In progress" },
   { stage: "inreview", label: "In review" },
-  { stage: "landed", label: "Landed" },
+  { stage: "landed", label: "Merged" },
 ];
 
-/** Planned → In progress → In review → Landed, with the current stage lit
+/** Planned → In progress → In review → Merged, with the current stage lit
  * and the ones before it done. A closed item ends in Closed instead. */
 export function StageTrack({ stage }: { stage: WorkItemInfo["stage"] }) {
   const steps = stage === "closed" ? [...TRACK.slice(0, 3), { stage: "closed" as const, label: "Closed" }] : TRACK;

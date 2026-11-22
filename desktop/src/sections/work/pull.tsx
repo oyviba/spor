@@ -1,5 +1,5 @@
 // A pull request on the work page (#80): its conversation, changes and
-// checks, the card to land it, and the box to comment or approve. The Pull
+// checks, the card to merge it, and the box to comment or approve. The Pull
 // requests browser and Work show it the same way, and a task with a pull
 // request gets its Discussion and Checks tabs from here.
 
@@ -9,7 +9,7 @@ import type { LineComment, Pull, PullDetail, Run, TaskSummary } from "../../type
 import { useShell, type SectionId } from "../../shared/app";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromPull } from "../../shared/work";
-import { useChanged, usePoll, useStored } from "../../shared/hooks";
+import { useChanged, usePoll, useStored, GITHUB_POLL_MS } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
@@ -37,7 +37,7 @@ export function usePullDetail(number: number | null, wantDiff: boolean) {
       fail(e);
     }
   };
-  usePoll(reload, 30_000, [number], number != null);
+  usePoll(reload, GITHUB_POLL_MS, [number], number != null, true);
   useChanged(() => {
     setDetail(null);
     setDiff(null);
@@ -54,8 +54,10 @@ export function RunChecks({ branch }: { branch: string }) {
   const [runs, setRuns] = useState<Run[] | null>(null);
   usePoll(
     async () => setRuns(await api.runs(branch, null).catch(() => [])),
-    60_000,
+    GITHUB_POLL_MS,
     [branch],
+    true,
+    true,
   );
   if (runs == null) return <p className="hint">Loading runs…</p>;
   // The latest run of each workflow is where the branch stands.
@@ -186,7 +188,7 @@ export function PullView({ number, from }: { number: number; from: SectionId }) 
 
 /** The one status a PR shows in lists: what's in the way, or where it is. */
 export function pullStatus(p: Pull): Status {
-  if (p.state === "merged") return { label: "Landed", tone: "violet", live: false };
+  if (p.state === "merged") return { label: "Merged", tone: "violet", live: false };
   if (p.state === "closed") return { label: "Closed", tone: "muted", live: false };
   if (p.checks === "failing") return { label: "Checks failing", tone: "red", live: false };
   if (p.review === "changesrequested") return { label: "Changes requested", tone: "amber", live: false };
@@ -278,9 +280,9 @@ export function PullCard({ pr, task, from, onChanged }: { pr: PullDetail; task?:
   const open = p.state === "open" || p.state === "draft";
   const conflicting = open && pr.mergeable === "conflicting";
   const PENDING: Record<string, string> = {
-    squash: `Landing #${p.number} on GitHub…`,
-    merge: `Landing #${p.number} on GitHub…`,
-    rebase: `Landing #${p.number} on GitHub…`,
+    squash: `Merging #${p.number} on GitHub…`,
+    merge: `Merging #${p.number} on GitHub…`,
+    rebase: `Merging #${p.number} on GitHub…`,
     ready: "Marking it ready…",
     checkout: `Checking out ${p.head}…`,
     close: `Closing #${p.number}…`,
@@ -377,22 +379,22 @@ export function PullCard({ pr, task, from, onChanged }: { pr: PullDetail; task?:
               }
               onClick={() => merge("squash")}
             >
-              {confirm === "squash" ? `Land #${p.number}?` : `Land #${p.number}`}
+              {confirm === "squash" ? `Merge #${p.number}?` : `Merge #${p.number}`}
             </Button>
-            <button className="primary split-more" aria-label="Other ways to land" disabled={p.state === "draft" || conflicting} onClick={() => setMenu((m) => !m)}>
+            <button className="primary split-more" aria-label="Other ways to merge" disabled={p.state === "draft" || conflicting} onClick={() => setMenu((m) => !m)}>
               <ChevronDown size={12} />
             </button>
             {menu && (
               <div className="menu" onMouseLeave={() => setMenu(false)}>
-                <button onClick={() => { setMenu(false); merge("merge"); }}>Land with a merge commit</button>
-                <button onClick={() => { setMenu(false); merge("rebase"); }}>Land by rebasing</button>
+                <button onClick={() => { setMenu(false); merge("merge"); }}>Create a merge commit</button>
+                <button onClick={() => { setMenu(false); merge("rebase"); }}>Rebase and merge</button>
               </div>
             )}
           </div>
         )}
         {confirm && confirm !== "squash" && (
           <Button className="danger" onClick={() => act(confirm)}>
-            {confirm === "merge" ? "Land with a merge commit?" : "Land by rebasing?"}
+            {confirm === "merge" ? "Create a merge commit?" : "Rebase and merge?"}
           </Button>
         )}
         {p.state === "draft" && (

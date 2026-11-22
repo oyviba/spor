@@ -16,6 +16,15 @@
 //! (follow-ups fork the agent's session, so an earlier run's session is a
 //! snapshot of the conversation up to it).
 
+mod adapter;
+mod claude;
+mod command;
+mod copilot;
+
+pub use adapter::{Adapter, Launch, LogStats, McpServer, Prepare, Prepared};
+pub use claude::parse_claude;
+pub use copilot::{parse_copilot, COPILOT};
+
 use crate::checkpoint;
 use crate::host;
 use crate::json::Json;
@@ -24,22 +33,64 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-/// Which agent a run uses.
+/// Which agent a run uses. What each one does differently lives in its
+/// adapter (`AgentKind::adapter`, `adapter::Adapter`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentKind {
     /// Claude Code, headless, with its structured event stream.
     Claude,
+    /// GitHub Copilot CLI (`copilot -p`), with its JSONL event stream.
+    /// It can't ask in prompt mode, so what its permission mode doesn't
+    /// allow is refused.
+    Copilot,
     /// Any command; `{prompt}` is replaced with the prompt, shell-quoted,
     /// and `$SPOR_PROMPT` holds it too. Its output is shown as is.
     Command(String),
 }
 
 impl AgentKind {
-    pub fn label(&self) -> &str {
+    /// The agents spor knows how to run, in the order it offers them.
+    pub const KNOWN: [AgentKind; 2] = [AgentKind::Claude, AgentKind::Copilot];
+
+    /// What spor needs from this agent: how to start it and read it back.
+    pub fn adapter(&self) -> Box<dyn Adapter + '_> {
         match self {
-            AgentKind::Claude => "Claude Code",
-            AgentKind::Command(_) => "Custom command",
+            AgentKind::Claude => Box::new(claude::Claude),
+            AgentKind::Copilot => Box::new(copilot::Copilot),
+            AgentKind::Command(template) => Box::new(command::Custom(template)),
         }
+    }
+
+    /// How the UI names it: `claude`, `copilot`, `command`.
+    pub fn id(&self) -> &'static str {
+        self.adapter().id()
+    }
+
+    pub fn label(&self) -> &'static str {
+        self.adapter().label()
+    }
+
+    /// The program it runs, when it's a known agent.
+    pub fn program(&self) -> Option<&'static str> {
+        self.adapter().program()
+    }
+
+    /// How a run's `kind` meta names it: its id, and a command's template.
+    fn name(&self) -> String {
+        match self {
+            AgentKind::Command(t) => format!("command {t}"),
+            known => known.id().to_string(),
+        }
+    }
+
+    /// The agent a run's `kind` meta names.
+    fn from_name(name: &str) -> AgentKind {
+        AgentKind::KNOWN
+            .into_iter()
+            .find(|k| k.id() == name)
+            .unwrap_or_else(|| {
+                AgentKind::Command(name.strip_prefix("command ").unwrap_or(name).into())
+            })
     }
 }
 
@@ -916,7 +967,9 @@ impl Runs {
                 .lines()
                 .filter(|l| l.starts_with(r#"{"type":"spor_setup""#))
             {
-                if let Some(Entry::Setup { ok, code }) = parse_claude(line).pop() {
+                if let Some(Entry::Setup { ok, code }) =
+                    Json::parse(line).and_then(|e| spor_event(&e))
+                {
                     state = Some(match ok {
                         None if run.state == RunState::Running => SetupState::Running,
                         None => SetupState::Failed(None),
@@ -1086,37 +1139,6 @@ impl Runs {
             }
         }
         out
-    }
-
-    /// The arguments that give Claude Code spor's MCP server (#106): a
-    /// config file in the run directory that starts the app's executable
-    /// as the server, and the tools it may use without asking. `ask` isn't
-    /// among them: it is a question for the person.
-    fn mcp_args(&self, program: &Path, task: &Task, index: usize, log: &Path) -> Vec<String> {
-        let file = self.file(index, "mcp.json");
-        let args = [
-            crate::mcp::ARG.to_string(),
-            self.repo_root.display().to_string(),
-            task.id.clone(),
-            log.display().to_string(),
-        ];
-        let config = format!(
-            r#"{{"mcpServers":{{"spor":{{"command":{},"args":[{}]}}}}}}"#,
-            host::quote(&program.to_string_lossy()),
-            args.iter()
-                .map(|a| host::quote(a))
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-        if std::fs::write(&file, config).is_err() {
-            return Vec::new();
-        }
-        vec![
-            "--mcp-config".into(),
-            file.display().to_string(),
-            "--allowedTools".into(),
-            crate::mcp::READ_ONLY_TOOLS.join(","),
-        ]
     }
 
     /// Whether this task's runs check the repository before finishing
@@ -1289,10 +1311,7 @@ impl Runs {
                 .find_map(|l| l.strip_prefix(key)?.strip_prefix('\t'))
                 .map(unescape)
         };
-        let kind = match get("kind")?.as_str() {
-            "claude" => AgentKind::Claude,
-            other => AgentKind::Command(other.strip_prefix("command ").unwrap_or(other).into()),
-        };
+        let kind = AgentKind::from_name(&get("kind")?);
         Some(Waiting {
             kind,
             prompt: get("prompt")?,
@@ -1312,7 +1331,7 @@ impl Runs {
         // Waiting again keeps its place in line.
         let since = self.waiting().map_or(w.since, |old| old.since);
         let text: String = [
-            ("kind", kind_name(&w.kind)),
+            ("kind", w.kind.name()),
             ("prompt", w.prompt.clone()),
             ("resume", w.resume.clone().unwrap_or_default()),
             ("mode", w.mode.flag().to_string()),
@@ -1396,21 +1415,37 @@ impl Runs {
         let index = self.count();
         // Made up front, so an image attached while it works can be read.
         let _ = std::fs::create_dir_all(&self.attachments);
-        let (program, mut args) =
-            command_for(kind, prompt, resume, permissions, model, &self.attachments);
+        let adapter = kind.adapter();
         // What the agent is told, kept beside the run so it's clear afterwards.
         let context = self.context(task);
         let _ = std::fs::write(self.file(index, "context"), &context);
-        if *kind == AgentKind::Claude {
-            // Before `-p <prompt>`, which stays last.
-            let at = args.iter().position(|a| a == "-p").unwrap_or(args.len());
-            args.splice(
-                at..at,
-                ["--append-system-prompt".to_string(), context.clone()],
-            );
-        }
         let log = self.file(index, "log");
         let exit = self.file(index, "exit");
+        // spor's MCP server is the app's own executable, so there's one
+        // only when spor runs as the app.
+        let mcp = host::program().map(|program| McpServer {
+            command: program.to_path_buf(),
+            args: vec![
+                crate::mcp::ARG.to_string(),
+                self.repo_root.display().to_string(),
+                task.id.clone(),
+                log.display().to_string(),
+            ],
+        });
+        let prepared = adapter.prepare(&Prepare {
+            context: &context,
+            mcp: mcp.as_ref(),
+            dir: &self.dir,
+            stem: &format!("run-{index}"),
+        });
+        let launch = Launch {
+            prompt,
+            resume,
+            permissions,
+            model,
+            attachments: &self.attachments,
+        };
+        let (program, args) = adapter.command(&launch, prepared.args);
         // What the folder was like before, for this run's diff and undo.
         // Best effort: a run without checkpoints still runs.
         let _ = checkpoint::capture(&folder, &self.checkpoint_ref(index, "before"));
@@ -1420,11 +1455,13 @@ impl Runs {
         let script = r#""$@" >> "$SPOR_LOG" 2>&1; code=$?
 SPOR_REF="$SPOR_AFTER" sh -c "$SPOR_SNAPSHOT" > /dev/null 2>&1
 echo $code > "$SPOR_EXIT""#;
-        let hosted = *kind == AgentKind::Claude && host::program().is_some();
-        // The agent's command line: Claude under the host (it can ask, and
-        // be steered, #20), or anything under the plain wrapper.
-        let agent: Vec<std::ffi::OsString> = match host::program().filter(|_| hosted) {
-            Some(host_program) => [
+        // The agent's command line: under the host when it can run there
+        // (it can ask, and be steered, #20), or under the plain wrapper.
+        let host_program = host::program();
+        let hosted_args = host_program.and_then(|_| adapter.hosted_args(&args));
+        let hosted = hosted_args.is_some();
+        let agent: Vec<std::ffi::OsString> = match (host_program, hosted_args) {
+            (Some(host_program), Some(hosted_args)) => [
                 host_program.as_os_str().to_owned(),
                 host::ARG.into(),
                 log.clone().into(),
@@ -1435,15 +1472,14 @@ echo $code > "$SPOR_EXIT""#;
                 program.clone().into(),
             ]
             .into_iter()
-            .chain(hosted_args(&args).into_iter().map(Into::into))
+            .chain(hosted_args.into_iter().map(Into::into))
             .chain(
-                self.mcp_args(host_program, task, index, &log)
+                self.hook_args(host_program, task, index, &log)
                     .into_iter()
-                    .chain(self.hook_args(host_program, task, index, &log))
                     .map(Into::into),
             )
             .collect(),
-            None => ["sh", "-c", script, "spor-agent", &program]
+            _ => ["sh", "-c", script, "spor-agent", &program]
                 .into_iter()
                 .map(Into::into)
                 .chain(args.iter().map(Into::into))
@@ -1472,6 +1508,7 @@ echo $code > "$SPOR_EXIT""#;
                 cmd
             }
         };
+        cmd.envs(prepared.env);
         if let Some(path) = &setup {
             cmd.env("SPOR_SETUP", path)
                 .env("SPOR_SETUP_OK", self.dir.join("setup.ok"))
@@ -1501,7 +1538,7 @@ echo $code > "$SPOR_EXIT""#;
             .map_err(|e| format!("Couldn't start {}: {e}", kind.label()))?;
         let pid = child.id();
         let meta = [
-            ("kind", kind_name(kind)),
+            ("kind", kind.name()),
             ("hosted", hosted.to_string()),
             ("mode", permissions.mode.flag().to_string()),
             ("model", model.name.clone().unwrap_or_default()),
@@ -1779,36 +1816,8 @@ echo $code > "$SPOR_EXIT""#;
     pub fn progress(&self) -> Option<Progress> {
         let run = self.latest().filter(|r| r.state == RunState::Running)?;
         let log = std::fs::read_to_string(self.file(run.index, "log")).ok()?;
-        let mut out = Progress::default();
-        let mut plan = false;
-        for line in log.lines().rev() {
-            if out.tool.is_some() && plan {
-                break;
-            }
-            if !line.contains("\"tool_use\"") {
-                continue;
-            }
-            let Some(event) = Json::parse(line) else {
-                continue;
-            };
-            if event.get("type").str() != Some("assistant") {
-                continue;
-            }
-            for part in event.get("message").get("content").array().iter().rev() {
-                if part.get("type").str() != Some("tool_use") {
-                    continue;
-                }
-                let name = part.get("name").str().unwrap_or("Tool");
-                if !plan && name == "TodoWrite" {
-                    (out.done, out.total, out.step) = plan_progress(&todos(part.get("input")));
-                    plan = true;
-                }
-                if out.tool.is_none() && name != "TodoWrite" {
-                    out.tool = Some((name.to_string(), tool_detail(part.get("input"))));
-                }
-            }
-        }
-        Some(out)
+        let progress = run.kind.adapter().progress(&log);
+        Some(progress)
     }
 
     /// The questions the running agent is waiting on.
@@ -1817,7 +1826,7 @@ echo $code > "$SPOR_EXIT""#;
             return Vec::new();
         };
         let log = std::fs::read_to_string(self.file(run.index, "log")).unwrap_or_default();
-        let entries = parse_claude(&log);
+        let entries = run.kind.adapter().parse(&log);
         let answered: std::collections::HashSet<&str> = entries
             .iter()
             .filter_map(|e| match e {
@@ -1949,26 +1958,8 @@ echo $code > "$SPOR_EXIT""#;
         for run in self.list() {
             out.push(Entry::Prompt(run.prompt.clone()));
             let log = std::fs::read_to_string(self.file(run.index, "log")).unwrap_or_default();
-            match run.kind {
-                AgentKind::Claude => out.extend(parse_claude(&log)),
-                AgentKind::Command(_) => {
-                    let lines: Vec<&str> = log.lines().collect();
-                    let skip = lines.len().saturating_sub(MAX_OUTPUT_LINES);
-                    if skip > 0 {
-                        out.push(Entry::Output(format!("… {skip} earlier lines")));
-                    }
-                    // spor's own marker lines (setup) are events; the rest
-                    // is the command's output, as it printed it.
-                    out.extend(lines[skip..].iter().map(|l| {
-                        if l.starts_with(r#"{"type":"spor_"#) {
-                            if let Some(e) = parse_claude(l).pop() {
-                                return e;
-                            }
-                        }
-                        Entry::Output(l.to_string())
-                    }));
-                }
-            }
+            let adapter = run.kind.adapter();
+            out.extend(adapter.parse(&log));
             match &run.state {
                 RunState::Stopped => out.push(Entry::Done {
                     ok: false,
@@ -1992,13 +1983,20 @@ echo $code > "$SPOR_EXIT""#;
                         seconds: run.ended.map(|e| (e - run.started) as f64),
                     })
                 }
-                RunState::Finished if run.kind != AgentKind::Claude => out.push(Entry::Done {
-                    ok: true,
-                    summary: "Finished".into(),
-                    cost_usd: None,
-                    turns: None,
-                    seconds: run.ended.map(|e| (e - run.started) as f64),
-                }),
+                // Some agents always end with their result; others do
+                // when they get that far.
+                RunState::Finished
+                    if !adapter.ends_with_result()
+                        && !matches!(out.last(), Some(Entry::Done { .. })) =>
+                {
+                    out.push(Entry::Done {
+                        ok: true,
+                        summary: "Finished".into(),
+                        cost_usd: None,
+                        turns: None,
+                        seconds: run.ended.map(|e| (e - run.started) as f64),
+                    })
+                }
                 _ => {}
             }
         }
@@ -2006,10 +2004,7 @@ echo $code > "$SPOR_EXIT""#;
     }
 
     pub fn run(&self, index: usize) -> Option<Run> {
-        let kind = match self.meta(index, "kind")?.as_str() {
-            "claude" => AgentKind::Claude,
-            other => AgentKind::Command(other.strip_prefix("command ").unwrap_or(other).into()),
-        };
+        let kind = AgentKind::from_name(&self.meta(index, "kind")?);
         let started = self.meta(index, "started")?.parse().unwrap_or(0);
         let exit_file = self.file(index, "exit");
         let stopped = self.file(index, "stopped").exists();
@@ -2037,13 +2032,9 @@ echo $code > "$SPOR_EXIT""#;
             None if running => RunState::Running,
             None => RunState::Stopped,
         };
-        let stats = match kind {
-            AgentKind::Claude => {
-                let log = std::fs::read_to_string(self.file(index, "log")).unwrap_or_default();
-                claude_log(&log)
-            }
-            AgentKind::Command(_) => LogStats::default(),
-        };
+        let stats = std::fs::read_to_string(self.file(index, "log"))
+            .map(|log| kind.adapter().stats(&log))
+            .unwrap_or_default();
         let (session, cost_usd) = (stats.session, stats.cost);
         Some(Run {
             index,
@@ -2082,9 +2073,9 @@ echo $code > "$SPOR_EXIT""#;
     }
 }
 
-const MAX_OUTPUT_LINES: usize = 2000;
-
-/// The program and arguments for one run.
+/// The program and arguments for one run, as the agent's adapter makes
+/// them, before anything a run adds.
+#[cfg(test)]
 fn command_for(
     kind: &AgentKind,
     prompt: &str,
@@ -2093,40 +2084,14 @@ fn command_for(
     model: &Model,
     attachments: &Path,
 ) -> (String, Vec<String>) {
-    match kind {
-        AgentKind::Claude => {
-            let mut args: Vec<String> = [
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--permission-mode",
-                permissions.mode.flag(),
-            ]
-            .map(String::from)
-            .to_vec();
-            if let Some(name) = &model.name {
-                args.extend(["--model".into(), name.clone()]);
-            }
-            if let Some(effort) = model.effort {
-                args.extend(["--effort".into(), effort.flag().into()]);
-            }
-            if let Some(session) = resume {
-                // A new session id for each follow-up, so the one resumed
-                // stays as it was: undoing this run resumes from there.
-                args.extend(["--resume".into(), session.into(), "--fork-session".into()]);
-            }
-            // Images attached to prompts are named by their path there.
-            args.extend(["--add-dir".into(), attachments.display().to_string()]);
-            // Publishing is always a person's call, from spor.
-            args.extend(["--disallowedTools".into(), "Bash(git push:*)".into()]);
-            args.extend(["-p".into(), prompt.into()]);
-            ("claude".into(), args)
-        }
-        AgentKind::Command(template) => {
-            let command = template.replace("{prompt}", &shell_quote(prompt));
-            ("sh".into(), vec!["-c".into(), command])
-        }
-    }
+    let launch = Launch {
+        prompt,
+        resume,
+        permissions,
+        model,
+        attachments,
+    };
+    kind.adapter().command(&launch, Vec::new())
 }
 
 /// Run the setup script, its output in the run's log between two markers,
@@ -2139,344 +2104,42 @@ if [ "$code" -ne 0 ]; then echo "$code" > "$SPOR_EXIT"; exit "$code"; fi
 : > "$SPOR_SETUP_OK"
 exec "$@""#;
 
-/// Claude's arguments under the host: the prompt goes on stdin (as
-/// stream-json, like follow-ups), and questions come back as control
-/// requests instead of being refused.
-fn hosted_args(args: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(args.len() + 4);
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "-p" {
-            // `-p <prompt>`: keep print mode, drop the prompt.
-            out.push("-p".into());
-            i += 2;
-            continue;
-        }
-        out.push(args[i].clone());
-        i += 1;
-    }
-    out.extend([
-        "--input-format".into(),
-        "stream-json".into(),
-        "--permission-prompt-tool".into(),
-        "stdio".into(),
-    ]);
-    out
-}
-
 /// Where a task's checkpoints live.
 pub fn checkpoint_prefix(task_id: &str) -> String {
     format!("refs/spor/tasks/{task_id}")
 }
 
-fn kind_name(kind: &AgentKind) -> String {
-    match kind {
-        AgentKind::Claude => "claude".into(),
-        AgentKind::Command(t) => format!("command {t}"),
-    }
-}
-
-/// Read Claude Code's `stream-json` output into transcript entries.
-pub fn parse_claude(log: &str) -> Vec<Entry> {
-    let mut out = Vec::new();
-    // Each command's gist by its call id, to pair its result (#97).
-    let mut commands: std::collections::HashMap<String, (String, String)> = Default::default();
-    for line in log.lines().filter(|l| !l.trim().is_empty()) {
-        let Some(event) = Json::parse(line) else {
-            out.push(Entry::Output(line.to_string()));
-            continue;
-        };
-        let start = out.len();
-        match event.get("type").str() {
-            Some("assistant") => {
-                for part in event.get("message").get("content").array() {
-                    match part.get("type").str() {
-                        Some("thinking") => {
-                            let text = part.get("thinking").str().unwrap_or("").trim();
-                            if !text.is_empty() {
-                                out.push(Entry::Thinking(text.to_string()));
-                            }
-                        }
-                        Some("text") => {
-                            let text = part.get("text").str().unwrap_or("").trim();
-                            if !text.is_empty() {
-                                out.push(Entry::Text(text.to_string()));
-                            }
-                        }
-                        Some("tool_use") => {
-                            let name = part.get("name").str().unwrap_or("Tool");
-                            let detail = tool_detail(part.get("input"));
-                            let id = part.get("id").str().unwrap_or_default();
-                            if matches!(name, "Bash" | "Task" | "Agent") && !id.is_empty() {
-                                commands.insert(id.to_string(), (name.to_string(), detail.clone()));
-                            }
-                            out.push(Entry::Tool {
-                                name: name.to_string(),
-                                detail,
-                            });
-                            if name == "TodoWrite" {
-                                out.push(Entry::Todos(todos(part.get("input"))));
-                            }
-                            if matches!(name, "Task" | "Agent") && !id.is_empty() {
-                                let input = part.get("input");
-                                let text = |key: &str| {
-                                    input.get(key).str().unwrap_or_default().trim().to_string()
-                                };
-                                out.push(Entry::Subagent {
-                                    id: id.to_string(),
-                                    agent: text("subagent_type"),
-                                    description: text("description"),
-                                    prompt: text("prompt"),
-                                });
-                            }
-                        }
-                        _ => {}
-                    }
+/// One of the lines spor writes into a run's log itself (`spor_…`), read
+/// the same whichever agent the run has: an answer to a question, the
+/// setup script starting and ending, a message steering the agent.
+fn spor_event(event: &Json) -> Option<Entry> {
+    Some(match event.get("type").str()? {
+        "spor_answer" => Entry::Answer {
+            id: event
+                .get("request_id")
+                .str()
+                .unwrap_or_default()
+                .to_string(),
+            allow: event.get("allow").bool() == Some(true),
+            message: event.get("message").str().unwrap_or_default().to_string(),
+            always: event.get("always").bool() == Some(true),
+        },
+        "spor_setup" => match event.get("state").str() {
+            Some("done") => {
+                let code = event.get("code").num().map(|c| c as i32);
+                Entry::Setup {
+                    ok: Some(code == Some(0)),
+                    code,
                 }
             }
-            Some("user") => {
-                for part in event.get("message").get("content").array() {
-                    if part.get("type").str() != Some("tool_result") {
-                        continue;
-                    }
-                    let failed = part.get("is_error").bool() == Some(true);
-                    let content = match part.get("content") {
-                        Json::String(s) => s.clone(),
-                        other => other
-                            .array()
-                            .iter()
-                            .filter_map(|c| c.get("text").str())
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                    };
-                    if failed {
-                        let first = content.trim().lines().next().unwrap_or("").to_string();
-                        out.push(Entry::ToolError(first));
-                    }
-                    // A command's output, paired with its call (#97).
-                    let call = part
-                        .get("tool_use_id")
-                        .str()
-                        .and_then(|id| commands.get(id));
-                    if let Some((name, detail)) = call {
-                        let text = content.trim_end();
-                        let count = text.chars().count();
-                        let output: String = text
-                            .chars()
-                            .skip(count.saturating_sub(MAX_RESULT_CHARS))
-                            .collect();
-                        out.push(Entry::Result {
-                            name: name.clone(),
-                            detail: detail.clone(),
-                            ok: !failed,
-                            output,
-                            truncated: count > MAX_RESULT_CHARS,
-                        });
-                    }
-                }
-            }
-            Some("control_request")
-                if event.get("request").get("subtype").str() == Some("can_use_tool") =>
-            {
-                let request = event.get("request");
-                let tool = request.get("tool_name").str().unwrap_or("Tool");
-                let kind = AskKind::of(tool, request.get("input"));
-                out.push(Entry::Ask {
-                    id: event
-                        .get("request_id")
-                        .str()
-                        .unwrap_or_default()
-                        .to_string(),
-                    tool: tool.to_string(),
-                    detail: ask_detail(&kind, request.get("input")),
-                    // Answering a question or a plan is never "always".
-                    session: match kind {
-                        AskKind::Permission => covers(request.get("permission_suggestions")),
-                        _ => None,
-                    },
-                    kind,
-                });
-            }
-            Some("system") => match event.get("subtype").str() {
-                Some("init") => {
-                    let init = init_of(&event);
-                    if !init.model.is_empty() {
-                        out.push(Entry::Init(init));
-                    }
-                }
-                Some("compact_boundary") => out.push(Entry::Compacted),
-                _ => {}
+            _ => Entry::Setup {
+                ok: None,
+                code: None,
             },
-            Some("spor_answer") => out.push(Entry::Answer {
-                id: event
-                    .get("request_id")
-                    .str()
-                    .unwrap_or_default()
-                    .to_string(),
-                allow: event.get("allow").bool() == Some(true),
-                message: event.get("message").str().unwrap_or_default().to_string(),
-                always: event.get("always").bool() == Some(true),
-            }),
-            Some("spor_setup") => out.push(match event.get("state").str() {
-                Some("done") => {
-                    let code = event.get("code").num().map(|c| c as i32);
-                    Entry::Setup {
-                        ok: Some(code == Some(0)),
-                        code,
-                    }
-                }
-                _ => Entry::Setup {
-                    ok: None,
-                    code: None,
-                },
-            }),
-            Some("spor_message") => out.push(Entry::Steer(
-                event.get("text").str().unwrap_or_default().to_string(),
-            )),
-            Some("result") => out.push(Entry::Done {
-                ok: event.get("is_error").bool() != Some(true)
-                    && event.get("subtype").str().is_none_or(|s| s == "success"),
-                // The result repeats the agent's last words; say them once.
-                summary: {
-                    let result = event.get("result").str().unwrap_or("").trim();
-                    let said = out
-                        .iter()
-                        .rev()
-                        .find_map(|e| match e {
-                            Entry::Text(t) => Some(t.as_str()),
-                            _ => None,
-                        })
-                        .is_some_and(|last| last == result);
-                    if said {
-                        String::new()
-                    } else {
-                        result.to_string()
-                    }
-                },
-                cost_usd: event.get("total_cost_usd").num(),
-                turns: event.get("num_turns").num().map(|n| n as u32),
-                seconds: event.get("duration_ms").num().map(|ms| ms / 1000.0),
-            }),
-            _ => {}
-        }
-        // What a subagent did hangs under the call that started it (#99).
-        if let Some(parent) = event.get("parent_tool_use_id").str() {
-            for entry in out.split_off(start) {
-                out.push(Entry::Nested {
-                    parent: parent.to_string(),
-                    entry: Box::new(entry),
-                });
-            }
-        }
-    }
-    out
-}
-
-fn init_of(event: &Json) -> Init {
-    Init {
-        model: event.get("model").str().unwrap_or_default().to_string(),
-        servers: event
-            .get("mcp_servers")
-            .array()
-            .iter()
-            .map(|m| {
-                (
-                    m.get("name").str().unwrap_or_default().to_string(),
-                    m.get("status").str().unwrap_or_default().to_string(),
-                )
-            })
-            .collect(),
-    }
-}
-
-/// What a Claude Code log reports besides the transcript.
-#[derive(Debug, Default, PartialEq)]
-struct LogStats {
-    session: Option<String>,
-    cost: Option<f64>,
-    usage: Usage,
-    init: Option<Init>,
-}
-
-/// The session, cost, token use and `init` of a Claude Code log.
-fn claude_log(log: &str) -> LogStats {
-    let mut stats = LogStats::default();
-    // A message arrives once per content block, each with its usage: count
-    // it once, as of its last block.
-    let mut pending: Option<(String, [u64; 4])> = None;
-    let commit = |usage: &mut Usage, p: &mut Option<(String, [u64; 4])>, main: bool| {
-        if let Some((_, [i, o, r, c])) = p.take() {
-            usage.input += i;
-            usage.output += o;
-            usage.cache_read += r;
-            usage.cache_created += c;
-            if main {
-                usage.context = i + r + c;
-            }
-        }
-    };
-    let mut pending_main = true;
-    for line in log.lines() {
-        // Only the events that carry something; skip parsing the rest.
-        if !(line.contains("\"type\":\"assistant\"")
-            || line.contains("\"type\":\"system\"")
-            || line.contains("\"type\":\"result\""))
-        {
-            continue;
-        }
-        let Some(event) = Json::parse(line) else {
-            continue;
-        };
-        match event.get("type").str() {
-            Some("assistant") => {
-                let message = event.get("message");
-                let u = message.get("usage");
-                let n = |k: &str| u.get(k).num().unwrap_or(0.0) as u64;
-                let counts = [
-                    n("input_tokens"),
-                    n("output_tokens"),
-                    n("cache_read_input_tokens"),
-                    n("cache_creation_input_tokens"),
-                ];
-                let id = message.get("id").str().unwrap_or_default().to_string();
-                if pending
-                    .as_ref()
-                    .is_some_and(|(p, _)| *p != id || id.is_empty())
-                {
-                    commit(&mut stats.usage, &mut pending, pending_main);
-                }
-                // A subagent's turns spend tokens but aren't the context.
-                pending_main = matches!(event.get("parent_tool_use_id"), Json::Null);
-                pending = Some((id, counts));
-            }
-            Some("system") if event.get("subtype").str() == Some("init") => {
-                if let Some(id) = event.get("session_id").str() {
-                    stats.session = Some(id.to_string());
-                }
-                stats.init = Some(init_of(&event));
-            }
-            Some("result") => {
-                if let Some(id) = event.get("session_id").str() {
-                    stats.session = Some(id.to_string());
-                }
-                if let Some(c) = event.get("total_cost_usd").num() {
-                    stats.cost = Some(c);
-                }
-                if let Json::Object(models) = event.get("modelUsage") {
-                    let window = models
-                        .values()
-                        .filter_map(|m| m.get("contextWindow").num())
-                        .fold(0.0, f64::max);
-                    if window > 0.0 {
-                        stats.usage.window = Some(window as u64);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    commit(&mut stats.usage, &mut pending, pending_main);
-    stats
+        },
+        "spor_message" => Entry::Steer(event.get("text").str().unwrap_or_default().to_string()),
+        _ => return None,
+    })
 }
 
 /// The gist of a tool call: its command, file, pattern or URL.
@@ -2709,11 +2372,14 @@ fn parse_pull_text(reply: &str) -> Option<(String, String)> {
 /// Is the agent there to run? Why not, if not.
 pub fn missing(kind: &AgentKind) -> Option<String> {
     match kind {
-        AgentKind::Claude if !available("claude") => {
-            Some("Claude Code isn't installed, or isn't on the PATH".into())
-        }
         AgentKind::Command(c) if c.trim().is_empty() => Some("The agent command is empty".into()),
-        _ => None,
+        known => match known.program() {
+            Some(program) if !available(program) => Some(format!(
+                "{} isn't installed, or isn't on the PATH",
+                known.label()
+            )),
+            _ => None,
+        },
     }
 }
 
@@ -2875,94 +2541,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_commands_output_is_kept_with_its_call() {
-        let log = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"cargo test"}},{"type":"tool_use","id":"b","name":"Read","input":{"file_path":"/w/x"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b","content":"file text"},{"type":"tool_result","tool_use_id":"a","content":[{"type":"text","text":"test result: ok. 3 passed"}]}]}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c","name":"Bash","input":{"command":"cd app && pnpm build"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c","is_error":true,"content":"Exit code 2\nerror TS1"}]}}"#;
-        let entries = parse_claude(log);
-        let results: Vec<_> = entries
-            .iter()
-            .filter_map(|e| match e {
-                Entry::Result {
-                    detail, ok, output, ..
-                } => Some((detail.as_str(), *ok, output.as_str())),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            results,
-            vec![
-                ("cargo test", true, "test result: ok. 3 passed"),
-                ("cd app && pnpm build", false, "Exit code 2\nerror TS1"),
-            ],
-            "only commands, matched by id"
-        );
-        assert!(entries.contains(&Entry::ToolError("Exit code 2".into())));
-        assert_eq!(
-            checks_of(&entries),
-            Checks {
-                tests: Some(true),
-                build: Some(false)
-            }
-        );
-    }
-
-    #[test]
-    fn a_subagents_events_hang_under_its_call() {
-        let log = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Split it up."},{"type":"tool_use","id":"t1","name":"Task","input":{"description":"Find the routes","subagent_type":"Explore","prompt":"List every route."}}]}}
-{"type":"assistant","parent_tool_use_id":"t1","message":{"content":[{"type":"tool_use","id":"g1","name":"Grep","input":{"pattern":"route"}},{"type":"text","text":"Found three."}]}}
-{"type":"user","parent_tool_use_id":"t1","message":{"content":[{"type":"tool_result","tool_use_id":"g1","content":"a.rs:1"}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Three routes: a, b, c."}]}}"#;
-        let entries = parse_claude(log);
-        assert_eq!(entries[0], Entry::Thinking("Split it up.".into()));
-        assert!(matches!(&entries[1], Entry::Tool { name, .. } if name == "Task"));
-        assert_eq!(
-            entries[2],
-            Entry::Subagent {
-                id: "t1".into(),
-                agent: "Explore".into(),
-                description: "Find the routes".into(),
-                prompt: "List every route.".into()
-            }
-        );
-        let nested: Vec<_> = entries
-            .iter()
-            .filter_map(|e| match e {
-                Entry::Nested { parent, entry } => Some((parent.as_str(), &**entry)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(nested.len(), 2);
-        assert!(nested.iter().all(|(p, _)| *p == "t1"));
-        assert!(matches!(nested[0].1, Entry::Tool { name, .. } if name == "Grep"));
-        assert_eq!(nested[1].1, &Entry::Text("Found three.".into()));
-        assert!(
-            matches!(entries.last(), Some(Entry::Result { name, output, .. })
-                if name == "Task" && output == "Three routes: a, b, c."),
-            "the subagent's report is the call's result, at the top: {entries:?}"
-        );
-    }
-
-    #[test]
-    fn long_output_keeps_its_end() {
-        let long = "x".repeat(MAX_RESULT_CHARS) + "THE END";
-        let log = format!(
-            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"a","name":"Bash","input":{{"command":"make"}}}}]}}}}
-{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"a","content":"{long}"}}]}}}}"#
-        );
-        let entries = parse_claude(&log);
-        let Some(Entry::Result {
-            output, truncated, ..
-        }) = entries.last()
-        else {
-            panic!("{entries:?}")
-        };
-        assert!(*truncated && output.ends_with("THE END"));
-        assert_eq!(output.chars().count(), MAX_RESULT_CHARS);
-    }
-
-    #[test]
     fn test_and_build_commands_are_recognised() {
         assert_eq!(check_kind("cargo test --all"), Some(CheckKind::Tests));
         assert_eq!(check_kind("cd a && npm test"), Some(CheckKind::Tests));
@@ -2971,22 +2549,6 @@ mod tests {
         assert_eq!(check_kind("echo cargo test"), None);
         assert_eq!(check_kind("ls"), None);
         assert_eq!(checks_of(&[]), Checks::default());
-    }
-
-    #[test]
-    fn a_plan_is_read_from_todo_write() {
-        let log = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"Read the routes","activeForm":"Reading the routes","status":"completed"},{"content":"Migrate the tests","activeForm":"Migrating the tests","status":"in_progress"},{"content":"Run them","status":"pending"}]}}]}}"#;
-        let entries = parse_claude(log);
-        assert!(matches!(&entries[0], Entry::Tool { name, .. } if name == "TodoWrite"));
-        let Entry::Todos(list) = &entries[1] else {
-            panic!("{entries:?}")
-        };
-        assert_eq!(list.len(), 3);
-        assert_eq!(list[2].active, "Run them", "no activeForm: the step itself");
-        assert_eq!(
-            plan_progress(list),
-            (1, 3, Some("Migrating the tests".to_string()))
-        );
     }
 
     #[test]
@@ -3050,74 +2612,6 @@ mod tests {
     }
 
     #[test]
-    fn claude_events_become_a_transcript() {
-        let log = r#"{"type":"system","subtype":"init","session_id":"s-1"}
-{"type":"stream_event","event":{}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at it."},{"type":"tool_use","name":"Bash","input":{"command":"cargo test\nmore"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":"Permission to use Bash has been denied.\nDetails"}]}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/w/src/lib.rs"}}]}}
-not json at all
-{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed it."}]}}
-{"type":"result","subtype":"success","is_error":false,"result":"Fixed it.","total_cost_usd":0.25,"num_turns":4,"duration_ms":12500,"session_id":"s-1"}"#;
-        let entries = parse_claude(log);
-        assert_eq!(
-            entries,
-            vec![
-                Entry::Text("Looking at it.".into()),
-                Entry::Tool {
-                    name: "Bash".into(),
-                    detail: "cargo test".into()
-                },
-                Entry::ToolError("Permission to use Bash has been denied.".into()),
-                Entry::Tool {
-                    name: "Edit".into(),
-                    detail: "/w/src/lib.rs".into()
-                },
-                Entry::Output("not json at all".into()),
-                Entry::Text("Fixed it.".into()),
-                Entry::Done {
-                    ok: true,
-                    summary: String::new(),
-                    cost_usd: Some(0.25),
-                    turns: Some(4),
-                    seconds: Some(12.5),
-                },
-            ]
-        );
-        let stats = claude_log(log);
-        assert_eq!(
-            (stats.session, stats.cost),
-            (Some("s-1".into()), Some(0.25))
-        );
-    }
-
-    #[test]
-    fn claude_log_counts_tokens_once_per_message() {
-        let log = r#"{"type":"system","subtype":"init","session_id":"s-1","model":"claude-opus-5-5","mcp_servers":[{"name":"gh","status":"connected"},{"name":"db","status":"failed"}]}
-{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200},"content":[{"type":"text","text":"a"}]}}
-{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":7,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200},"content":[{"type":"tool_use","name":"Bash","input":{}}]}}
-{"type":"assistant","parent_tool_use_id":"t1","message":{"id":"s1","usage":{"input_tokens":3,"output_tokens":1,"cache_read_input_tokens":50,"cache_creation_input_tokens":0},"content":[]}}
-{"type":"assistant","message":{"id":"m2","usage":{"input_tokens":20,"output_tokens":9,"cache_read_input_tokens":1100,"cache_creation_input_tokens":300},"content":[]}}
-{"type":"result","subtype":"success","is_error":false,"result":"","total_cost_usd":0.5,"modelUsage":{"claude-opus-5-5":{"contextWindow":1000000}}}"#;
-        let stats = claude_log(log);
-        assert_eq!(
-            stats.usage,
-            Usage {
-                input: 33,
-                output: 17,
-                cache_read: 2150,
-                cache_created: 500,
-                context: 1420,
-                window: Some(1_000_000),
-            }
-        );
-        assert_eq!(stats.usage.fill(None), Some(0));
-        let init = stats.init.unwrap();
-        assert_eq!(init.model, "claude-opus-5-5");
-        assert_eq!(init.failed(), vec!["db"]);
-    }
-
-    #[test]
     fn context_window_is_guessed_without_a_report() {
         let mut u = Usage {
             context: 162_000,
@@ -3128,61 +2622,6 @@ not json at all
         u.context = 300_000;
         assert_eq!(u.fill(None), Some(30));
         assert_eq!(Usage::default().fill(None), None);
-    }
-
-    #[test]
-    fn compaction_and_init_enter_the_transcript() {
-        let log = r#"{"type":"system","subtype":"init","model":"m","mcp_servers":[]}
-{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":150000}}"#;
-        assert_eq!(
-            parse_claude(log),
-            vec![
-                Entry::Init(Init {
-                    model: "m".into(),
-                    servers: vec![]
-                }),
-                Entry::Compacted
-            ]
-        );
-    }
-
-    #[test]
-    fn claude_command_line() {
-        let (program, args) = command_for(
-            &AgentKind::Claude,
-            "Fix it",
-            Some("s-1"),
-            Permissions::commands(false),
-            &Model::new(Some("opus"), Some(Effort::High)).unwrap(),
-            Path::new("/r/.git/spor/attachments"),
-        );
-        assert_eq!(program, "claude");
-        assert!(args.windows(2).any(|w| w == ["--model", "opus"]));
-        assert!(args.windows(2).any(|w| w == ["--effort", "high"]));
-        assert!(args
-            .windows(2)
-            .any(|w| w == ["--permission-mode", "acceptEdits"]));
-        assert!(args.windows(2).any(|w| w == ["--resume", "s-1"]));
-        assert!(args
-            .windows(2)
-            .any(|w| w == ["--add-dir", "/r/.git/spor/attachments"]));
-        assert!(args
-            .windows(2)
-            .any(|w| w == ["--disallowedTools", "Bash(git push:*)"]));
-        assert_eq!(&args[args.len() - 2..], ["-p", "Fix it"]);
-    }
-
-    #[test]
-    fn claude_defaults_leave_the_model_to_claude() {
-        let (_, args) = command_for(
-            &AgentKind::Claude,
-            "Fix it",
-            None,
-            Permissions::commands(false),
-            &Model::new(Some("  "), None).unwrap(),
-            Path::new("/r/.git/spor/attachments"),
-        );
-        assert!(!args.iter().any(|a| a == "--model" || a == "--effort"));
     }
 
     #[test]

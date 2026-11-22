@@ -4,7 +4,7 @@ import type { Issue, IssueDetail, TaskSummary } from "../../types";
 import { useHere, useShell } from "../../shared/app";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromIssue, itemFromTask } from "../../shared/work";
-import { useChanged, usePoll, useStored } from "../../shared/hooks";
+import { useChanged, usePoll, useStored, GITHUB_POLL_MS } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard, EmptyState, ListLoading, PageHeader, SidebarHeader } from "../../shared/Layout";
 import { Markdown } from "../../shared/Markdown";
@@ -12,7 +12,8 @@ import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../..
 import { StatusPill, type Status } from "../../shared/StatusPill";
 import { ago } from "../agents/transcript";
 import { isOpen } from "../agents/status";
-import { ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
+import { AgentSelect, ModelPicker, ModePicker, choiceOf, useAgentSettings } from "../agents/Composer";
+import { isAgentId } from "../../shared/agents";
 import { ArrowUp, Bot, External, MessageSquare, Tag, Users } from "../../shared/Icons";
 import { BasePicker, defaultStart } from "../../shared/BasePicker";
 
@@ -60,8 +61,10 @@ export function IssuesSection() {
         setIssues([]);
       }
     },
-    60_000,
+    GITHUB_POLL_MS,
     [filter],
+    true,
+    true,
   );
   useChanged(() => {
     if (shell.target.section === "issues" && shell.target.number) setSelected(shell.target.number);
@@ -80,7 +83,7 @@ export function IssuesSection() {
       fail(e);
     }
   };
-  usePoll(loadDetail, 60_000, [selected], selected != null && !error);
+  usePoll(loadDetail, GITHUB_POLL_MS, [selected], selected != null && !error, true);
   useChanged(() => setDetail(null), [selected]);
 
   // The newest task on an issue: an open one, else the last that landed.
@@ -323,21 +326,11 @@ export function StartTask({ detail, onStarted }: { detail: IssueDetail; onStarte
           )}
           <div className="composer-footer">
             <BasePicker repo={repo} value={base} onChange={setBase} title="The branch it starts from and its pull request goes into" />
-            <select
-              className="chip-select"
-              value={settings.agent}
-              onChange={(e) => setSettings({ ...settings, agent: e.target.value as typeof settings.agent })}
-            >
-              <option value="claude" disabled={!repo.claude}>
-                Claude Code{repo.claude ? "" : " (not installed)"}
-              </option>
-              <option value="command">Custom command</option>
-              <option value="none">No agent — I'll run one</option>
-            </select>
-            {settings.agent === "claude" && (
+            <AgentSelect repo={repo} value={settings.agent} onChange={(agent) => setSettings({ ...settings, agent })} />
+            {isAgentId(settings.agent) && (
               <>
                 <ModelPicker settings={settings} onSettings={setSettings} />
-                <ModePicker mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
+                <ModePicker agent={settings.agent} mode={settings.mode} onChange={(mode) => setSettings({ ...settings, mode })} />
               </>
             )}
             <span className="flex-1" />

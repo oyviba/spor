@@ -67,10 +67,10 @@ test("the next step for each stage, in the glossary's words", () => {
   assert.equal(step({ branch: "agent/a", task: "a", waiting_on: { who: "you", why: "question" } })?.label, "Answer the agent");
   assert.equal(step({ branch: "f", pull: pr(4), waiting_on: { who: "you", why: "review" } })?.label, "Review #4");
   assert.deepEqual(step({ branch: "f", waiting_on: { who: "you", why: "checksfailed" } })?.target, { section: "actions", branch: "f" });
-  // Approved and green: land it where the task's landing buttons are, or
+  // Approved and green: merge it where the task's merge buttons are, or
   // on the pull request's page.
   assert.deepEqual(step({ branch: "agent/a", task: "a", pull: pr(4), waiting_on: { who: "you", why: "ready" } }), {
-    label: "Land #4",
+    label: "Merge #4",
     target: { section: "work", taskId: "a" },
   });
   assert.equal(step({ branch: "f", pull: pr(4), waiting_on: { who: "you", why: "ready" } })?.target.section, "pulls");

@@ -3,6 +3,7 @@
 // transcript over time, and answers the same commands as src-tauri.
 
 import type { AgentChoice, Ask, Issue, IssueDetail, Item, Mode, Pull, RepoInfo, RunInfo, TaskDetail, TaskPull, TaskSummary, WorkBranch, WorkItemInfo } from "./types";
+import { agentName } from "./shared/agents";
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -33,7 +34,7 @@ const repo: RepoInfo = {
   branches: ["main", "release/1.4", "feat/share-links"],
   default_base: "main",
   default_start: "origin/main",
-  claude: true,
+  installed: ["claude", "copilot"],
 };
 
 const stats = (over: Partial<TaskSummary["stats"]> = {}): TaskSummary["stats"] => ({
@@ -70,7 +71,7 @@ const run = (over: Partial<RunInfo>): RunInfo => ({
 });
 
 /** A task's base and where it started, as the backend has them: one
- * started from `origin/main` lands on `main`. */
+ * started from `origin/main` merges into `main`. */
 const startOf = (base: string) => (base.startsWith("origin/") ? { base: base.slice("origin/".length), from: base } : { base, from: null });
 
 const summary = (id: string, prompt: string, created: number, over: Partial<TaskSummary> = {}): TaskSummary => ({
@@ -534,11 +535,15 @@ function start(t: MockTask, prompt: string, agent: AgentChoice) {
   if (t.summary.run?.state === "running") throw `An agent is already working on ${t.summary.id}`;
   const r = run({
     index: t.runs.length,
-    agent: agent.kind === "command" ? "command" : "claude",
+    agent: agent.kind === "none" ? "claude" : agent.kind,
     label:
       agent.kind === "command"
         ? "Custom command"
-        : ["Claude Code", agent.kind === "claude" && agent.model, agent.kind === "claude" && agent.effort && `${agent.effort} effort`]
+        : [
+            agentName(agent.kind === "none" ? "claude" : agent.kind),
+            agent.kind !== "none" && agent.model,
+            agent.kind !== "none" && agent.effort && `${agent.effort} effort`,
+          ]
             .filter(Boolean)
             .join(" · "),
     state: "running",
@@ -611,6 +616,24 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         return repo;
       case "open_repo":
         return { ...repo, root: args.path as string };
+      case "update_check":
+        return { enabled: false, current: "0.1.0", available: null };
+      case "update_install":
+        return null;
+      case "automations":
+        return {
+          items: [
+            { name: "weekly-deps", on: "schedule weekly mon 09:00", prompt: "Update dependencies.", enabled: true, started: null, task: null, task_open: false, note: null },
+            { name: "fix-main", on: "ci-failed main", prompt: "CI failed on {branch}.", enabled: false, started: null, task: null, task_open: false, note: null },
+          ],
+          errors: [],
+        };
+      case "automations_tick":
+        return [];
+      case "automation_enable":
+        return null;
+      case "automation_run":
+        return { repo: fixtures?.repo.root ?? repo.root, automation: String(args.name ?? ""), task: "mock-task" };
       case "inbox_tasks":
         return tasks
           .filter((t) => !t.summary.landed)
@@ -716,7 +739,7 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
         if (t.summary.run?.state === "running") throw "Stop the agent first";
         const index = tasks.indexOf(t);
         const landing = cmd === "land_task";
-        const message = landing ? `Landed ${id} on ${t.summary.base}` : `Discarded ${id}`;
+        const message = landing ? `Merged ${id} into ${t.summary.base}` : `Discarded ${id}`;
         undoable = { message, task: structuredClone(t), index };
         if (landing) t.summary.landed = "a1b2c3d";
         else tasks.splice(index, 1);
@@ -1138,10 +1161,15 @@ async function fromFixtures(cmd: string, args: Record<string, unknown>): Promise
     case "graph":
       return f.graph;
     case "search_commits": {
-      const q = (args.query as string).toLowerCase();
-      return Object.values(f.commits as Record<string, { hash: string; message: string; author: string }>)
-        .filter((c) => c.message.toLowerCase().includes(q) || c.author.toLowerCase().includes(q) || c.hash.startsWith(q))
-        .map((c) => c.hash);
+      const words = (args.query as string).toLowerCase().split(/\s+/).filter(Boolean);
+      type Row = { hash: string; subject: string; author: string; refs: string[] };
+      return (f.graph.rows as Row[])
+        .filter((r) =>
+          words.every((w) =>
+            [r.subject, r.author, ...r.refs].some((t) => t.toLowerCase().includes(w)) || r.hash.startsWith(w),
+          ),
+        )
+        .map((r) => r.hash);
     }
     case "commit_detail":
       return f.commits[args.hash as string] ?? Promise.reject("No such commit in the recording");

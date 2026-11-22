@@ -20,10 +20,10 @@ at the bottom.
 |---|---|---|---|---|---|
 | **Inbox** | 1 | What needs you in every workspace: answers, finished runs, failed CI, review requests | | | |
 | **Agents** | ⇧A | Every agent task in every workspace, by status or by repository | Counts per repository (click one for its Work); a task's conversation, to answer and follow up on without going to its repository | | |
-| **Work** | 2 | Every work item: agents' tasks, your branches with commits ahead of the base, and open PRs from anyone. Shelves: Needs you, In progress, In review, Settled (folded); filters Mine / Agents / Teammates; right-click to move one up or down. *New…* (⌘N): a branch, an agent task, or from an issue | The work page, for a task, a PR or a branch: the stage track and who it waits on, and the tabs with something in them: Agent · Discussion · Changes · Checks. *Take over* opens a task's folder; *Start an agent on this* hands a branch to one | The work card (issue → branch · folder → PR → checks, and the next step). A task: conflicts, publish, land, discard. A PR: land, check out, close. A branch: open a PR, switch to it | A task's composer, or a PR's comment box |
-| **History** | 3 | Search (`path:` for a file), branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | The commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
+| **Work** | 2 | Every work item: agents' tasks, your branches with commits ahead of the base, and open PRs from anyone. Shelves: Needs you, In progress, In review, Settled (folded); filters Mine / Agents / Teammates; right-click to move one up or down. *New…* (⌘N): a branch, an agent task, or from an issue | The work page, for a task, a PR or a branch: the stage track and who it waits on, and the tabs with something in them: Agent · Discussion · Changes · Checks. *Take over* opens a task's folder; *Start an agent on this* hands a branch to one | The work card (issue → branch · folder → PR → checks, and the next step). A task: conflicts, publish, merge, discard. A PR: merge, check out, close. A branch: open a PR, switch to it | A task's composer, or a PR's comment box |
+| **History** | 3 | Branch filter, the default branch pinned, branches (local, agent, remote), tags, worktrees — right-click for more, drag one onto another to merge or open a PR | Commit search (⌘F: every word, `path:`, `code:`) and the commit graph with PR badges and options (⚙), a commit's diff, Rewrite (interactive rebase), and Blame | The commit: message, parents, Branch here, Cherry-pick, Revert, More… (tag, check out, rebase, reset, rewrite) | |
 | **Issues** (browser) | 4 | Assigned / Yours / Open / Closed | The issue and its comments | The work card, labels, assignees, close or reopen | *Start with agent*: the issue as the prompt (editable), the base and the agent |
-| **Pull requests** (browser) | 5 | Review / Yours / Open / Closed | The work page: Discussion · Changes · Checks | The work card, checks, conflicts, land (squash, merge commit or rebase), check out, close | Comment / Approve, with line comments from Files |
+| **Pull requests** (browser) | 5 | Review / Yours / Open / Closed | The work page: Discussion · Changes · Checks | The work card, checks, conflicts, merge (squash, merge commit or rebase), check out, close | Comment / Approve, with line comments from Files |
 | **Actions** (browser) | 6 | Runs, by workflow and branch | Jobs, and the log folded by step (failed steps open) | The work card, run, commit, re-run, cancel | |
 
 What one app makes possible:
@@ -48,27 +48,27 @@ What one app makes possible:
   bar's Back button (⌘[, ⌘], the mouse's side buttons) returns to it,
   repository and all.
 - **One undo stack.** Every change (stage, discard, commit, amend, pull,
-  branch, switch, merge, cherry-pick, revert, land) records how to take it
+  branch, switch, merge, cherry-pick, revert, merging a task) records how to take it
   back. ⌘Z, or a toast's Undo, takes back the latest from any section.
 - **Links between sections.** A PR's failed check opens in Actions. A failed
   run on an agent's branch has *Send failure to agent*, which sends the
   failing log. A task's branch opens in History, and a run's commit too.
 - **One conflict banner.** A merge or rebase that stops shows on every
   section, with *Resolve conflicts*, *Continue* and *Abort*.
-- **From issue to landed PR** (#47, #24). *Start with agent* on an issue
+- **From issue to merged PR** (#47, #24). *Start with agent* on an issue
   gives the agent the issue and its comments, on `agent/<number>-<three-random-words>`.
   *Publish* (or *Publish as a draft*) on the task pushes its branch and opens
   a PR whose title and description Claude Code writes from the branch and
   the agent's session (read-only; the prompt's if it can't), and which says
-  `Closes #n`; landing locally puts `Closes #n`
+  `Closes #n`; merging locally puts `Closes #n`
   in the commit instead. The task then shows its PR's state, offers *Push*
   when the agent has commits the PR doesn't (*Commit and push* when it left
-  work uncommitted), *Land #n* (squash and merge on GitHub, which cleans the
-  task up once GitHub has merged it; ⌘Z brings it back; *Land* is hidden while a PR is open,
+  work uncommitted), *Merge #n* (squash and merge on GitHub, which cleans the
+  task up once GitHub has merged it; ⌘Z brings it back; *Merge into* the base is hidden while a PR is open,
   so the two can't diverge), and *Send review to agent*
   (on the task, or on the PR page) sends reviews and line comments made
   since the agent last ran, as `file:line — comment`. When the PR merges, a
-  notification offers *Clean up*: the task is marked landed and its folder
+  notification offers *Clean up*: the task is marked merged and its folder
   and branch go (⌘Z brings them back). PRs opened from a task's branch some
   other way are linked too.
 - **Stash and switch.** A switch that uncommitted changes would block says
@@ -155,6 +155,33 @@ src/
 
 `src-tauri` is its own Cargo workspace, so the root crate stays a
 dependency-free library.
+
+## Releasing and updates
+
+The app can update itself (#152) from GitHub releases, with Tauri's updater.
+Updates are signed with their own key pair, apart from Apple's signing
+(#62). A build without the public key (`pnpm tauri dev`, CI's builds) has no
+updater: Settings → Updates says so.
+
+One-time setup:
+
+```sh
+pnpm tauri signer generate -w ~/.tauri/spor.key    # keep the private key safe
+```
+
+- the private key's contents as the repository secret
+  `TAURI_SIGNING_PRIVATE_KEY` (and its password, if it has one, as
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`)
+- the public key as the repository **variable** `SPOR_UPDATER_PUBKEY`. It's
+  compiled into the app (`option_env!`), so it never lives in the repository
+
+To release, push a tag: `git tag v0.2.0 && git push origin v0.2.0`. The
+`Release` workflow sets the version from the tag, builds the universal
+`Spor.app`, signs the update and makes a *draft* release with the bundle,
+its signature and `latest.json`. Publish the draft when it looks right:
+running copies read `latest.json` from the latest published release. They
+check on start and daily, and never install while an agent is running (the
+restart would stop it): *Update when idle* waits for them.
 
 ## Not here yet
 

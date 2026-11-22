@@ -15,7 +15,7 @@ import { StatusPill, type Status } from "./StatusPill";
 import { nextStep, stageStatus, waitingText } from "./work";
 
 function pullPill(p: NonNullable<WorkItemInfo["pull"]>): Status {
-  if (p.state === "merged") return { label: "Landed", tone: "violet", live: false };
+  if (p.state === "merged") return { label: "Merged", tone: "violet", live: false };
   if (p.state === "closed") return { label: "Closed", tone: "muted", live: false };
   if (p.review === "changesrequested") return { label: "Changes requested", tone: "amber", live: false };
   if (p.state === "draft") return { label: "Draft", tone: "muted", live: false };

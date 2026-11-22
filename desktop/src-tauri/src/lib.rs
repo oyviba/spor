@@ -4,16 +4,19 @@
 //! core, and these only turn it into JSON and record what Undo needs.
 
 mod agents;
+mod automations;
 mod cache;
 mod changes;
 mod github;
 mod history;
 mod inbox;
 mod undo;
+mod updates;
 mod watch;
 mod work;
 
 use serde::Serialize;
+use spor::agent::AgentKind;
 use spor::git::Repo;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -53,7 +56,8 @@ struct RepoInfo {
     /// Where new tasks start unless another branch is picked: origin's
     /// copy of the default branch (`origin/main`) when there is one.
     default_start: Option<String>,
-    claude: bool,
+    /// The agents spor knows that are installed (on the PATH), by id.
+    installed: Vec<&'static str>,
 }
 
 fn repo_info(repo: &Repo) -> RepoInfo {
@@ -76,7 +80,11 @@ fn repo_info(repo: &Repo) -> RepoInfo {
         branches,
         default_base: repo.default_base_branch(),
         default_start: repo.default_start(),
-        claude: spor::agent::available("claude"),
+        installed: AgentKind::KNOWN
+            .iter()
+            .filter(|k| spor::agent::missing(k).is_none())
+            .map(AgentKind::id)
+            .collect(),
     }
 }
 
@@ -456,8 +464,11 @@ pub fn run() {
         tidy(&repo);
         *app.repo.lock().unwrap() = Some(repo);
     }
-    tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
+    if let Some(updater) = updates::plugin() {
+        builder = builder.plugin(updater);
+    }
+    builder
         .manage(app)
         .setup(|tauri| {
             let handle = tauri.handle();
@@ -469,6 +480,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             current_repo,
+            updates::update_check,
+            updates::update_install,
+            automations::automations,
+            automations::automations_tick,
+            automations::automation_enable,
+            automations::automation_run,
             open_repo,
             repo_state,
             undo,

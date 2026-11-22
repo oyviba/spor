@@ -9,7 +9,8 @@ export interface RepoInfo {
   /** Where new tasks start unless another branch is picked: `origin/main`
    * when origin has the default branch, else the local one. */
   default_start: string | null;
-  claude: boolean;
+  /** The agents spor runs that are installed (on the PATH). */
+  installed: AgentId[];
 }
 
 export interface Stats {
@@ -25,11 +26,17 @@ export interface Stats {
   unpushed: number;
 }
 
+/** The agents spor runs itself (shared/agents.ts has what each offers). */
+export type AgentId = "claude" | "copilot";
+
+/** An agent spor runs, or any command. */
+export type AgentName = AgentId | "command";
+
 export type RunStateName = "running" | "finished" | "failed" | "stopped";
 
 export interface RunInfo {
   index: number;
-  agent: "claude" | "command";
+  agent: AgentName;
   label: string;
   prompt: string;
   state: RunStateName;
@@ -240,7 +247,7 @@ export interface RunPatch {
 }
 
 export type AgentChoice =
-  | { kind: "claude"; model?: string; effort?: Effort | "" }
+  | { kind: AgentId; model?: string; effort?: Effort | "" }
   | { kind: "command"; template: string }
   | { kind: "none" };
 
@@ -631,4 +638,40 @@ export interface WorkBranch {
 export interface RuleSuggestion {
   rule: string;
   tasks: string[];
+}
+
+/** An entry in a repository's `.spor/automations` (#151). */
+export interface AutomationInfo {
+  name: string;
+  /** The trigger as written after `on:`. */
+  on: string;
+  prompt: string;
+  enabled: boolean;
+  /** When it last started a task (seconds), and that task. */
+  started: number | null;
+  task: string | null;
+  /** Its last task is still open, so the next start is held back. */
+  task_open: boolean;
+  /** Why it last held back or failed to start. */
+  note: string | null;
+}
+
+export interface Automations {
+  items: AutomationInfo[];
+  /** Blocks of the file that couldn't be read. */
+  errors: string[];
+}
+
+export interface AutomationStarted {
+  repo: string;
+  automation: string;
+  task: string;
+}
+
+/** Whether a newer version of the app is out (#152). */
+export interface UpdateCheck {
+  /** False for builds without an update key. */
+  enabled: boolean;
+  current: string;
+  available: { version: string; notes: string | null } | null;
 }

@@ -717,7 +717,7 @@ fn a_new_task_has_no_branch_or_folder_until_it_writes() {
     let stats = f.tasks.stats(&task);
     assert!(!stats.missing && stats.commits == 0 && stats.files == 0);
     assert_eq!(f.tasks.patch(&task).unwrap(), "");
-    // Nothing to land or publish.
+    // Nothing to merge or publish.
     assert!(f.tasks.land(&task, LandMode::Squash, false).is_err());
     assert!(f
         .tasks

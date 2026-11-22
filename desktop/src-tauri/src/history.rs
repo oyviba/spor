@@ -211,7 +211,12 @@ pub(crate) fn search_commits(app: State<App>, query: String) -> Result<Vec<Strin
             .map(|c| c.hash)
             .collect());
     }
-    repo.search_commits(query, 500)
+    // `code:needle` — the commits that added or removed some text.
+    if let Some(text) = query.strip_prefix("code:") {
+        return repo.search_code(text.trim(), 5000);
+    }
+    // Otherwise every word, in the message, author, hash or a branch or tag name.
+    repo.search_commits(query, 5000)
 }
 
 #[derive(Serialize)]
