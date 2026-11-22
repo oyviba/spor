@@ -76,7 +76,8 @@ requests to approve.
 
 **Target** (budget 1):
 
-1. **Inbox**: the review request opens on the work page in **Pull requests** →
+1. **Inbox**: the review request opens on the work page in **Work** (every open
+   pull request is in Work's list; Back returns to the Inbox) →
    *1 change*
 2. *Discussion*: the description and reviews
 3. *Changes*: the diff; comment on a line

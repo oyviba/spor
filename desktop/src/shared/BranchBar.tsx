@@ -47,7 +47,7 @@ export function runSync(shell: Shell, what: SyncAction): Promise<boolean> {
   );
 }
 
-export function BranchBar({ state }: { state: RepoState }) {
+export function BranchBar({ state, lead }: { state: RepoState; /** Back and forward, at its left. */ lead?: React.ReactNode }) {
   const shell = useShell();
   const [busy, setBusy] = useState<SyncAction | null>(null);
   const run = (what: SyncAction) => {
@@ -112,8 +112,12 @@ export function BranchBar({ state }: { state: RepoState }) {
     }
   };
   return (
-    <div className={`branch-bar ${tone}`} role="status" aria-label="Current branch">
-      <span className="branch-bar-name" title={branch ? `You're on ${branch}` : "Detached HEAD"}>
+    <div className={`branch-bar ${tone}`}>
+      {lead}
+      <span className="branch-bar-label" title="The branch checked out in your own checkout (not an agent's task folder)">
+        Checkout
+      </span>
+      <span className="branch-bar-name" role="status" aria-label="Current branch" title={branch ? `Your checkout is on ${branch}` : "Detached HEAD"}>
         {branch ? <Branch size={14} /> : <Alert size={14} />}
         <span className="truncate">{branch ?? "detached HEAD"}</span>
       </span>

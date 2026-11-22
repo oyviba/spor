@@ -5,9 +5,10 @@ Spor's app: a web UI on Tauri over the Rust core in the repository root
 `spor::askpass`). The layout reads left to right from the general to the
 particular: workspace → repository → section. The rail holds the workspaces,
 the **Inbox** (what needs me?) and **Agents** (what are my agents doing?),
-both across every repository, so while one is open the app shows no
-repository (no repository column, branch bar or repository header; a
-workspace's badge goes back in, to the section last open there); the column
+both across every repository: while one is open the repository column
+stays in place with none of its sections lit, and a scope bar stands where
+the branch bar is, so nothing moves (a workspace's badge or the open
+repository goes back in, to the section last open there); the column
 beside it lists the workspace's repositories, and under the open one its
 sections, ordered by the questions you come with (#83): **Work** (what's in
 flight?), **History** (what happened, and what's in my checkout?). Below a divider, **Issues**, **Pull requests** and **Actions**
@@ -42,6 +43,10 @@ What one app makes possible:
   to none stays in its browser. Links that name the browser (*Open in
   Actions* on a PR's check, a work item's own issue or PR) go there.
 
+- **Back and forward** (`shared/nav.ts`). Each section says what it has
+  open (`useHere`); going to another section keeps that place, and the top
+  bar's Back button (⌘[, ⌘], the mouse's side buttons) returns to it,
+  repository and all.
 - **One undo stack.** Every change (stage, discard, commit, amend, pull,
   branch, switch, merge, cherry-pick, revert, merging a task) records how to take it
   back. ⌘Z, or a toast's Undo, takes back the latest from any section.

@@ -34,9 +34,10 @@ backend), the end-to-end tests and the app's layout.
 Left to right, spor goes from the general to the particular: workspaces and
 the Inbox on the rail, then the workspace's repositories, with the open
 one's sections listed under it. The Inbox and Agents span every
-repository, so while one is open no repository is shown (no repository
-column or branch bar); a workspace's badge goes back into its repository,
-to the section you were last in there. The sections are ordered by the questions
+repository; while one is open the repository column stays where it is (none
+of its sections lit), so the window doesn't shift under you. A workspace's
+badge, or the open repository, goes back to the section you were last in
+there. The sections are ordered by the questions
 you come with: what needs me, what's in flight, what's in my checkout, what
 happened. Each
 is a list in the sidebar, a page, and a details pane. What you follow is a
@@ -114,6 +115,13 @@ piece of work yet (an issue nobody has started, a run on `main`):
 
 Across the app:
 
+- **Back and forward.** Every link to another section (an Inbox row, a work
+  card's branch, a toast's *Answer*) keeps where you were: the top bar's
+  Back button names it (*‹ Inbox*, *‹ Work · Rename drafts*), and ⌘[ / ⌘]
+  (or the mouse's back and forward buttons) go back and forth with what
+  you had open in each place. On a work page, the card's pull request and
+  checks open the page's own Discussion and Checks tabs instead of another
+  section
 - **Undo instead of confirmations.** Staging, discarding, committing,
   amending, pulling, switching, merging, cherry-picks, reverts, rebases,
   resets, rewrites, renames, deleting a branch, tag or stash, and merging or

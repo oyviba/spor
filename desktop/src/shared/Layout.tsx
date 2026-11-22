@@ -207,7 +207,7 @@ export function RepoPanel({ color, changed, children }: { color: string; changed
               className={`repo-panel-row${here ? " current" : ""}${missing ? " missing" : ""}`}
               title={missing ? `${path} — not found` : path}
               aria-current={here ? "true" : undefined}
-              onClick={() => !here && openRepo(path)}
+              onClick={() => openRepo(path)}
               onContextMenu={(e) => menu(e, repoMenu(shell, path))}
             >
               <Folder size={14} />

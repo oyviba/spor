@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import type { BranchInfo, CommitDetail, Graph as GraphData, PrBadge, TagInfo, WorktreeInfo } from "../../types";
-import { useShell } from "../../shared/app";
+import { useHere, useShell } from "../../shared/app";
 import { useChanged, useNow, usePoll, useStored, GITHUB_POLL_MS } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { runSync } from "../../shared/BranchBar";
@@ -51,6 +51,11 @@ export function HistorySection() {
   const w = useWorktree();
   const working = selected === WORKING;
   const now = useNow(60_000);
+  const selectedCommit = selected && !working ? graph?.rows.find((r) => r.hash === selected) : undefined;
+  useHere(
+    working ? { section: "history", working: true } : selected ? { section: "history", hash: selected } : { section: "history" },
+    working ? "Uncommitted changes" : selectedCommit ? selectedCommit.subject : "",
+  );
 
   // Reload when any ref moves (commit, checkout, fetch, agent commits…).
   useChanged(() => {

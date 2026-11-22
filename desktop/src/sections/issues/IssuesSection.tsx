@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Issue, IssueDetail, TaskSummary } from "../../types";
-import { useShell } from "../../shared/app";
+import { useHere, useShell } from "../../shared/app";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromIssue, itemFromTask } from "../../shared/work";
 import { useChanged, usePoll, useStored, GITHUB_POLL_MS } from "../../shared/hooks";
@@ -69,6 +69,11 @@ export function IssuesSection() {
   useChanged(() => {
     if (shell.target.section === "issues" && shell.target.number) setSelected(shell.target.number);
   }, [shell.target.seq]);
+  const picked = issues?.find((i) => i.number === selected);
+  useHere(
+    selected == null ? { section: "issues" } : { section: "issues", number: selected },
+    selected == null ? "" : picked ? `#${selected} ${picked.title}` : `#${selected}`,
+  );
 
   const loadDetail = async () => {
     if (selected == null) return;

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "../../api";
 import type { Job, LogLine, Run, RunDetail, TaskSummary } from "../../types";
 import { Button } from "../../shared/Button";
-import { useShell } from "../../shared/app";
+import { useHere, useShell } from "../../shared/app";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromBranch } from "../../shared/work";
 import { useChanged, useNow, usePoll, useStored, GITHUB_POLL_MS, GITHUB_LIVE_MS } from "../../shared/hooks";
@@ -97,6 +97,11 @@ export function ActionsSection() {
   useChanged(() => setDetail(null), [selected]);
 
   const run = detail?.run.id === selected ? detail : null;
+  const picked = runs?.find((r) => r.id === selected);
+  useHere(
+    selected == null ? { section: "actions" } : { section: "actions", runId: selected, jobId: jobId ?? undefined },
+    picked ? `${picked.workflow} #${picked.number}` : "",
+  );
   const job = run?.jobs.find((j) => j.id === jobId) ?? null;
   const task = run ? tasks.find((t) => t.branch === run.run.branch && isOpen(t)) : undefined;
 
@@ -149,7 +154,9 @@ export function ActionsSection() {
         {selected == null || error ? (
           <EmptyState title={error ? "Actions aren't available" : "Pick a run"}>{error}</EmptyState>
         ) : !run ? (
-          <div className="boot" />
+          <div className="sidebar-empty loading page-loading" role="status">
+            <span className="spinner" aria-hidden /> Loading the run…
+          </div>
         ) : (
           <div className="task-page with-inspector">
             <PageHeader
