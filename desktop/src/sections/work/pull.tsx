@@ -9,7 +9,7 @@ import type { LineComment, Pull, PullDetail, Run, TaskSummary } from "../../type
 import { useShell, type SectionId } from "../../shared/app";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromPull } from "../../shared/work";
-import { useChanged, usePoll, useStored } from "../../shared/hooks";
+import { useChanged, usePoll, useStored, GITHUB_POLL_MS } from "../../shared/hooks";
 import { Button } from "../../shared/Button";
 import { DetailsCard } from "../../shared/Layout";
 import { DiffView } from "../../shared/DiffView";
@@ -37,7 +37,7 @@ export function usePullDetail(number: number | null, wantDiff: boolean) {
       fail(e);
     }
   };
-  usePoll(reload, 30_000, [number], number != null);
+  usePoll(reload, GITHUB_POLL_MS, [number], number != null, true);
   useChanged(() => {
     setDetail(null);
     setDiff(null);
@@ -54,8 +54,10 @@ export function RunChecks({ branch }: { branch: string }) {
   const [runs, setRuns] = useState<Run[] | null>(null);
   usePoll(
     async () => setRuns(await api.runs(branch, null).catch(() => [])),
-    60_000,
+    GITHUB_POLL_MS,
     [branch],
+    true,
+    true,
   );
   if (runs == null) return <p className="hint">Loading runs…</p>;
   // The latest run of each workflow is where the branch stands.
