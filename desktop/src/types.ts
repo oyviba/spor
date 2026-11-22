@@ -9,7 +9,8 @@ export interface RepoInfo {
   /** Where new tasks start unless another branch is picked: `origin/main`
    * when origin has the default branch, else the local one. */
   default_start: string | null;
-  claude: boolean;
+  /** The agents spor runs that are installed (on the PATH). */
+  installed: AgentId[];
 }
 
 export interface Stats {
@@ -25,11 +26,17 @@ export interface Stats {
   unpushed: number;
 }
 
+/** The agents spor runs itself (shared/agents.ts has what each offers). */
+export type AgentId = "claude" | "copilot";
+
+/** An agent spor runs, or any command. */
+export type AgentName = AgentId | "command";
+
 export type RunStateName = "running" | "finished" | "failed" | "stopped";
 
 export interface RunInfo {
   index: number;
-  agent: "claude" | "command";
+  agent: AgentName;
   label: string;
   prompt: string;
   state: RunStateName;
@@ -205,6 +212,8 @@ export interface TaskDetail {
   debrief: Debrief | null;
   /** The latest run ended and should get one (`debriefTask`). */
   wants_debrief: boolean;
+  /** What the agent put in the panel with its `surface` tool. */
+  surfaced: Surfaced[];
 }
 
 /** What a run says about itself, in a fixed shape (#104). */
@@ -224,6 +233,13 @@ export interface SetupInfo {
   code: number | null;
 }
 
+export interface Surfaced {
+  kind: "link" | "file" | "note";
+  title: string;
+  /** The https URL, the path in the task's folder, or the note. */
+  value: string;
+}
+
 export interface RunPatch {
   patch: string;
   /** Left out: they came with the base (a rebase or merge), not the agent. */
@@ -231,7 +247,7 @@ export interface RunPatch {
 }
 
 export type AgentChoice =
-  | { kind: "claude"; model?: string; effort?: Effort | "" }
+  | { kind: AgentId; model?: string; effort?: Effort | "" }
   | { kind: "command"; template: string }
   | { kind: "none" };
 

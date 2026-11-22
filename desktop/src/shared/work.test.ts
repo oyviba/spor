@@ -76,7 +76,7 @@ test("the next step for each stage, in the glossary's words", () => {
   assert.equal(step({ branch: "f", pull: pr(4), waiting_on: { who: "you", why: "ready" } })?.target.section, "pulls");
   // Unpublished: a task publishes from Work; your checkout from Changes.
   assert.equal(step({ branch: "agent/a", task: "a" })?.label, "Publish");
-  assert.deepEqual(step({ branch: "feat/x" }, undefined, "feat/x")?.target, { section: "changes" });
+  assert.deepEqual(step({ branch: "feat/x" }, undefined, "feat/x")?.target, { section: "history", working: true });
   assert.equal(step({ branch: "feat/x" }, undefined, "main"), null);
   // Nothing for a teammate's branch, or once it's landed.
   assert.equal(step({ branch: "f", owner: { kind: "teammate", login: "ada" } }), null);
