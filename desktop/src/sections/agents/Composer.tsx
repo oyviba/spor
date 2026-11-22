@@ -1,30 +1,24 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import type { AgentChoice, Ask, Effort, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
+import type { AgentChoice, AgentId, AgentName, Ask, Effort, LineComment, Mode, RepoInfo, RunInfo } from "../../types";
 import { useStored } from "../../shared/hooks";
 import { CONTEXT_HIGH } from "./transcript";
 import { useShell } from "../../shared/app";
+import { AGENT_IDS, AGENTS, agentName, isAgentId } from "../../shared/agents";
 import { AttachButton, AttachmentStrip, useAttachments, withImages } from "../../shared/Attachments";
 import { Button } from "../../shared/Button";
 import { PlanCard, QuestionCard } from "./AskCards";
 import { AgentIcon, Alert, ArrowUp, Check, Clock, CornerDownRight, MessageSquare, Square, X } from "../../shared/Icons";
 
 export interface AgentSettings {
-  agent: "claude" | "command" | "none";
+  agent: AgentId | "command" | "none";
   template: string;
   mode: Mode;
-  /** Claude's model and effort; "" leaves it to Claude Code's own settings. */
-  model: string;
+  /** Each agent's model; "" or missing leaves it to the agent's own
+   * settings. */
+  models: Partial<Record<AgentId, string>>;
+  /** How hard the model thinks, for every agent; "" for its own setting. */
   effort: Effort | "";
 }
-
-/** Claude Code's aliases for the latest of each model. */
-export const MODELS: { id: string; label: string }[] = [
-  { id: "", label: "Default model" },
-  { id: "fable", label: "Fable" },
-  { id: "opus", label: "Opus" },
-  { id: "sonnet", label: "Sonnet" },
-  { id: "haiku", label: "Haiku" },
-];
 
 export const EFFORTS: { id: Effort | ""; label: string }[] = [
   { id: "", label: "Default effort" },
@@ -35,47 +29,81 @@ export const EFFORTS: { id: Effort | ""; label: string }[] = [
   { id: "max", label: "Max effort" },
 ];
 
-export const MODES: { id: Mode; label: string; hint: string }[] = [
-  { id: "supervised", label: "Supervised", hint: "Asks before commands and file edits" },
-  { id: "acceptEdits", label: "Auto-accept edits", hint: "Edits freely, asks before commands" },
-  { id: "auto", label: "Auto", hint: "Claude's own review approves routine actions and asks about the rest" },
-  { id: "full", label: "Full access", hint: "Never asks. git push is refused in every mode" },
-  {
-    id: "plan",
-    label: "Plan first",
-    hint: "Reads and plans, changes nothing, and asks you to approve its plan before it starts",
-  },
-];
-
 /** The agent settings new runs use, kept between sessions. Settings saved
- * before modes existed ("Edits + commands") carry over. */
+ * before modes existed ("Edits + commands") carry over, and so do the
+ * per-agent models saved as `model` (Claude's) and `copilotModel`. */
 export function useAgentSettings(): [AgentSettings, (s: AgentSettings) => void] {
-  const [stored, set] = useStored<AgentSettings & { allowCommands?: boolean }>("agent", {
+  const [stored, set] = useStored<
+    Omit<AgentSettings, "models"> & {
+      models?: AgentSettings["models"];
+      allowCommands?: boolean;
+      model?: string;
+      copilotModel?: string;
+    }
+  >("agent", {
     agent: "claude",
     template: "",
     mode: "acceptEdits",
-    model: "",
+    models: {},
     effort: "",
   });
   const mode = stored.mode ?? (stored.allowCommands ? "full" : "acceptEdits");
   return [
-    { agent: stored.agent, template: stored.template, mode, model: stored.model ?? "", effort: stored.effort ?? "" },
+    {
+      agent: stored.agent,
+      template: stored.template,
+      mode,
+      models: stored.models ?? { claude: stored.model ?? "", copilot: stored.copilotModel ?? "" },
+      effort: stored.effort ?? "",
+    },
     set,
   ];
 }
 
-/** Which Claude model a new task runs, and how hard it thinks. */
+/** The agent a new task runs: one spor knows, a command, or none. */
+export function AgentSelect({
+  repo,
+  value,
+  onChange,
+  noneLabel = "No agent — I'll run one",
+}: {
+  repo: RepoInfo;
+  value: AgentSettings["agent"];
+  onChange: (agent: AgentSettings["agent"]) => void;
+  noneLabel?: string;
+}) {
+  return (
+    <select className="chip-select" value={value} onChange={(e) => onChange(e.target.value as AgentSettings["agent"])}>
+      {AGENT_IDS.map((id) => {
+        const installed = repo.installed.includes(id);
+        return (
+          <option key={id} value={id} disabled={!installed}>
+            {AGENTS[id].label}
+            {installed ? "" : " (not installed)"}
+          </option>
+        );
+      })}
+      <option value="command">Custom command</option>
+      <option value="none">{noneLabel}</option>
+    </select>
+  );
+}
+
+/** Which model the picked agent runs, and how hard it thinks. */
 export function ModelPicker({ settings, onSettings }: { settings: AgentSettings; onSettings: (s: AgentSettings) => void }) {
+  if (!isAgentId(settings.agent)) return null;
+  const agent = AGENTS[settings.agent];
+  const product = agent.label;
   return (
     <>
       <select
         className="chip-select"
-        value={settings.model}
-        onChange={(e) => onSettings({ ...settings, model: e.target.value })}
-        title="The model Claude Code runs. Default: whatever Claude Code is set to"
+        value={settings.models[agent.id] ?? ""}
+        onChange={(e) => onSettings({ ...settings, models: { ...settings.models, [agent.id]: e.target.value } })}
+        title={`The model ${product} runs. Default: whatever ${product} is set to`}
         aria-label="Model"
       >
-        {MODELS.map((m) => (
+        {agent.models.map((m) => (
           <option key={m.id} value={m.id}>
             {m.label}
           </option>
@@ -85,7 +113,7 @@ export function ModelPicker({ settings, onSettings }: { settings: AgentSettings;
         className="chip-select"
         value={settings.effort}
         onChange={(e) => onSettings({ ...settings, effort: e.target.value as Effort | "" })}
-        title="How hard Claude thinks. Default: whatever Claude Code is set to"
+        title={`How hard the model thinks. Default: whatever ${product} is set to`}
         aria-label="Effort"
       >
         {EFFORTS.map((m) => (
@@ -98,8 +126,18 @@ export function ModelPicker({ settings, onSettings }: { settings: AgentSettings;
   );
 }
 
-export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
-  const current = MODES.find((m) => m.id === mode) ?? MODES[1];
+export function ModePicker({
+  mode,
+  onChange,
+  agent,
+}: {
+  mode: Mode;
+  onChange: (m: Mode) => void;
+  /** The agent the mode is for: each reads its modes its own way. */
+  agent?: AgentSettings["agent"] | AgentName | null;
+}) {
+  const modes = AGENTS[isAgentId(agent) ? agent : "claude"].modes;
+  const current = modes.find((m) => m.id === mode) ?? modes[1];
   return (
     <select
       className={`chip-select mode-${mode}`}
@@ -108,7 +146,7 @@ export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode)
       title={`${current.label}: ${current.hint}`}
       aria-label="Permission mode"
     >
-      {MODES.map((m) => (
+      {modes.map((m) => (
         <option key={m.id} value={m.id} title={m.hint}>
           {m.label}
         </option>
@@ -119,7 +157,7 @@ export function ModePicker({ mode, onChange }: { mode: Mode; onChange: (m: Mode)
 
 export function choiceOf(s: AgentSettings): AgentChoice {
   if (s.agent === "command") return { kind: "command", template: s.template };
-  if (s.agent === "claude") return { kind: "claude", model: s.model, effort: s.effort };
+  if (isAgentId(s.agent)) return { kind: s.agent, model: s.models[s.agent] ?? "", effort: s.effort };
   return { kind: "none" };
 }
 
@@ -280,11 +318,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
   return (
     <div className="composer-dock">
       <div className="column">
-        {!running && p.latest?.agent === "claude" && p.latest.context != null && p.latest.context >= CONTEXT_HIGH && (
+        {!running && p.latest && isAgentId(p.latest.agent) && p.latest.context != null && p.latest.context >= CONTEXT_HIGH && (
           <div className="context-note">
             <Alert size={12} />
             <span>
-              The agent's context is {p.latest.context}% full. A follow-up may make Claude Code compact the
+              The agent's context is {p.latest.context}% full. A follow-up may make {agentName(p.latest.agent)} compact the
               conversation, and the agent can lose track of earlier decisions. Restate what matters in your message,
               or start a new session from a summary.
             </span>
@@ -414,22 +452,18 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(p, r
             {followUpAgent ? (
               <span className="chip-static" title="Follow-ups go to the agent that did the work">
                 <AgentIcon agent={followUpAgent} size={12} />
-                {followUpAgent === "claude" ? "Claude Code" : "Custom command"}
+                {followUpAgent === "command" ? "Custom command" : agentName(followUpAgent)}
               </span>
             ) : (
-              <select
-                className="chip-select"
+              <AgentSelect
+                repo={p.repo}
                 value={p.settings.agent}
-                onChange={(e) => p.onSettings({ ...p.settings, agent: e.target.value as AgentSettings["agent"] })}
-              >
-                <option value="claude" disabled={!p.repo.claude}>
-                  Claude Code{p.repo.claude ? "" : " (not installed)"}
-                </option>
-                <option value="command">Custom command</option>
-                <option value="none">No agent</option>
-              </select>
+                onChange={(agent) => p.onSettings({ ...p.settings, agent })}
+                noneLabel="No agent"
+              />
             )}
             <ModePicker
+              agent={followUpAgent ?? p.settings.agent}
               mode={p.liveMode ?? p.settings.mode}
               onChange={(mode) => {
                 p.onSettings({ ...p.settings, mode });

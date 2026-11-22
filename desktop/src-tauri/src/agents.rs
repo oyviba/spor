@@ -93,10 +93,7 @@ impl From<Run> for RunInfo {
         let model = r.init.as_ref().map(|i| i.model.clone());
         Self {
             index: r.index,
-            agent: match r.kind {
-                AgentKind::Claude => "claude",
-                AgentKind::Command(_) => "command",
-            },
+            agent: r.kind.id(),
             label: match r.model.describe() {
                 Some(model) => format!("{} · {model}", r.kind.label()),
                 None => r.kind.label().to_string(),
@@ -453,9 +450,9 @@ pub(crate) struct TaskDetail {
     task: TaskSummary,
     transcript: Vec<Item>,
     runs: Vec<RunInfo>,
-    /// Files that would conflict if the task landed on its base now.
+    /// Files that would conflict if the task merged into its base now.
     conflicts: Vec<String>,
-    /// Work that came to the base after the task started and landing it
+    /// Work that came to the base after the task started and merging it
     /// would take back out, per file (`Tasks::undoes`).
     undoes: Vec<Undone>,
     /// The run "Undo this run" would take back, if any.
@@ -643,29 +640,32 @@ pub(crate) fn mode_of(name: &str) -> Result<Mode, String> {
         .ok_or_else(|| format!("Unknown permission mode {name}"))
 }
 
-/// Which agent to run, as the UI names it. Claude's model and effort are
-/// left to Claude Code when they're missing or empty.
+/// Which agent to run, as the UI names it: a known agent by its id
+/// (`claude`, `copilot`) with its model and effort, left to the agent when
+/// they're missing or empty; `command` with its template; or `none`.
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum AgentChoice {
-    Claude {
-        #[serde(default)]
-        model: Option<String>,
-        #[serde(default)]
-        effort: Option<String>,
-    },
-    Command {
-        template: String,
-    },
-    None,
+pub(crate) struct AgentChoice {
+    kind: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
+    #[serde(default)]
+    template: Option<String>,
 }
 
 impl AgentChoice {
-    fn kind(&self) -> Option<AgentKind> {
-        match self {
-            AgentChoice::Claude { .. } => Some(AgentKind::Claude),
-            AgentChoice::Command { template } => Some(AgentKind::Command(template.clone())),
-            AgentChoice::None => None,
+    fn kind(&self) -> Result<Option<AgentKind>, String> {
+        match self.kind.as_str() {
+            "none" => Ok(None),
+            "command" => Ok(Some(AgentKind::Command(
+                self.template.clone().unwrap_or_default(),
+            ))),
+            id => AgentKind::KNOWN
+                .into_iter()
+                .find(|k| k.id() == id)
+                .map(Some)
+                .ok_or_else(|| format!("Unknown agent {id}")),
         }
     }
 
@@ -676,22 +676,18 @@ impl AgentChoice {
         if follow_up && runs.latest().is_some() {
             return Ok(None);
         }
-        self.kind().map(|k| Ok((k, self.model()?))).transpose()
+        self.kind()?.map(|k| Ok((k, self.model()?))).transpose()
     }
 
     fn model(&self) -> Result<Model, String> {
-        match self {
-            AgentChoice::Claude { model, effort } => {
-                let effort = match effort.as_deref().filter(|e| !e.is_empty()) {
-                    Some(e) => {
-                        Some(Effort::from_flag(e).ok_or_else(|| format!("Unknown effort {e}"))?)
-                    }
-                    None => None,
-                };
-                Model::new(model.as_deref(), effort)
-            }
-            _ => Ok(Model::default()),
+        if matches!(self.kind()?, None | Some(AgentKind::Command(_))) {
+            return Ok(Model::default());
         }
+        let effort = match self.effort.as_deref().filter(|e| !e.is_empty()) {
+            Some(e) => Some(Effort::from_flag(e).ok_or_else(|| format!("Unknown effort {e}"))?),
+            None => None,
+        };
+        Model::new(self.model.as_deref(), effort)
     }
 }
 
@@ -787,7 +783,7 @@ pub(crate) fn create_issue_task(
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
     let model = agent.model()?;
-    let kind = agent.kind();
+    let kind = agent.kind()?;
     if let Some(e) = kind.as_ref().and_then(agent::missing) {
         return Err(e);
     }
@@ -841,7 +837,7 @@ pub(crate) fn create_task(
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
     let model = agent.model()?;
-    let kind = agent.kind();
+    let kind = agent.kind()?;
     if let Some(e) = kind.as_ref().and_then(agent::missing) {
         return Err(e);
     }
@@ -878,7 +874,7 @@ pub(crate) fn hand_to_agent(
 ) -> Result<TaskSummary, String> {
     let mode = mode_of(&mode)?;
     let model = agent.model()?;
-    let kind = agent.kind();
+    let kind = agent.kind()?;
     if let Some(e) = kind.as_ref().and_then(agent::missing) {
         return Err(e);
     }
@@ -1020,7 +1016,7 @@ pub(crate) fn land_task(
     let undo = tasks
         .land(&task, mode, commit_uncommitted)
         .map_err(|e| first_line(&e))?;
-    let message = format!("Landed {} on {}", task.id, task.base);
+    let message = format!("Merged {} into {}", task.id, task.base);
     app.undo.push(message.clone(), Undo::Task(undo));
     Ok(message)
 }
@@ -1470,7 +1466,7 @@ pub(crate) fn check_feedback(app: State<App>, id: String) -> Result<String, Stri
         .ok_or_else(|| format!("No Actions job has failed on #{number}"))
 }
 
-/// The task's pull request was merged: mark it landed and remove its folder
+/// The task's pull request was merged: mark it merged and remove its folder
 /// and branch. ⌘Z brings them back.
 #[tauri::command(async)]
 pub(crate) fn settle_task(app: State<App>, id: String, commit: String) -> Result<String, String> {
@@ -1482,7 +1478,7 @@ pub(crate) fn settle_task(app: State<App>, id: String, commit: String) -> Result
         return Err("Stop the agent first".into());
     }
     let undo = tasks.settle(&task, &commit).map_err(|e| first_line(&e))?;
-    let message = format!("Cleaned up {} — its pull request landed", task.id);
+    let message = format!("Cleaned up {} — its pull request was merged", task.id);
     app.undo.push(message.clone(), Undo::Task(undo));
     Ok(message)
 }

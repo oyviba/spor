@@ -7,7 +7,7 @@ import type { Ask, Mode } from "../../types";
 import { Button } from "../../shared/Button";
 import { Markdown } from "../../shared/Markdown";
 import { Check, MessageSquare } from "../../shared/Icons";
-import { MODES } from "./Composer";
+import { AGENTS } from "../../shared/agents";
 
 type QuestionsAsk = Extract<Ask, { ask: "questions" }>;
 type PlanAsk = Extract<Ask, { ask: "plan" }>;
@@ -154,7 +154,8 @@ export function PlanCard({
           onChange={(e) => onThen(e.target.value as Mode)}
           title="How it works once the plan is approved"
         >
-          {MODES.filter((m) => m.id !== "plan").map((m) => (
+          {/* Plans are approved under the host, which only Claude Code runs in. */}
+          {AGENTS.claude.modes.filter((m) => m.id !== "plan").map((m) => (
             <option key={m.id} value={m.id}>
               then {m.label.toLowerCase()}
             </option>

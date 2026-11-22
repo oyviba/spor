@@ -40,7 +40,15 @@ const FRESH_MS = 10_000;
 /** Call `fn` now and then every `ms`, while `active`. Back on screen with
  * the same `deps` (and active again), it waits if it asked a moment ago:
  * that answer is fresh, or still on its way. */
-export function usePoll(fn: () => void | Promise<void>, ms: number, deps: unknown[], active = true) {
+export function usePoll(
+  fn: () => void | Promise<void>,
+  ms: number,
+  deps: unknown[],
+  active = true,
+  /** For polls that ask GitHub: stop while the window is hidden or
+   * minimized, and catch up when it's shown again. */
+  pauseHidden = false,
+) {
   const latest = useRef(fn);
   latest.current = fn;
   const last = useRef<{ deps: unknown[]; at: number } | null>(null);
@@ -55,19 +63,35 @@ export function usePoll(fn: () => void | Promise<void>, ms: number, deps: unknow
       } catch {
         // The next tick tries again; errors show where the call is made.
       }
-      if (!stopped) timer = setTimeout(tick, ms);
+      if (!stopped && !(pauseHidden && document.hidden)) timer = setTimeout(tick, ms);
+    };
+    // Shown again: ask if it's been `ms` since the last ask, else wait out
+    // the rest. (A tick that ran while hidden left no timer behind.)
+    const resume = () => {
+      if (document.hidden || stopped) return;
+      clearTimeout(timer);
+      const left = (last.current?.at ?? 0) + ms - Date.now();
+      timer = setTimeout(tick, Math.max(0, left));
     };
     const prev = last.current;
     const wait = prev && same(prev.deps, deps) ? prev.at + Math.min(ms, FRESH_MS) - Date.now() : 0;
     if (wait > 0) timer = setTimeout(tick, wait);
     else tick();
+    if (pauseHidden) document.addEventListener("visibilitychange", resume);
     return () => {
       stopped = true;
       clearTimeout(timer);
+      if (pauseHidden) document.removeEventListener("visibilitychange", resume);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ms, active, ...deps]);
+  }, [ms, active, pauseHidden, ...deps]);
 }
+
+/** How often GitHub is polled while the app is in view: the backend keeps
+ * an answer for a minute, so asking more often only repeats it. */
+export const GITHUB_POLL_MS = 2 * 60_000;
+/** The same while a run or a check is going and someone is watching. */
+export const GITHUB_LIVE_MS = 30_000;
 
 /** How often `useRepoChanges` reloads anyway, in case the watcher missed
  * an event (on a network filesystem, say). */

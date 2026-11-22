@@ -9,7 +9,8 @@ export interface RepoInfo {
   /** Where new tasks start unless another branch is picked: `origin/main`
    * when origin has the default branch, else the local one. */
   default_start: string | null;
-  claude: boolean;
+  /** The agents spor runs that are installed (on the PATH). */
+  installed: AgentId[];
 }
 
 export interface Stats {
@@ -25,11 +26,17 @@ export interface Stats {
   unpushed: number;
 }
 
+/** The agents spor runs itself (shared/agents.ts has what each offers). */
+export type AgentId = "claude" | "copilot";
+
+/** An agent spor runs, or any command. */
+export type AgentName = AgentId | "command";
+
 export type RunStateName = "running" | "finished" | "failed" | "stopped";
 
 export interface RunInfo {
   index: number;
-  agent: "claude" | "command";
+  agent: AgentName;
   label: string;
   prompt: string;
   state: RunStateName;
@@ -240,7 +247,7 @@ export interface RunPatch {
 }
 
 export type AgentChoice =
-  | { kind: "claude"; model?: string; effort?: Effort | "" }
+  | { kind: AgentId; model?: string; effort?: Effort | "" }
   | { kind: "command"; template: string }
   | { kind: "none" };
 

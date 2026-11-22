@@ -17,12 +17,12 @@ export function catchUpPrompt(base: string, files: string[], published: boolean)
   );
 }
 
-/** What to ask the agent when landing its branch would take back work that
+/** What to ask the agent when merging its branch would take back work that
  * reached `base` after it started (`TaskDetail.undoes`). */
 export function restorePrompt(base: string, undoes: { path: string; lines: number }[]): string {
   const files = undoes.map((u) => `${u.path} (${u.lines} ${u.lines === 1 ? "line" : "lines"})`).join(", ");
   return (
-    `Landing this branch would undo work that reached ${base} after you started, in ${files}: ` +
+    `Merging this branch would undo work that reached ${base} after you started, in ${files}: ` +
     `lines ${base} has that this branch removes, probably by writing a file back from an older copy. ` +
     `Compare with ${base} (git diff ${base} -- <file>), put back what ${base} added unless this task ` +
     `really means to remove it, keep your own changes on top, make sure it still builds and the tests pass, and commit.`

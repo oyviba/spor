@@ -41,7 +41,7 @@ you come with: what needs me, what's in flight, what's in my checkout, what
 happened. Each
 is a list in the sidebar, a page, and a details pane. What you follow is a
 **work item** (a branch with its issue, task folder, agent, pull request and
-checks) moving from *Planned* to *Landed*, and every section uses the same
+checks) moving from *Planned* to *Merged*, and every section uses the same
 words for it: [docs/concepts.md](docs/concepts.md). [docs/journeys.md](docs/journeys.md)
 has five journeys through it, each with a budget of how often it changes
 section, run as end-to-end tests.
@@ -65,22 +65,29 @@ section, run as end-to-end tests.
   issue. An agent task gives a coding agent its own branch and folder so several can work at once
   without touching your checkout. A task is a prompt: spor creates
   `agent/<name>` from a base, checks it out in `<repo>.spor/<name>` beside
-  the repository, and starts Claude Code (or any command) there. Paste,
+  the repository, and starts Claude Code, GitHub Copilot CLI (or any command) there. Paste,
   drop or attach images (screenshots, mockups) into any prompt — a new
   task, an issue's, or a follow-up; they're kept in `.git/spor/attachments/`
   and the agent is told where to find them. Watch the conversation, answer its questions, steer it while it works, review its
-  changes with line comments, send feedback, undo a run, then **Land** it
+  changes with line comments, send feedback, undo a run, then **Merge** it
   (one squashed commit, or a merge commit), **Publish** it as a pull request
-  and land that, or **Discard** it. A work item's issue, pull request and CI runs all open here,
+  and merge that, or **Discard** it. A work item's issue, pull request and CI runs all open here,
   wherever you click them from. [docs/agents.md](docs/agents.md) has the
   design
 - **History** (⌘3) — the commit graph with `main` / `master` / `trunk` pinned to
   the leftmost lane and branches colored by prefix (all `feat/*` share a
-  hue). Search by message, author or hash, or `path:src/main.rs` for the
-  commits that touched a file. The sidebar has local, agent and remote
-  branches, tags and linked worktrees. Right-click a branch to check it out,
+  hue). The search above the graph (⌘F or `/`) wants every word you type to
+  match the message, author, hash, or a branch or tag name; it lists just the
+  matches, with the words marked (switch off *Only matches* to see them in
+  the graph), and Enter / Shift+Enter step through them. `path:src/main.rs`
+  finds the commits that touched a file and `code:needle` the ones that added
+  or removed some text. *Go to main* (the default branch) is always one click
+  away, and the sidebar pins it above the rest. The sidebar has local, agent
+  and remote branches, tags and linked worktrees, with a filter on their
+  names. Right-click a branch to check it out,
   merge it, rebase onto it, push or publish it (without checking it out),
-  rename or delete it, or delete it from the remote, or drag it onto another branch to merge it there or open a pull
+  rename or delete it, or delete it from the
+  remote, or drag it onto another branch to merge it there or open a pull
   request between the two. Right-click a commit to branch or tag it, check
   it out detached, cherry-pick, revert, rebase onto it, reset to it (soft,
   mixed, or hard after asking), or **Rewrite after here** — an interactive
@@ -101,7 +108,7 @@ piece of work yet (an issue nobody has started, a run on `main`):
 - **Issues**, **Pull requests**, **Actions** (⌘4–⌘6) — through `gh`: an
   issue and its comments (and *Start with agent* from it); a PR's
   conversation, files and checks, with comments, line comments, approve,
-  land, check out; a run's jobs and its log folded by step, re-run and
+  merge, check out; a run's jobs and its log folded by step, re-run and
   cancel. Branch labels in the graph carry their open PR's number, review
   state and CI (`#42✓`)
 
@@ -109,7 +116,7 @@ Across the app:
 
 - **Undo instead of confirmations.** Staging, discarding, committing,
   amending, pulling, switching, merging, cherry-picks, reverts, rebases,
-  resets, rewrites, renames, deleting a branch, tag or stash, and landing or
+  resets, rewrites, renames, deleting a branch, tag or stash, and merging or
   discarding a task all happen at once and can be taken back with ⌘Z or the
   toast's Undo. Pushing makes commits final: their undos go. Only what git
   can't take back asks first (a hard reset, deleting on the remote)
@@ -185,10 +192,11 @@ output:
 - `src/askpass.rs` — credential prompts from git and ssh, handed to the app
   over a private socket, and running network git commands
 - `src/tasks.rs` — agent tasks: a prompt with its own branch and worktree;
-  creating, measuring, landing, discarding and restoring them
+  creating, measuring, merging, discarding and restoring them
 - `src/agent.rs`, `src/host.rs`, `src/checkpoint.rs` — running agents in
   task folders, the host that lets the app talk to a running Claude Code,
-  and per-run checkpoints
+  and per-run checkpoints; `src/agent/` has one adapter per agent (Claude
+  Code, Copilot CLI, a custom command) behind the `Adapter` trait
 - `src/work.rs` — work items: a pure join of tasks, branches, pull
   requests, runs and issues into one item per branch, with its stage and
   who it's waiting on
