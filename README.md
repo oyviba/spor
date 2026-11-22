@@ -158,7 +158,7 @@ Across the app:
   09:00`, `schedule weekly mon 09:00`, or `ci-failed [branch]`) and a prompt
   (`{branch}`, `{workflow}`, `{run_url}` and `{date}` are filled in). They
   run while spor is open, never start a second task while the last one is
-  open, don't fire for what happened before they were added, and never land
+  open, don't fire for what happened before they were added, and never merge
   anything: the task ends up in the Inbox like any other. The Work sidebar
   lists them, with *Run now* and an on/off switch. The format is described in
   `src/automations.rs`

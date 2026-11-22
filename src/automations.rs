@@ -29,7 +29,7 @@
 //! automation never starts a second task while its last one is open, an
 //! automation that has just been added doesn't fire for what already
 //! happened, and a trigger that fires while it's guarded is used up rather
-//! than saved for later. Tasks never land themselves.
+//! than saved for later. Tasks never merge themselves.
 
 use std::path::{Path, PathBuf};
 
