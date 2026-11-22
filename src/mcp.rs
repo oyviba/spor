@@ -8,8 +8,9 @@
 //! tasks, the pull request's review threads, the failing CI log, and why a
 //! line exists.
 //!
-//! Tools are read-only apart from two. `report_progress` appends a line to
-//! the run's log. `ask` is a question for the person: Claude Code asks
+//! Tools are read-only apart from three. `report_progress` and `surface`
+//! append a line to the run's log: the second puts something in the task's
+//! panel while the agent works (see `Runs::surfaced`). `ask` is a question for the person: Claude Code asks
 //! permission to call it like any tool, spor shows that as a question in
 //! the Inbox (see `AskKind::of`), and the answer comes back in the call's
 //! input as `answer`. Nothing here publishes or writes to git, and
@@ -32,12 +33,13 @@ pub const SERVER: &str = "spor";
 pub const ASK_TOOL: &str = "mcp__spor__ask";
 
 /// The tools that need no permission: they only read.
-pub const READ_ONLY_TOOLS: [&str; 5] = [
+pub const READ_ONLY_TOOLS: [&str; 6] = [
     "mcp__spor__other_tasks",
     "mcp__spor__pr_comments",
     "mcp__spor__ci_log",
     "mcp__spor__why",
     "mcp__spor__report_progress",
+    "mcp__spor__surface",
 ];
 
 /// What a call needs to know: where the task is.
@@ -140,6 +142,12 @@ fn tool_list() -> Vec<String> {
             r#""step","of""#,
         ),
         tool(
+            "surface",
+            "Put something in the task's panel for the person to see while you work: a link (a preview, a dashboard, a document), a file you made or found that matters, or a short note. Surfacing the same thing again updates its title.",
+            r#""kind":{"type":"string","enum":["link","file","note"]},"title":{"type":"string","description":"A few words to show"},"value":{"type":"string","description":"link: an https URL. file: its path in the repository. note: the text, a sentence or two"}"#,
+            r#""kind","title","value""#,
+        ),
+        tool(
             "other_tasks",
             "The other active tasks in this repository: their prompts, the files they changed so far, and which of those you're changing too.",
             "",
@@ -177,6 +185,7 @@ fn call(name: &str, args: &Json, ctx: &Context) -> Result<String, String> {
             None => Err("The question wasn't put to anyone. Carry on with your best guess.".into()),
         },
         "report_progress" => report_progress(args, ctx),
+        "surface" => surface(args, ctx, &task),
         "other_tasks" => Ok(other_tasks(&tasks, &task)),
         "pr_comments" => pr_comments(&task),
         "ci_log" => ci_log(&task, args.get("job").str()),
@@ -207,6 +216,52 @@ fn report_progress(args: &Json, ctx: &Context) -> Result<String, String> {
     )
     .map_err(|e| e.to_string())?;
     Ok("Noted.".into())
+}
+
+/// Longest title and note `surface` keeps: the panel is a glance, not a page.
+const SURFACE_TITLE: usize = 80;
+const SURFACE_NOTE: usize = 400;
+
+fn surface(args: &Json, ctx: &Context, task: &Task) -> Result<String, String> {
+    let kind = args.get("kind").str().ok_or("kind is required")?;
+    let value = args.get("value").str().ok_or("value is required")?.trim();
+    let title = args.get("title").str().ok_or("title is required")?.trim();
+    if title.is_empty() || value.is_empty() {
+        return Err("title and value can't be empty".into());
+    }
+    match kind {
+        "link" if !value.starts_with("https://") => {
+            return Err("A link has to be an https URL".into());
+        }
+        "file" => {
+            // Stay inside the task's folder, and surface what is there.
+            if Path::new(value).is_absolute() || value.split('/').any(|p| p == "..") {
+                return Err("A file's path must be inside the repository".into());
+            }
+            if !task.worktree.join(value).exists() {
+                return Err(format!("{value} doesn't exist in the task's folder"));
+            }
+        }
+        "note" if value.chars().count() > SURFACE_NOTE => {
+            return Err(format!("A note is at most {SURFACE_NOTE} characters"));
+        }
+        "link" | "note" => {}
+        other => return Err(format!("kind must be link, file or note, not {other}")),
+    }
+    let title: String = title.chars().take(SURFACE_TITLE).collect();
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&ctx.log)
+        .map_err(|e| e.to_string())?;
+    writeln!(
+        log,
+        r#"{{"type":"spor_surface","kind":{},"title":{},"value":{}}}"#,
+        crate::host::quote(kind),
+        crate::host::quote(&title),
+        crate::host::quote(value)
+    )
+    .map_err(|e| e.to_string())?;
+    Ok("Shown in the task's panel.".into())
 }
 
 /// Every file the task has changed, committed or not.

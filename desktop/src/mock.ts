@@ -3,6 +3,7 @@
 // transcript over time, and answers the same commands as src-tauri.
 
 import type { AgentChoice, Ask, Issue, IssueDetail, Item, Mode, Pull, RepoInfo, RunInfo, TaskDetail, TaskPull, TaskSummary, WorkBranch, WorkItemInfo } from "./types";
+import { agentName } from "./shared/agents";
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -33,7 +34,7 @@ const repo: RepoInfo = {
   branches: ["main", "release/1.4", "feat/share-links"],
   default_base: "main",
   default_start: "origin/main",
-  claude: true,
+  installed: ["claude", "copilot"],
 };
 
 const stats = (over: Partial<TaskSummary["stats"]> = {}): TaskSummary["stats"] => ({
@@ -534,11 +535,15 @@ function start(t: MockTask, prompt: string, agent: AgentChoice) {
   if (t.summary.run?.state === "running") throw `An agent is already working on ${t.summary.id}`;
   const r = run({
     index: t.runs.length,
-    agent: agent.kind === "command" ? "command" : "claude",
+    agent: agent.kind === "none" ? "claude" : agent.kind,
     label:
       agent.kind === "command"
         ? "Custom command"
-        : ["Claude Code", agent.kind === "claude" && agent.model, agent.kind === "claude" && agent.effort && `${agent.effort} effort`]
+        : [
+            agentName(agent.kind === "none" ? "claude" : agent.kind),
+            agent.kind !== "none" && agent.model,
+            agent.kind !== "none" && agent.effort && `${agent.effort} effort`,
+          ]
             .filter(Boolean)
             .join(" · "),
     state: "running",
@@ -647,6 +652,14 @@ export async function invoke<T>(cmd: string, body: Record<string, unknown> | Uin
           listening: t.summary.run?.state === "running",
           debrief: null,
           wants_debrief: false,
+          surfaced:
+            t.summary.id === "dark-mode-dashboard"
+              ? [
+                  { kind: "link", title: "Preview", value: "https://example.com/preview" },
+                  { kind: "file", title: "Migration notes", value: "docs/theme-migration.md" },
+                  { kind: "note", title: "Heads up", value: "Two charts still hardcode their colours." },
+                ]
+              : [],
         };
         return structuredClone(detail);
       }

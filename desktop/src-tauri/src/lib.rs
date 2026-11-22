@@ -14,6 +14,7 @@ mod watch;
 mod work;
 
 use serde::Serialize;
+use spor::agent::AgentKind;
 use spor::git::Repo;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -53,7 +54,8 @@ struct RepoInfo {
     /// Where new tasks start unless another branch is picked: origin's
     /// copy of the default branch (`origin/main`) when there is one.
     default_start: Option<String>,
-    claude: bool,
+    /// The agents spor knows that are installed (on the PATH), by id.
+    installed: Vec<&'static str>,
 }
 
 fn repo_info(repo: &Repo) -> RepoInfo {
@@ -76,7 +78,11 @@ fn repo_info(repo: &Repo) -> RepoInfo {
         branches,
         default_base: repo.default_base_branch(),
         default_start: repo.default_start(),
-        claude: spor::agent::available("claude"),
+        installed: AgentKind::KNOWN
+            .iter()
+            .filter(|k| spor::agent::missing(k).is_none())
+            .map(AgentKind::id)
+            .collect(),
     }
 }
 

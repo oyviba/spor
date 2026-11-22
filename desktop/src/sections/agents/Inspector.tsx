@@ -7,6 +7,7 @@ import { DetailsCard } from "../../shared/Layout";
 import { Debrief } from "./Debrief";
 import { DEFAULT_PANE, runFacts, type PaneOptions } from "./panel";
 import { RunDetails } from "./RunDetails";
+import { SurfacedItems } from "./SurfacedItems";
 import { WorkCard } from "../../shared/WorkCard";
 import { findWork, itemFromTask } from "../../shared/work";
 import {
@@ -403,6 +404,7 @@ export function Inspector({ detail, ...p }: Props) {
   return (
     <DetailsCard menu={menu} footer={footer}>
       <WorkCard item={item} from="work" actions={false} />
+      <SurfacedItems items={detail.surfaced} folder={t.worktree} onCopy={p.onCopy} />
       {attention}
       <div className="inspector-section">
         <button className="inspector-row action" onClick={p.onShowChanges}>

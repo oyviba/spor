@@ -4,8 +4,10 @@
 // its stage. The words are docs/concepts.md's.
 
 import type { Pull, TaskSummary, WorkItemInfo } from "../types";
+import { agentName } from "./agents.ts";
 import type { Status } from "./StatusPill";
 import type { SectionId, Target } from "./app";
+
 
 /** What an inspector knows about the thing it shows. */
 export interface WorkRef {
@@ -83,7 +85,7 @@ export function itemFromTask(t: TaskSummary, pull?: Pull): WorkItemInfo {
     worktree: settled ? null : t.worktree,
     task: t.id,
     issue: t.issue,
-    owner: t.run ? { kind: "agent", name: t.run.agent === "claude" ? "Claude Code" : "Agent" } : { kind: "you" },
+    owner: t.run ? { kind: "agent", name: agentName(t.run.agent) } : { kind: "you" },
     stage: t.landed != null ? "landed" : t.closed ? "closed" : pull?.state === "open" ? "inreview" : "inprogress",
   };
 }
@@ -188,7 +190,7 @@ export function nextStep(item: WorkItemInfo, from?: SectionId, current?: string 
     // Your work with nothing published yet.
     if (!pr && item.branch && item.owner.kind !== "teammate") {
       if (task) return { label: "Publish", target: { section: "work", taskId: task } };
-      if (current === item.branch) return { label: "Publish", target: { section: "changes" } };
+      if (current === item.branch) return { label: "Publish", target: { section: "history", working: true } };
     }
     return null;
   })();
