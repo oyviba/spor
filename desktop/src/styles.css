@@ -2143,6 +2143,26 @@ body:has(.pane-foot) .toasts {
   flex-shrink: 0;
   color: var(--muted);
 }
+.branch-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 12px 5px 6px;
+  color: var(--fg-2);
+  border-radius: 7px;
+  text-align: left;
+}
+.branch-group-header:hover {
+  background: var(--hover);
+}
+.branch-group-header svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.branch-group-rows {
+  margin-left: 14px;
+}
 .branch-row.current .branch-name {
   color: var(--fg);
   font-weight: 600;
