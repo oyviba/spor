@@ -17,6 +17,7 @@ import { Blame } from "./Blame";
 import { GraphOptionsButton } from "./GraphOptions";
 import { GraphSearch } from "./GraphSearch";
 import { searchTerms, stepHit } from "./search";
+import { groupBranches } from "./groups";
 import { CheckoutHeader, WORKING, WorktreeDiff, WorktreePanel, WorktreeRow, useWorktree } from "./Worktree";
 
 const PAGE = 2000;
@@ -45,6 +46,8 @@ export function HistorySection() {
   const [filter, setFilter] = useState("");
   const searchInput = useRef<HTMLInputElement>(null);
   const [shelves, setShelves] = useStored("history.shelves", { agent: true, remote: false, tags: false, worktrees: false });
+  // Branch groups (chore/…, feat/…) that are folded away, as "local:chore" or "remote:origin/feat".
+  const [folded, setFolded] = useStored<string[]>("history.foldedGroups", []);
   const [loadMs, setLoadMs] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const graphRef = useRef<GraphHandle>(null);
@@ -302,7 +305,7 @@ export function HistorySection() {
   };
   const [dropOn, setDropOn] = useState<string | null>(null);
 
-  const branchRow = (b: BranchInfo) => (
+  const branchRow = (b: BranchInfo, label = b.name) => (
     <div
       key={b.name}
       className={`branch-row${b.current ? " current" : ""}${b.name === defaultName && !b.remote ? " default-branch" : ""}${dropOn === b.name ? " drop-target" : ""}`}
@@ -335,7 +338,7 @@ export function HistorySection() {
         title={`Show ${b.name} — double-click to check out, right-click for more`}
       >
         {b.agent ? <Bot size={12} /> : <Branch size={12} />}
-        <span className="truncate">{b.name}</span>
+        <span className="truncate">{label}</span>
         {prs.get(b.name) && <span className="pr-badge muted-badge">#{prs.get(b.name)!.number}</span>}
       </button>
       {!b.current && (
@@ -368,6 +371,31 @@ export function HistorySection() {
     </div>
   );
 
+  // Branches sharing the part of their name before a "/" fold under it.
+  const groupedRows = (list: BranchInfo[], shelf: "local" | "remote") =>
+    groupBranches(list, (b) => b.name, shelf === "remote" ? 1 : 0).map((g) => {
+      if (g.kind === "branch") return branchRow(g.entry.item);
+      const key = `${shelf}:${g.prefix}`;
+      const open = !!filter || !folded.includes(key);
+      return (
+        <div key={key} className="branch-group">
+          <button
+            className="branch-group-header"
+            aria-expanded={open}
+            title={`${g.prefix}/…`}
+            onClick={() => setFolded((f) => (f.includes(key) ? f.filter((k) => k !== key) : [...f, key]))}
+          >
+            <Chevron size={11} className={`chev${open ? " open" : ""}`} />
+            <Folder size={12} />
+            <span className="truncate">{g.prefix}</span>
+            <span className="flex-1" />
+            <span className="num muted small-text">{g.entries.length}</span>
+          </button>
+          {open && <div className="branch-group-rows">{g.entries.map((e) => branchRow(e.item, e.label))}</div>}
+        </div>
+      );
+    });
+
   return (
     <>
       <aside className="sidebar">
@@ -390,7 +418,7 @@ export function HistorySection() {
             </>
           )}
           {(local.length > 0 || !filter) && <div className="list-label">Branches</div>}
-          {local.map(branchRow)}
+          {groupedRows(local, "local")}
           {filter && local.length + agent.length + remote.length + shownTags.length + shownWorktrees.length === 0 && (
             <p className="hint">Nothing is named like that.</p>
           )}
@@ -400,7 +428,7 @@ export function HistorySection() {
             open={shelves.agent || !!filter}
             onToggle={() => setShelves({ ...shelves, agent: !shelves.agent })}
           >
-            {agent.map(branchRow)}
+            {agent.map((b) => branchRow(b))}
           </Shelf>
           <Shelf
             label="Remote"
@@ -408,7 +436,7 @@ export function HistorySection() {
             open={shelves.remote || !!filter}
             onToggle={() => setShelves({ ...shelves, remote: !shelves.remote })}
           >
-            {remote.map(branchRow)}
+            {groupedRows(remote, "remote")}
           </Shelf>
           <Shelf
             label="Tags"
